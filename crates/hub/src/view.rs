@@ -154,6 +154,9 @@ pub struct HostView {
     pub flapping: bool,
     /// Name of the host check, if there is one.
     pub check: Option<String>,
+    /// The service whose graphs the host page shows: `graph`, or the host
+    /// check.
+    pub graph: Option<String>,
     /// The worst state of the host's services; `None` if all are pending.
     pub worst: Option<State>,
     pub services: Counts,
@@ -199,6 +202,7 @@ impl HostView {
             output: check.map(|v| v.output.clone()).unwrap_or_default(),
             flapping: check.is_some_and(|v| v.flapping),
             check: host.check.clone(),
+            graph: host.graph_check().map(String::from),
             worst,
             services: counts,
         }

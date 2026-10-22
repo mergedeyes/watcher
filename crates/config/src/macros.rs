@@ -116,6 +116,7 @@ mod tests {
             address: "10.0.0.5".into(),
             node: None,
             check: None,
+            graph: None,
             tags: vec![],
             vars: BTreeMap::from([("label".to_string(), "two words; rm -rf /".to_string())]),
             enabled: true,

@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { api, ApiError, HISTORY_DELAY, hostHref, type Series, type ServiceDetail, type StateEvent } from '#lib/api.ts';
+	import { api, ApiError, HISTORY_DELAY, hostHref, type ServiceDetail, type StateEvent } from '#lib/api.ts';
 	import AlertTable from '#lib/AlertTable.svelte';
-	import Chart from '#lib/Chart.svelte';
+	import Graphs from '#lib/Graphs.svelte';
 	import { datetime, duration, formatThreshold, formatValue, seriesName, since } from '#lib/format.ts';
 	import Status from '#lib/Status.svelte';
 	import { live } from '#lib/live.svelte.ts';
@@ -12,51 +12,9 @@
 
 	let detail = $state<ServiceDetail | null>(null);
 	let missing = $state(false);
-	let series = $state<Series[]>([]);
 	let events = $state<StateEvent[]>([]);
 	/** Set when the hub has no database: there is no history to show. */
 	let noHistory = $state(false);
-	/** Time ranges for the graphs, in seconds. */
-	const RANGES: [string, number][] = [
-		['30s', 30],
-		['1m', 60],
-		['5m', 300],
-		['15m', 900],
-		['30m', 1800],
-		['1h', 3600],
-		['6h', 21600],
-		['24h', 86400],
-		['7d', 604800],
-		['30d', 2592000]
-	];
-	const DEFAULT_MAX = 21600;
-
-	/** Range picked by the user; null means automatic. */
-	let chosen = $state<string | null>(null);
-
-	/** When the oldest sample of this service was taken (ms), null without data. */
-	let oldest = $derived.by(() => {
-		const times = series.map((s) => (s.first ? Date.parse(s.first) : NaN)).filter((t) => !isNaN(t));
-		return times.length > 0 ? Math.min(...times) : null;
-	});
-
-	// The smallest range holding all data. Larger ones would show the same
-	// samples in coarser buckets, so they are disabled.
-	let cover = $derived.by(() => {
-		const span = oldest === null ? 0 : (live.now - oldest) / 1000;
-		return RANGES.find(([, secs]) => secs >= span) ?? RANGES[RANGES.length - 1]!;
-	});
-
-	function enabled(secs: number) {
-		return oldest !== null && secs <= cover[1];
-	}
-
-	let range = $derived.by(() => {
-		const pick = RANGES.find(([label]) => label === chosen);
-		if (pick && enabled(pick[1])) return pick;
-		// Automatic: all data, but no more than 6h.
-		return cover[1] <= DEFAULT_MAX ? cover : RANGES.find(([, secs]) => secs === DEFAULT_MAX)!;
-	});
 
 	// Refetch whenever a new result for this service arrives.
 	let lastCheck = $derived(live.find(host, name)?.last_check ?? null);
@@ -86,14 +44,6 @@
 		load();
 		const later = setTimeout(load, HISTORY_DELAY);
 		return () => clearTimeout(later);
-	});
-
-	$effect(() => {
-		const [h, s] = [host, name];
-		api.series(h, s).then(
-			(list) => (series = list),
-			(e) => (noHistory = e instanceof ApiError && e.noDatabase)
-		);
 	});
 </script>
 
@@ -198,35 +148,7 @@
 			</section>
 		{/if}
 
-		<section class="panel">
-			<div class="panel-title">
-				Graphs
-				{#if !noHistory && series.length > 0}
-					<span class="ranges" role="group" aria-label="Time range">
-						{#each RANGES as [label, secs] (label)}
-							<button
-								type="button"
-								aria-pressed={range[0] === label}
-								disabled={!enabled(secs)}
-								title={enabled(secs) ? undefined : 'Not enough data'}
-								onclick={() => (chosen = label)}>{label}</button
-							>
-						{/each}
-					</span>
-				{/if}
-			</div>
-			{#if noHistory}
-				<div class="empty">No database configured.</div>
-			{:else if series.length === 0}
-				<div class="empty">No performance data.</div>
-			{:else}
-				<div class="graphs">
-					{#each series as s (s.id)}
-						<Chart series={s} range={range[0]} rangeSecs={range[1]} tick={Date.parse(lastCheck ?? '') || 0} />
-					{/each}
-				</div>
-			{/if}
-		</section>
+		<Graphs {host} service={name} tick={Date.parse(lastCheck ?? '') || 0} />
 
 		{#if !noHistory}
 			<section class="panel">
@@ -260,41 +182,5 @@
 	.more {
 		font-weight: 400;
 		font-size: 12px;
-	}
-
-	.ranges {
-		display: inline-flex;
-		flex-wrap: wrap;
-		gap: 2px;
-	}
-
-	.ranges button {
-		font: inherit;
-		font-size: 11px;
-		font-weight: 600;
-		padding: 2px 7px;
-		color: var(--muted);
-		background: var(--panel);
-		border: 1px solid var(--line);
-		border-radius: 3px;
-		cursor: pointer;
-	}
-
-	.ranges button[aria-pressed='true'] {
-		background: var(--link);
-		border-color: var(--link);
-		color: #fff;
-	}
-
-	.ranges button:disabled {
-		opacity: 0.35;
-		cursor: not-allowed;
-	}
-
-	.graphs {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(min(100%, 480px), 1fr));
-		gap: 12px;
-		padding: 12px;
 	}
 </style>

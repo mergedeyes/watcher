@@ -1,7 +1,9 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { api, ApiError, HISTORY_DELAY, serviceHref, type StateEvent } from '#lib/api.ts';
 	import AlertTable from '#lib/AlertTable.svelte';
+	import Graphs from '#lib/Graphs.svelte';
 	import { datetime, since } from '#lib/format.ts';
 	import { live } from '#lib/live.svelte.ts';
 	import ServiceTable from '#lib/ServiceTable.svelte';
@@ -10,6 +12,18 @@
 	let name = $derived(page.params.host ?? '');
 	let host = $derived(live.hosts.find((h) => h.name === name));
 	let services = $derived(live.services.filter((s) => s.host === name));
+
+	/** The service whose graphs show: picked (`?graph=`), or the host's `graph`. */
+	let graph = $derived(page.url.searchParams.get('graph') ?? host?.graph ?? null);
+	let graphCheck = $derived(graph ? (live.find(name, graph)?.last_check ?? null) : null);
+
+	function pick(service: string) {
+		const params = new URLSearchParams(page.url.search);
+		if (service === host?.graph) params.delete('graph');
+		else params.set('graph', service);
+		const query = params.toString();
+		goto(query ? `?${query}` : page.url.pathname, { replace: true, reset: false });
+	}
 
 	let origin = $state<string | null>(null);
 	let missing = $state(false);
@@ -105,6 +119,21 @@
 			<ServiceTable rows={services} showHost={false} sort="service" />
 		</section>
 
+		{#snippet picker()}
+			<select class="pick" aria-label="Service" value={graph ?? ''} onchange={(e) => pick(e.currentTarget.value)}>
+				{#if !graph}<option value="">–</option>{/if}
+				{#each services.map((s) => s.service).sort() as s (s)}<option value={s}>{s}</option>{/each}
+			</select>
+		{/snippet}
+		{#if graph}
+			<Graphs host={name} service={graph} tick={Date.parse(graphCheck ?? '') || 0} controls={picker} />
+		{:else}
+			<section class="panel">
+				<div class="panel-title">Graphs {@render picker()}</div>
+				<div class="empty">No graph.</div>
+			</section>
+		{/if}
+
 		{#if !noHistory}
 			<section class="panel">
 				<div class="panel-title">
@@ -121,6 +150,18 @@
 	.more {
 		font-weight: 400;
 		font-size: 12px;
+	}
+
+	.pick {
+		font: inherit;
+		font-weight: 400;
+		font-size: 12px;
+		color: var(--text);
+		background: var(--panel);
+		border: 1px solid var(--line);
+		border-radius: 3px;
+		padding: 1px 4px;
+		margin-right: auto;
 	}
 
 	.kv th {

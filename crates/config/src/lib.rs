@@ -55,6 +55,8 @@ pub struct Host {
     /// The check whose result is the host state (UP/DOWN); without one the
     /// host counts as UP.
     pub check: Option<String>,
+    /// The check whose graphs the host page shows; defaults to `check`.
+    pub graph: Option<String>,
     pub tags: Vec<String>,
     pub vars: BTreeMap<String, String>,
     pub enabled: bool,
@@ -209,6 +211,14 @@ impl Config {
     /// Whether `service` gives its host its state.
     pub fn is_host_check(&self, service: &Service) -> bool {
         self.host(service).check.as_deref() == Some(self.check(service).name.as_str())
+    }
+}
+
+impl Host {
+    /// The check whose graphs show on the host page: `graph`, or the host
+    /// check.
+    pub fn graph_check(&self) -> Option<&str> {
+        self.graph.as_deref().or(self.check.as_deref())
     }
 }
 
