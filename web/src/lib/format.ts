@@ -67,13 +67,60 @@ export function formatValue(value: number, unit = ''): string {
 	}
 }
 
+/** Steps of 1, 2, 2.5 and 5 per decimal digit, from 1e-9 to 1e15. */
+const DECIMAL_STEPS = Array.from({ length: 25 }, (_, e) => [1, 2, 2.5, 5].map((m) => m * 10 ** (e - 9))).flat();
+
+const BYTE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
+
+/**
+ * Tick steps for an axis in `unit`. Byte axes step in round B, KiB, MiB...
+ * (512 MiB, not 500,000,000 B), so their labels stay short.
+ */
+export function tickSteps(unit = ''): number[] {
+	if (unit !== 'B') return DECIMAL_STEPS;
+	const steps = DECIMAL_STEPS.filter((s) => s >= 1 && s < 1024);
+	return BYTE_UNITS.flatMap((_, k) => steps.map((s) => s * 1024 ** k));
+}
+
+/** Decimals needed to write `n` exactly; 7 if it needs more than 6. */
+function decimalsFor(n: number): number {
+	let d = 0;
+	while (d < 7 && Math.abs(Math.round(n * 10 ** d) - n * 10 ** d) > 1e-6) d++;
+	return d;
+}
+
+/**
+ * Axis tick labels: one unit for all ticks, with as many decimals as the
+ * step between ticks needs: `5.5 GiB`, `6 GiB`; `2660 MiB`, `2670 MiB`.
+ */
+export function formatTicks(ticks: number[], unit = ''): string[] {
+	const largest = Math.max(0, ...ticks.map(Math.abs));
+	const step = ticks.length > 1 ? Math.abs(ticks[1]! - ticks[0]!) : 0;
+	let scale = 1;
+	let suffix = unit === '%' ? '%' : unit && unit !== 'c' ? ` ${unit}` : '';
+	if (unit === 's') {
+		[scale, suffix] = largest !== 0 && largest < 1e-3 ? [1e-6, ' µs'] : largest !== 0 && largest < 1 ? [1e-3, ' ms'] : [1, ' s'];
+	} else if (unit === 'B') {
+		// The largest unit the values reach, or a smaller one if the step
+		// would need more than two decimals there.
+		let k = 0;
+		while (k < BYTE_UNITS.length - 1 && largest >= 1024 ** (k + 1)) k++;
+		while (k > 0 && step > 0 && decimalsFor(step / 1024 ** k) > 2) k--;
+		scale = 1024 ** k;
+		suffix = ` ${BYTE_UNITS[k]}`;
+	}
+	const decimals = Math.min(6, step > 0 ? decimalsFor(step / scale) : 0);
+	return ticks.map((t) => `${(t / scale).toFixed(decimals)}${suffix}`);
+}
+
 /**
  * A threshold as the hub sends it (bounds in the stored unit, e.g. `> 0.5`
  * for seconds), with its numbers formatted for humans: `> 500 ms`.
  */
 export function formatThreshold(text: string | undefined, unit = ''): string {
 	if (!text) return '';
-	return text.replace(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi, (n) => formatValue(Number(n), unit));
+	// 0 stays bare, as in the hub: `0:5.8 GiB`.
+	return text.replace(/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi, (n) => (Number(n) === 0 ? '0' : formatValue(Number(n), unit)));
 }
 
 /** `40s`, `12m`, `3h`, `2d`: compact age for windows and tables. */
