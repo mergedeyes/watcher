@@ -7,12 +7,12 @@ use std::io::{BufRead, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use watcher_config::{Bootstrap, Contact, Role, Smtp, SmtpTls, load_dir};
+use watcher_config::{Bootstrap, Contact, Role, Smtp, SmtpTls, Tls, load_dir};
 use watcher_hub::auth::hash_password;
 use watcher_notify::{Mailer, Notification, Notifier};
 use watcher_store::Store;
 
-const MIN_PASSWORD: usize = 10;
+pub(crate) const MIN_PASSWORD: usize = 10;
 const PLUGIN_DIRS: [&str; 4] = [
     "/usr/lib/monitoring-plugins",
     "/usr/lib/nagios/plugins",
@@ -41,8 +41,11 @@ pub struct Args {
 pub struct Answers {
     #[serde(default)]
     pub role: Role,
+    pub instance_name: Option<String>,
     pub listen: Option<String>,
     pub public_url: Option<String>,
+    /// HTTPS: certificate files or self-signed.
+    pub tls: Option<Tls>,
     pub database_url: Option<String>,
     pub admin: Option<Admin>,
     pub smtp: Option<Smtp>,
@@ -353,22 +356,22 @@ impl Prompter<'_> {
 
 /// A file to write.
 #[derive(Debug)]
-struct PlannedFile {
-    path: PathBuf,
-    contents: String,
+pub(crate) struct PlannedFile {
+    pub path: PathBuf,
+    pub contents: String,
     /// Holds secrets: mode 0600.
-    private: bool,
+    pub private: bool,
 }
 
 /// The validated result of the answers: files and the admin to create.
 #[derive(Debug)]
-struct Plan {
-    files: Vec<PlannedFile>,
+pub(crate) struct Plan {
+    pub files: Vec<PlannedFile>,
     conf_dir: PathBuf,
 }
 
 impl Plan {
-    fn new(a: &Answers, dir: &Path) -> Result<Self> {
+    pub(crate) fn new(a: &Answers, dir: &Path) -> Result<Self> {
         if a.role == Role::Node {
             bail!("role node: not available yet");
         }
@@ -385,6 +388,24 @@ impl Plan {
             && !(url.starts_with("http://") || url.starts_with("https://"))
         {
             bail!("public_url: must start with http:// or https://");
+        }
+        if let Some(tls) = &a.tls {
+            match (&tls.cert, &tls.key, tls.self_signed) {
+                (Some(cert), Some(key), false) => {
+                    for (what, file) in [("cert", cert), ("key", key)] {
+                        if !file.is_file() {
+                            bail!("tls {what}: no file {}", file.display());
+                        }
+                    }
+                }
+                (None, None, true) => {}
+                _ => bail!("tls: set cert and key, or self_signed = true"),
+            }
+        }
+        if let Some(name) = &a.instance_name
+            && name.trim().is_empty()
+        {
+            bail!("instance_name: empty");
         }
         if a.admin.is_some() && a.database_url.is_none() {
             bail!("admin: needs database_url");
@@ -418,6 +439,22 @@ impl Plan {
         );
         if let Some(url) = &a.public_url {
             toml += &format!("public_url = {}\n", q(url));
+        }
+        if let Some(name) = &a.instance_name {
+            toml += &format!("instance_name = {}\n", q(name.trim()));
+        }
+        if let Some(tls) = &a.tls {
+            toml += "\n[tls]\n";
+            match (&tls.cert, &tls.key) {
+                (Some(cert), Some(key)) => {
+                    toml += &format!(
+                        "cert = {}\nkey = {}\n",
+                        q(&cert.display().to_string()),
+                        q(&key.display().to_string())
+                    );
+                }
+                _ => toml += "self_signed = true\n",
+            }
         }
         if let Some(url) = &a.database_url {
             toml += &format!("\n[database]\nurl = {}\n", q(url));
@@ -484,7 +521,7 @@ impl Plan {
     }
 }
 
-fn admin_password(admin: &Admin) -> Result<String> {
+pub(crate) fn admin_password(admin: &Admin) -> Result<String> {
     match (&admin.password, &admin.password_file) {
         (Some(p), None) => Ok(p.clone()),
         (None, Some(file)) => Ok(std::fs::read_to_string(file)
@@ -496,7 +533,7 @@ fn admin_password(admin: &Admin) -> Result<String> {
 }
 
 /// Creates the admin, writes the files, checks they load, sends the test.
-async fn apply(a: &Answers, plan: &Plan) -> Result<()> {
+pub(crate) async fn apply(a: &Answers, plan: &Plan) -> Result<()> {
     if let Some(url) = &a.database_url {
         let store = Store::connect(url).await.context("database")?;
         println!("Database: {}", store.backend());
@@ -559,7 +596,7 @@ async fn apply(a: &Answers, plan: &Plan) -> Result<()> {
     Ok(())
 }
 
-fn write_file(path: &Path, contents: &str, private: bool) -> std::io::Result<()> {
+pub(crate) fn write_file(path: &Path, contents: &str, private: bool) -> std::io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
@@ -630,14 +667,14 @@ fn localhost_config(notify: bool) -> String {
     c
 }
 
-fn plugin_dir() -> Option<PathBuf> {
+pub(crate) fn plugin_dir() -> Option<PathBuf> {
     PLUGIN_DIRS
         .iter()
         .map(PathBuf::from)
         .find(|d| d.join("check_disk").exists())
 }
 
-fn hostname() -> String {
+pub(crate) fn hostname() -> String {
     std::fs::read_to_string("/proc/sys/kernel/hostname")
         .map(|h| h.trim().to_string())
         .ok()
@@ -718,8 +755,12 @@ mod tests {
             r#"
 listen = "127.0.0.1:8080"
 public_url = "https://watcher.example.com"
+instance_name = "msp-hub"
 alert_email = ["ops@example.com"]
 alert_webhook = "https://hooks.example.com/w"
+
+[tls]
+self_signed = true
 
 [smtp]
 host = "mail.example.com"
@@ -750,6 +791,8 @@ from = "Watcher <watcher@example.com>"
         }
 
         let bootstrap = Bootstrap::load(&dir.join("watcher.toml")).unwrap();
+        assert_eq!(bootstrap.instance_name.as_deref(), Some("msp-hub"));
+        assert!(bootstrap.tls.unwrap().self_signed);
         let smtp = bootstrap.smtp.unwrap();
         assert_eq!(smtp.password_file.unwrap(), dir.join("smtp.pass"));
         assert_eq!(
@@ -798,6 +841,9 @@ from = "Watcher <watcher@example.com>"
         assert!(err(r#"alert_email = ["nope"]"#).contains("invalid address"));
         assert!(err(r#"public_url = "watcher.example""#).contains("http"));
         assert!(err(r#"role = "node""#).contains("not available"));
+        assert!(err("[tls]\ncert = \"/nonexistent.pem\"\nkey = \"/k.pem\"").contains("no file"));
+        assert!(err("[tls]\ncert = \"/c.pem\"").contains("cert and key"));
+        assert!(err("instance_name = \" \"").contains("empty"));
         assert!(toml::from_str::<Answers>("typo = 1").is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }

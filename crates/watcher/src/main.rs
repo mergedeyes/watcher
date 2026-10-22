@@ -3,7 +3,9 @@ mod init_cmd;
 mod notify_cmd;
 mod run;
 mod run_check;
+mod setup;
 mod sinks;
+mod tls;
 mod user_cmd;
 mod watch;
 
@@ -25,6 +27,12 @@ struct Cli {
 enum Cmd {
     /// Set up watcher.toml and conf.d/ (interactive, or --answers FILE).
     Init(init_cmd::Args),
+
+    /// Set up watcher.toml and conf.d/ in the browser, then run.
+    ///
+    /// Prints a one-time setup token to the log. `watcher run` does the same
+    /// when the watcher.toml it is given doesn't exist yet.
+    Setup(setup::Args),
 
     /// Run a single check and print the evaluated result.
     ///
@@ -80,6 +88,7 @@ async fn main() -> ExitCode {
         Cmd::RunCheck(args) => (run_check::run(args).await, ExitCode::from(3)),
         Cmd::Run(args) => (run::run(args).await, ExitCode::FAILURE),
         Cmd::Init(args) => (init_cmd::run(args).await, ExitCode::FAILURE),
+        Cmd::Setup(args) => (setup::command(args).await, ExitCode::FAILURE),
         Cmd::Config(command) => (config_cmd::run(command), ExitCode::FAILURE),
         Cmd::Notify(command) => (notify_cmd::run(command).await, ExitCode::FAILURE),
         Cmd::User { command, db } => (user_cmd::user(command, db).await, ExitCode::FAILURE),

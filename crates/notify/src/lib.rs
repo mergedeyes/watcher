@@ -77,6 +77,8 @@ pub struct Notification {
     pub time: SystemTime,
     /// Link to the service, if `public_url` is set.
     pub url: Option<String>,
+    /// `instance_name` of the sending Watcher.
+    pub instance: Option<String>,
 }
 
 impl Notification {
@@ -95,6 +97,7 @@ impl Notification {
             long_output: String::new(),
             time: SystemTime::now(),
             url: public_url,
+            instance: None,
         }
     }
 
@@ -206,6 +209,7 @@ pub fn decide<'a>(
         long_output: event.result.long_output.clone(),
         time: event.state.last_check,
         url,
+        instance: None,
     };
     Some((notification, contacts))
 }
@@ -227,6 +231,7 @@ pub struct Notifier {
     mailer: Option<Mailer>,
     http: reqwest::Client,
     public_url: Option<String>,
+    instance: Option<String>,
 }
 
 impl Notifier {
@@ -244,7 +249,14 @@ impl Notifier {
             mailer,
             http,
             public_url,
+            instance: None,
         })
+    }
+
+    /// Names the instance in every notification.
+    pub fn with_instance(mut self, name: Option<String>) -> Self {
+        self.instance = name;
+        self
     }
 
     pub fn public_url(&self) -> Option<&str> {
@@ -322,9 +334,10 @@ pub async fn run(
 ) {
     while let Some(event) = events.recv().await {
         let config = config.borrow().clone();
-        let Some((n, contacts)) = decide(&event, &config, notifier.public_url()) else {
+        let Some((mut n, contacts)) = decide(&event, &config, notifier.public_url()) else {
             continue;
         };
+        n.instance = notifier.instance.clone();
         for contact in contacts {
             let (notifier, contact, n) = (notifier.clone(), contact.clone(), n.clone());
             // Deliveries retry with delays; don't hold up later events.

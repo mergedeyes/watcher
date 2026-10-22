@@ -23,6 +23,7 @@ watcher-store = { path = "crates/store" }
 anyhow = "1"
 argon2 = "0.6"
 axum = "0.8"
+axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
 base64 = "0.23"
 clap = { version = "4", features = ["derive", "env"] }
 getrandom = "0.4"
@@ -35,6 +36,7 @@ notify = "8"
 nix = { version = "0.31", features = ["signal", "process"] }
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "http2"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 rpassword = "7"
 rust-embed = { version = "8", features = ["mime-guess"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }

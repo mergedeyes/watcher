@@ -10,11 +10,13 @@
 	let { children } = $props();
 	let unreachable = $state<string | null>(null);
 	let menuOpen = $state(false);
+	let instance = $state<string | null>(null);
 
 	onMount(async () => {
 		setUnauthorizedHandler(() => auth.expire());
 		try {
 			await auth.refresh();
+			instance = (await api.health()).instance ?? null;
 		} catch (e) {
 			unreachable = e instanceof Error ? e.message : String(e);
 		}
@@ -23,6 +25,10 @@
 	// Load live data once allowed; otherwise stop it and go to the login page.
 	$effect(() => {
 		if (!auth.status) return;
+		if (auth.status.setup) {
+			if (page.url.pathname !== '/setup') goto('/setup', { replaceState: true });
+			return;
+		}
 		const onLogin = page.url.pathname === '/login';
 		if (auth.allowed) {
 			live.start();
@@ -50,7 +56,7 @@
 		live.services.filter((s) => s.state !== null && s.state !== 'ok').length +
 			live.hosts.filter((h) => h.state === 'down').length
 	);
-	let bare = $derived(page.url.pathname === '/login' || !auth.allowed);
+	let bare = $derived(page.url.pathname === '/login' || page.url.pathname === '/setup' || !auth.allowed);
 
 	const NAV = [
 		{
@@ -87,7 +93,7 @@
 </script>
 
 <svelte:head>
-	<title>{problems > 0 ? `(${problems}) ` : ''}Watcher</title>
+	<title>{problems > 0 ? `(${problems}) ` : ''}Watcher{instance ? ` · ${instance}` : ''}</title>
 </svelte:head>
 
 {#if unreachable}
@@ -97,7 +103,7 @@
 {:else}
 	<div class="shell" class:open={menuOpen}>
 		<aside class="side">
-			<a class="brand" href="/">Watcher</a>
+			<a class="brand" href="/">Watcher{#if instance}<span class="instance">{instance}</span>{/if}</a>
 			<nav aria-label="Main">
 				{#each NAV as group (group.title)}
 					<div class="group">{group.title}</div>
@@ -170,6 +176,14 @@
 		color: #fff;
 		text-decoration: none;
 		border-bottom: 1px solid rgb(255 255 255 / 0.06);
+	}
+
+	.instance {
+		display: block;
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0;
+		color: var(--side-muted);
 	}
 
 	.group {

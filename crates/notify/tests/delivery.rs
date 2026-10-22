@@ -27,6 +27,7 @@ fn notification(service: &str) -> Notification {
         long_output: String::new(),
         time: SystemTime::now(),
         url: None,
+        instance: None,
     }
 }
 

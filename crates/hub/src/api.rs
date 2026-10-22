@@ -122,6 +122,7 @@ async fn health(AxState(hub): Shared) -> Json<serde_json::Value> {
         "uptime_s": hub.started.elapsed().unwrap_or_default().as_secs(),
         "services": services,
         "database": hub.store.as_ref().map(|s| s.backend().to_string()),
+        "instance": hub.instance.get(),
     }))
 }
 

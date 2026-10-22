@@ -21,6 +21,8 @@ use watcher_store::{HostSpec, ServiceSpec, Store, StoredState};
 
 pub use auth::AuthSettings;
 pub use config::{ConfigFiles, Reload};
+/// Serves the web UI files and app shell; for routers outside the hub.
+pub use ui::serve as serve_ui;
 
 /// Live state of one service.
 #[derive(Debug, Clone)]
@@ -60,6 +62,8 @@ pub struct Hub {
     config_files: OnceLock<ConfigFiles>,
     /// Held while a config change is written and reloaded.
     config_lock: tokio::sync::Mutex<()>,
+    /// `instance_name` from watcher.toml.
+    instance: OnceLock<String>,
 }
 
 impl Hub {
@@ -96,7 +100,13 @@ impl Hub {
             started: SystemTime::now(),
             config_files: OnceLock::new(),
             config_lock: tokio::sync::Mutex::new(()),
+            instance: OnceLock::new(),
         })
+    }
+
+    /// Names this instance in the API (`health`) and so in the web UI.
+    pub fn set_instance_name(&self, name: String) {
+        let _ = self.instance.set(name);
     }
 
     /// Serves the object files under `/api/v1/config` (for admins).

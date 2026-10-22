@@ -14,7 +14,7 @@ pub mod files;
 mod load;
 mod macros;
 
-pub use bootstrap::{Bootstrap, BootstrapError, ConfigMode, Database, Role, Smtp, SmtpTls};
+pub use bootstrap::{Bootstrap, BootstrapError, ConfigMode, Database, Role, Smtp, SmtpTls, Tls};
 pub use expr::{Expr, ExprError};
 pub use load::{load_dir, load_dir_with};
 
