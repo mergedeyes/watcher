@@ -2,8 +2,18 @@
 #   watcher config check examples/local/watcher.toml --services
 role = "standalone"
 conf_dir = "conf.d"
+# Used for links in notifications.
+public_url = "http://localhost:8080"
 
 # Store results (TimescaleDB from compose.yaml; plain PostgreSQL works too).
 # Or pass --database / set WATCHER_DATABASE_URL.
 # [database]
 # url = "postgres://watcher:watcher@localhost:55432/watcher_dev"
+
+# Email via Mailpit from compose.yaml; read the mails at http://localhost:8025.
+# Try it with: watcher notify test oncall examples/local/watcher.toml
+[smtp]
+host = "localhost"
+port = 1025
+tls = "none"
+from = "Watcher <watcher@example.com>"

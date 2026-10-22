@@ -12,6 +12,7 @@ unmaintained = "workspace"
 # Everything here is compatible with AGPL-3.0-only (Apache-2.0 is
 # compatible with GPLv3-family licenses).
 allow = [
+    "0BSD",
     "AGPL-3.0-only",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
