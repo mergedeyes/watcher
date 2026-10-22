@@ -548,6 +548,7 @@ components:
               properties:
                 name: { type: [string, "null"], description: "The check it runs; null for an inline command" }
                 role: { type: [string, "null"], description: "The role it comes from; null for a host's own service" }
+                entry: { type: [string, "null"], description: "The role's service entry (for for_each services the entry they were made from)" }
                 command: { type: [string, "null"] }
                 interval_s: { type: number }
                 retry_interval_s: { type: number }

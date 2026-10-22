@@ -79,6 +79,9 @@ pub struct CheckView {
     pub name: Option<String>,
     /// The role it comes from; `None` for a host's own service.
     pub role: Option<String>,
+    /// The role's service entry: the name, or for `for_each` services the
+    /// entry they were made from (`disk` for `disk_root`).
+    pub entry: Option<String>,
     /// `None` for passive checks.
     pub command: Option<String>,
     pub interval_s: f64,
@@ -111,6 +114,14 @@ impl ServiceDetail {
             check: CheckView {
                 name: service.check.clone(),
                 role: service.role.clone(),
+                entry: service.role.as_ref().map(|_| match &service.for_each {
+                    Some((_, key)) => service
+                        .name
+                        .strip_suffix(&format!("_{key}"))
+                        .unwrap_or(&service.name)
+                        .to_string(),
+                    None => service.name.clone(),
+                }),
                 command: service.command.as_ref().map(ToString::to_string),
                 interval_s: settings.interval.as_secs_f64(),
                 retry_interval_s: settings.retry_interval.as_secs_f64(),

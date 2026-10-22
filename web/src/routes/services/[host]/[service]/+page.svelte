@@ -3,7 +3,9 @@
 	import { api, ApiError, HISTORY_DELAY, hostHref, type ServiceDetail, type StateEvent } from '#lib/api.ts';
 	import AlertTable from '#lib/AlertTable.svelte';
 	import { auth } from '#lib/auth.svelte.ts';
+	import { editHref } from '#lib/config.svelte.ts';
 	import ConfigTree from '#lib/ConfigTree.svelte';
+	import EditMenu, { type EditTarget } from '#lib/EditMenu.svelte';
 	import Graphs from '#lib/Graphs.svelte';
 	import { datetime, duration, formatThreshold, formatValue, seriesName, since } from '#lib/format.ts';
 	import Status from '#lib/Status.svelte';
@@ -17,6 +19,25 @@
 	let events = $state<StateEvent[]>([]);
 	/** Set when the hub has no database: there is no history to show. */
 	let noHistory = $state(false);
+
+	/** Where the service can be edited: its role entry, the host (own service or override), its check. */
+	function editTargets(d: ServiceDetail): EditTarget[] {
+		const focus = (s: string) => `&focus=${encodeURIComponent(s)}`;
+		const out: EditTarget[] = [];
+		if (d.check.role)
+			out.push({
+				label: `Role ${d.check.role}`,
+				href: editHref('roles', d.check.role) + focus(d.check.entry ?? d.service),
+				hint: 'all hosts with the role'
+			});
+		out.push({
+			label: `Host ${d.host}`,
+			href: editHref('hosts', d.host) + focus(d.service),
+			hint: d.check.role ? 'override on this host' : 'service on this host'
+		});
+		if (d.check.name) out.push({ label: `Check ${d.check.name}`, href: editHref('checks', d.check.name), hint: 'command, thresholds' });
+		return out;
+	}
 
 	// Refetch whenever a new result for this service arrives.
 	let lastCheck = $derived(live.find(host, name)?.last_check ?? null);
@@ -69,7 +90,12 @@
 	{:else}
 		<div class="page-head">
 			<h1>{detail.service} <span class="muted">on <a href={hostHref(host)}>{host}</a></span></h1>
-			{#if auth.admin}<ConfigTree kind="service" name="{host}/{name}" />{/if}
+			{#if auth.admin}
+				<span class="head-actions">
+					<EditMenu targets={editTargets(detail)} />
+					<ConfigTree kind="service" name="{host}/{name}" />
+				</span>
+			{/if}
 		</div>
 
 		<section class="panel">
@@ -194,6 +220,12 @@
 
 	.pre {
 		white-space: pre-wrap;
+	}
+
+	.head-actions {
+		display: inline-flex;
+		align-items: center;
+		gap: 10px;
 	}
 
 	.more {
