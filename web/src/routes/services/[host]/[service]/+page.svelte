@@ -15,14 +15,47 @@
 	let events = $state<StateEvent[]>([]);
 	/** Set when the hub has no database: there is no history to show. */
 	let noHistory = $state(false);
-	let range = $state('6h');
+	/** Time ranges for the graphs, in seconds. */
+	const RANGES: [string, number][] = [
+		['30s', 30],
+		['1m', 60],
+		['5m', 300],
+		['15m', 900],
+		['30m', 1800],
+		['1h', 3600],
+		['6h', 21600],
+		['24h', 86400],
+		['7d', 604800],
+		['30d', 2592000]
+	];
+	const DEFAULT_MAX = 21600;
 
-	const RANGES = [
-		['1h', '1 hour'],
-		['6h', '6 hours'],
-		['24h', '24 hours'],
-		['7d', '7 days']
-	] as const;
+	/** Range picked by the user; null means automatic. */
+	let chosen = $state<string | null>(null);
+
+	/** When the oldest sample of this service was taken (ms), null without data. */
+	let oldest = $derived.by(() => {
+		const times = series.map((s) => (s.first ? Date.parse(s.first) : NaN)).filter((t) => !isNaN(t));
+		return times.length > 0 ? Math.min(...times) : null;
+	});
+
+	// The smallest range holding all data. Larger ones would show the same
+	// samples in coarser buckets, so they are disabled.
+	let cover = $derived.by(() => {
+		const span = oldest === null ? 0 : (live.now - oldest) / 1000;
+		return RANGES.find(([, secs]) => secs >= span) ?? RANGES[RANGES.length - 1]!;
+	});
+
+	function enabled(secs: number) {
+		return oldest !== null && secs <= cover[1];
+	}
+
+	let range = $derived.by(() => {
+		const pick = RANGES.find(([label]) => label === chosen);
+		if (pick && enabled(pick[1])) return pick;
+		// Automatic: all data, but no more than 6h.
+		return cover[1] <= DEFAULT_MAX ? cover : RANGES.find(([, secs]) => secs === DEFAULT_MAX)!;
+	});
 
 	// Refetch whenever a new result for this service arrives.
 	let lastCheck = $derived(live.find(host, name)?.last_check ?? null);
@@ -145,8 +178,15 @@
 			<h2>Graphs</h2>
 			{#if !noHistory && series.length > 0}
 				<div class="ranges" role="group" aria-label="Time range">
-					{#each RANGES as [value, label] (value)}
-						<button type="button" class="legend" aria-pressed={range === value} onclick={() => (range = value)} title={label}>{value}</button>
+					{#each RANGES as [label, secs] (label)}
+						<button
+							type="button"
+							class="legend"
+							aria-pressed={range[0] === label}
+							disabled={!enabled(secs)}
+							title={enabled(secs) ? undefined : 'Not enough data'}
+							onclick={() => (chosen = label)}>{label}</button
+						>
 					{/each}
 				</div>
 			{/if}
@@ -158,7 +198,7 @@
 		{:else}
 			<div class="graphs">
 				{#each series as s (s.id)}
-					<Chart series={s} {range} tick={Date.parse(lastCheck ?? '') || 0} />
+					<Chart series={s} range={range[0]} rangeSecs={range[1]} tick={Date.parse(lastCheck ?? '') || 0} />
 				{/each}
 			</div>
 		{/if}
@@ -320,6 +360,11 @@
 		border: 1px solid var(--rule);
 		border-radius: 2px;
 		cursor: pointer;
+	}
+
+	.ranges button:disabled {
+		opacity: 0.35;
+		cursor: not-allowed;
 	}
 
 	.ranges button[aria-pressed='true'] {

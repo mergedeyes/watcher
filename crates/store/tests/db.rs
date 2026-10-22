@@ -249,6 +249,9 @@ async fn sync_ingest_and_restore() {
         let names: Vec<_> = series.iter().map(|s| s.metric.as_str()).collect();
         assert_eq!(names, ["/", "temp"]);
         assert_eq!(series[0].unit, "B");
+        // Two samples of "/" were written; first and last bracket them.
+        let (first, last) = (series[0].first.unwrap(), series[0].last.unwrap());
+        assert!(first < last && last <= SystemTime::now());
         assert!(store.series("nope", "x").await.unwrap().is_none());
 
         let now = SystemTime::now();

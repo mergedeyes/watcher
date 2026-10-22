@@ -23,6 +23,11 @@ pub struct Series {
     pub metric: String,
     pub labels: serde_json::Value,
     pub unit: String,
+    /// Oldest and newest sample; `None` without samples.
+    #[serde(serialize_with = "rfc3339_opt")]
+    pub first: Option<SystemTime>,
+    #[serde(serialize_with = "rfc3339_opt")]
+    pub last: Option<SystemTime>,
 }
 
 /// Points of a series, bucketed for display.
@@ -109,19 +114,33 @@ impl Store {
         let Some(service_id) = service_id else {
             return Ok(None);
         };
-        let rows: Vec<(i32, String, serde_json::Value, String)> = sqlx::query_as(
-            "SELECT id, metric, labels, unit FROM series WHERE service_id = $1 ORDER BY metric, labels::text",
+        type Row = (
+            i32,
+            String,
+            serde_json::Value,
+            String,
+            Option<f64>,
+            Option<f64>,
+        );
+        // min/max per series are index lookups on (series_id, ts).
+        let rows: Vec<Row> = sqlx::query_as(
+            "SELECT s.id, s.metric, s.labels, s.unit,
+                    extract(epoch FROM (SELECT min(ts) FROM samples WHERE series_id = s.id))::float8,
+                    extract(epoch FROM (SELECT max(ts) FROM samples WHERE series_id = s.id))::float8
+             FROM series s WHERE s.service_id = $1 ORDER BY s.metric, s.labels::text",
         )
         .bind(service_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(Some(
             rows.into_iter()
-                .map(|(id, metric, labels, unit)| Series {
+                .map(|(id, metric, labels, unit, first, last)| Series {
                     id,
                     metric,
                     labels,
                     unit,
+                    first: first.map(from_epoch),
+                    last: last.map(from_epoch),
                 })
                 .collect(),
         ))
