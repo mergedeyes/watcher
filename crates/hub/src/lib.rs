@@ -117,12 +117,11 @@ impl Hub {
                 .map(|s| view::ServiceView::new(&config, s, live.services.get(&s.id)))
         };
         // Only serialize when someone listens.
-        if let Some(view) = view {
-            if self.updates.receiver_count() > 0 {
-                if let Ok(json) = serde_json::to_string(&view) {
-                    let _ = self.updates.send(Update::Result(json.into()));
-                }
-            }
+        if let Some(view) = view
+            && self.updates.receiver_count() > 0
+            && let Ok(json) = serde_json::to_string(&view)
+        {
+            let _ = self.updates.send(Update::Result(json.into()));
         }
     }
 

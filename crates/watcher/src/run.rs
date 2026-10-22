@@ -128,12 +128,11 @@ pub async fn run(args: Args) -> Result<ExitCode> {
                     continue;
                 };
                 // Register new services before their first results arrive.
-                if let Some(storage) = &storage {
-                    if let Err(err) = storage.sync(&config).await {
+                if let Some(storage) = &storage
+                    && let Err(err) = storage.sync(&config).await {
                         error!("reload failed, cannot update the database: {err:#}");
                         continue;
                     }
-                }
                 info!("reloaded: {} services", config.services.len());
                 control.send(Control::Reload(jobs(&config))).await?;
                 hub.set_config(Arc::new(config));

@@ -369,10 +369,11 @@ fn parse_time(s: &str, now: SystemTime) -> Result<SystemTime, ApiError> {
     if s == "now" {
         return Ok(now);
     }
-    if let Ok(secs) = s.parse::<f64>() {
-        if secs.is_finite() && secs >= 0.0 {
-            return Ok(SystemTime::UNIX_EPOCH + Duration::from_secs_f64(secs));
-        }
+    if let Ok(secs) = s.parse::<f64>()
+        && secs.is_finite()
+        && secs >= 0.0
+    {
+        return Ok(SystemTime::UNIX_EPOCH + Duration::from_secs_f64(secs));
     }
     if let Ok(t) = humantime::parse_rfc3339_weak(s) {
         return Ok(t);

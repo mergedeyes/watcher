@@ -322,10 +322,10 @@ impl RawObjects {
             (Some(command), false) => {
                 if command.trim().is_empty() {
                     error("command is empty".into());
-                } else if !def.shell {
-                    if let Err(err) = shell_words::split(command) {
-                        error(format!("cannot split command: {err}"));
-                    }
+                } else if !def.shell
+                    && let Err(err) = shell_words::split(command)
+                {
+                    error(format!("cannot split command: {err}"));
                 }
                 for name in macros::names(command) {
                     if !macros::is_known(name) {
@@ -426,14 +426,14 @@ impl RawObjects {
                 ok = false;
             }
         }
-        if let Some(url) = &def.webhook {
-            if !(url.starts_with("http://") || url.starts_with("https://")) {
-                sink.error(
-                    Some(origin),
-                    format!("contact {name:?}: webhook must be an http(s) URL"),
-                );
-                ok = false;
-            }
+        if let Some(url) = &def.webhook
+            && !(url.starts_with("http://") || url.starts_with("https://"))
+        {
+            sink.error(
+                Some(origin),
+                format!("contact {name:?}: webhook must be an http(s) URL"),
+            );
+            ok = false;
         }
         if def.email.is_empty() && def.webhook.is_none() {
             sink.warning(

@@ -158,10 +158,10 @@ pub async fn schedule(
             },
             () = events.closed() => return,
         };
-        if let Some(event) = event {
-            if events.send(event).await.is_err() {
-                return;
-            }
+        if let Some(event) = event
+            && events.send(event).await.is_err()
+        {
+            return;
         }
     }
 }
