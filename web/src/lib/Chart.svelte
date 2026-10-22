@@ -32,6 +32,10 @@
 	/** The whole range of the current drawing, for resetting the zoom. */
 	let full = { from: 0, to: 0 };
 	let drawnRange = '';
+	/** The mouse button is down in the graph: a selection is being dragged. */
+	let dragging = false;
+	/** Data that arrived during a drag, drawn when the drag ends. */
+	let pending: { data: uPlot.AlignedData; from: number; to: number } | null = null;
 
 	const HEIGHT = 170;
 
@@ -63,9 +67,21 @@
 		return [xs, avg, min, max] as uPlot.AlignedData;
 	}
 
-	/** Draws `data` on a time axis from `from` to `to` (unix seconds). */
+	/**
+	 * Draws `data` on a time axis from `from` to `to` (unix seconds). An
+	 * existing graph only gets new data, so a zoom stays; during a drag the
+	 * update waits, or the selection would be lost.
+	 */
 	function draw(data: uPlot.AlignedData, from: number, to: number) {
-		plot?.destroy();
+		if (dragging) {
+			pending = { data, from, to };
+			return;
+		}
+		full = { from, to };
+		if (plot) {
+			plot.setData(data);
+			return;
+		}
 		const ink = css('--ink');
 		const ink2 = css('--ink-2');
 		const rule = css('--rule');
@@ -81,7 +97,7 @@
 				// Double-click resets the zoom, like the button.
 				bind: { dblclick: () => () => (resetZoom(), null) }
 			},
-			scales: { x: { time: true, range: () => (zoom ? [zoom.min, zoom.max] : [from, to]) } },
+			scales: { x: { time: true, range: () => (zoom ? [zoom.min, zoom.max] : [full.from, full.to]) } },
 			axes: [
 				{
 					...axis,
@@ -107,6 +123,7 @@
 			],
 			bands: [{ series: [3, 2], fill: `color-mix(in srgb, ${ink} 14%, transparent)` }],
 			hooks: {
+				init: [(u) => u.over.addEventListener('mousedown', () => (dragging = true))],
 				// Dragging selects a section; uPlot then sets the scale to it.
 				setSelect: [
 					(u) => {
@@ -134,9 +151,26 @@
 				]
 			}
 		};
-		full = { from, to };
 		plot = new uPlot(opts, data, box);
 	}
+
+	// A drag ends anywhere on the page. Draw held-back data after uPlot has
+	// handled the release (and applied the selection).
+	$effect(() => {
+		const release = () => {
+			if (!dragging) return;
+			dragging = false;
+			setTimeout(() => {
+				if (pending && !dragging) {
+					const { data, from, to } = pending;
+					pending = null;
+					draw(data, from, to);
+				}
+			});
+		};
+		window.addEventListener('mouseup', release);
+		return () => window.removeEventListener('mouseup', release);
+	});
 
 	function resetZoom() {
 		zoom = null;
@@ -163,6 +197,7 @@
 				else {
 					plot?.destroy();
 					plot = null;
+					pending = null;
 				}
 			},
 			(e) => {
