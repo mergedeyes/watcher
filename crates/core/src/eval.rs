@@ -54,6 +54,13 @@ pub struct MetricResult {
     /// `None` when the metric has no thresholds to evaluate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<State>,
+    /// Thresholds embedded in the output, for display. They are evaluated
+    /// unless the output is Nagios or the config overrides them; the
+    /// evaluated ones are `metric.warn`/`metric.crit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perf_warn: Option<Threshold>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perf_crit: Option<Threshold>,
 }
 
 /// The evaluated outcome of one check run.
@@ -154,6 +161,8 @@ fn apply_thresholds(
     thresholds: &BTreeMap<String, ThresholdSpec>,
     embedded: bool,
 ) -> MetricResult {
+    let perf_warn = metric.warn.clone();
+    let perf_crit = metric.crit.clone();
     if !embedded {
         metric.warn = None;
         metric.crit = None;
@@ -170,6 +179,8 @@ fn apply_thresholds(
         return MetricResult {
             metric,
             state: None,
+            perf_warn,
+            perf_crit,
         };
     }
     let breached = |t: &Option<Threshold>| t.as_ref().is_some_and(|t| t.breached(metric.value));
@@ -183,6 +194,8 @@ fn apply_thresholds(
     MetricResult {
         metric,
         state: Some(state),
+        perf_warn,
+        perf_crit,
     }
 }
 
@@ -255,6 +268,11 @@ mod tests {
         assert_eq!(r.state, State::Ok);
         assert_eq!(r.metrics[0].state, None);
         assert_eq!(r.metrics[0].metric.warn, None);
+        // They are kept for display.
+        assert_eq!(
+            r.metrics[0].perf_warn,
+            Some(Threshold::parse("204411985100.8").unwrap())
+        );
     }
 
     #[test]

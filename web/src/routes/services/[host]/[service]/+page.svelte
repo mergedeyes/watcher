@@ -86,6 +86,18 @@
 	});
 </script>
 
+<!-- Evaluated threshold, marked `cfg` if it isn't the plugin's; a plugin
+     threshold that wasn't evaluated is shown muted. -->
+{#snippet threshold(evaluated: string | undefined, plugin: string | undefined, unit: string | undefined)}
+	{#if evaluated}
+		{formatThreshold(evaluated, unit)}
+		{#if evaluated !== plugin}<span class="tag" title="From config">cfg</span>{/if}
+	{/if}
+	{#if plugin && evaluated !== plugin}
+		<span class="muted" title="From plugin, not evaluated">{formatThreshold(plugin, unit)}</span>
+	{/if}
+{/snippet}
+
 <div class="content">
 	{#if missing}
 		<p class="notice">Service not found: {host}/{name}</p>
@@ -165,8 +177,8 @@
 							<tr data-state={m.state}>
 								<td class="mono">{seriesName(m.name, m.labels)}</td>
 								<td class="mono nowrap">{formatValue(m.value, m.unit)}</td>
-								<td class="mono hide-narrow">{formatThreshold(m.warn, m.unit)}</td>
-								<td class="mono hide-narrow">{formatThreshold(m.crit, m.unit)}</td>
+								<td class="mono hide-narrow">{@render threshold(m.warn, m.perf_warn, m.unit)}</td>
+								<td class="mono hide-narrow">{@render threshold(m.crit, m.perf_crit, m.unit)}</td>
 								<td>{#if m.state}<Status state={m.state} />{/if}</td>
 							</tr>
 						{/each}
