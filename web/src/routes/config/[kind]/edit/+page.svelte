@@ -7,12 +7,20 @@
 	import { config, fileHref } from '#lib/config.svelte.ts';
 	import ConfigHead from '#lib/ConfigHead.svelte';
 	import ConfigTree from '#lib/ConfigTree.svelte';
-	import { KINDS, SCHEMAS, SELECTOR_FIELDS, fromForm, otherKeys, toForm, type Field, type FormValues, type ServiceRow } from '#lib/schema.ts';
+	import { KINDS, SCHEMAS, SELECTOR_FIELDS, expandNames, fromForm, otherKeys, toForm, type Field, type FormValues, type ServiceRow } from '#lib/schema.ts';
 
 	let kind = $derived(KINDS.find((k) => k.path === page.params.kind));
 	let name = $derived(page.url.searchParams.get('name'));
 	let object = $derived(kind && name !== null ? config.find(kind.kind, name) : undefined);
-	let raw = $derived<Record<string, unknown>>(object?.fields ?? {});
+	/** Clone mode (`?clone=x`): a new form filled from x, saved into x's file. */
+	let cloneName = $derived(name === null ? page.url.searchParams.get('clone') : null);
+	let source = $derived(kind && cloneName !== null ? config.find(kind.kind, cloneName) : undefined);
+	let raw = $derived.by<Record<string, unknown>>(() => {
+		if (object) return object.fields;
+		if (!source) return {};
+		const { name: _, ...rest } = source.fields;
+		return rest;
+	});
 
 	let values = $state<FormValues | null>(null);
 	let pending = $state<Change[] | null>(null);
@@ -33,12 +41,14 @@
 	$effect(() => {
 		void kind;
 		void name;
+		void cloneName;
 		untrack(() => (values = null));
 	});
 
 	// Fill the form once the object is there; later reloads don't reset edits.
 	$effect(() => {
 		if (!kind || !config.loaded) return;
+		if (cloneName !== null && !source) return;
 		const fields = raw;
 		const k = kind.kind;
 		untrack(() => {
@@ -65,7 +75,7 @@
 	let own = $derived(
 		object ? (config.overview?.diagnostics ?? []).filter((p) => p.path === object.path && p.line === object.line) : []
 	);
-	let missing = $derived(config.loaded && name !== null && !object);
+	let missing = $derived(config.loaded && ((name !== null && !object) || (cloneName !== null && !source)));
 
 	async function save(event: SubmitEvent) {
 		event.preventDefault();
@@ -73,7 +83,11 @@
 		error = null;
 		try {
 			const fields = fromForm(kind.kind, raw, values);
-			pending = [await api.editObject(kind.kind, name, fields)];
+			if (source) {
+				pending = await clones(kind.kind, fields, source.path);
+			} else {
+				pending = [await api.editObject(kind.kind, name, fields)];
+			}
 			deleting = false;
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
@@ -89,6 +103,20 @@
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		}
+	}
+
+	/** One clone per name, into the file of the original. Hosts cloned several times get their address from the name. */
+	async function clones(k: Kind, fields: Record<string, unknown>, path: string): Promise<Change[]> {
+		const list = expandNames(String(fields.name ?? ''));
+		const edits =
+			list.length === 0
+				? [{ kind: k, name: null, fields, path }]
+				: list.map((n) => {
+						const f: Record<string, unknown> = { ...fields, name: n };
+						if (k === 'host' && list.length > 1) delete f.address;
+						return { kind: k, name: null, fields: f, path };
+					});
+		return (await api.editMany(edits)).changes;
 	}
 
 	function closed(applied: boolean) {
@@ -113,6 +141,12 @@
 		if (!current.includes(item)) values[f.key] = [...current, item].join(', ');
 	}
 
+	/** In clone mode, the name field takes several names. */
+	function shown(f: Field): Field {
+		if (f.key !== 'name' || cloneName === null) return f;
+		return { ...f, label: 'Names', placeholder: 'web03, web[04-10]', help: 'one clone per name; hosts cloned several times: address = name' };
+	}
+
 	function rows<T>(key: string): T[] {
 		return (values?.[key] as T[]) ?? [];
 	}
@@ -124,13 +158,16 @@
 	{:else}
 		<div class="page-head">
 			<h1>
-				<a href="/config/{kind.path}">{kind.label}</a> / {name ?? `New ${kind.one}`}
+				<a href="/config/{kind.path}">{kind.label}</a> / {name ?? (cloneName !== null ? `Clone ${cloneName}` : `New ${kind.one}`)}
 			</h1>
 			{#if object}
 				<span class="head-actions">
+					{#if config.writable && object.name}<a class="btn" href="/config/{kind.path}/edit?clone={encodeURIComponent(object.name)}">Clone</a>{/if}
 					{#if kind.kind !== 'sink' && object.name}<ConfigTree kind={kind.kind} name={object.name} />{/if}
 					<a class="mono" href={fileHref(object.path, object.line)}>{object.path}:{object.line}</a>
 				</span>
+			{:else if source}
+				<span class="muted mono">→ {source.path}</span>
 			{:else if name === null}
 				<span class="muted mono">→ {kind.file}</span>
 			{/if}
@@ -141,7 +178,7 @@
 		{/each}
 
 		{#if missing}
-			<p class="notice">No {kind.kind} "{name}".</p>
+			<p class="notice">No {kind.kind} "{name ?? cloneName}".</p>
 		{:else if values}
 			<form onsubmit={save}>
 				<fieldset disabled={!config.writable}>
@@ -149,7 +186,7 @@
 						<section class="panel">
 							<div class="panel-title">{group.title}</div>
 							<div class="fields">
-								{#each group.fields as f (f.key)}
+								{#each group.fields.map(shown) as f (f.key)}
 									{@const id = `f-${f.key}`}
 									<label for={id}>{f.label}{f.required ? ' *' : ''}</label>
 									<div class="input">

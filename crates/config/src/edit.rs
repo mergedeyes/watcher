@@ -239,6 +239,19 @@ fn parse(path: &str, text: &str) -> Result<Vec<Object>, (usize, String)> {
     Ok(objects)
 }
 
+/// One object to create (`name` is `None`), update or delete (`fields` is
+/// `None`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Edit {
+    pub kind: Kind,
+    pub name: Option<String>,
+    /// The object's fields as written, including `name`.
+    pub fields: Option<Table>,
+    /// For a new object: the file it goes to, relative to the object
+    /// directory; [`Kind::ui_file`] if not set.
+    pub path: Option<String>,
+}
+
 /// The file change that creates (`name` is `None`), updates or deletes
 /// (`fields` is `None`) an object. Existing objects are edited where they
 /// are; new ones go to [`Kind::ui_file`]. Nothing is written: pass the
@@ -249,36 +262,78 @@ pub fn edit(
     name: Option<&str>,
     fields: Option<&Table>,
 ) -> Result<Change, EditError> {
-    let path = match name {
-        None => kind.ui_file().to_string(),
-        Some(name) => {
-            let (objects, _) = objects(dir).map_err(|source| files::Error::Io {
-                path: String::new(),
-                source,
-            })?;
-            objects
-                .into_iter()
-                .find(|o| o.kind == kind && o.name == name)
-                .ok_or_else(|| EditError::NotFound(kind.key(), name.into()))?
-                .path
-        }
+    let edits = [Edit {
+        kind,
+        name: name.map(String::from),
+        fields: fields.cloned(),
+        path: None,
+    }];
+    let mut changes = edit_many(dir, &edits)?;
+    Ok(changes.remove(0))
+}
+
+/// Several edits at once, e.g. clones of an object: applied in order, so
+/// edits of the same file build on each other. One change per file.
+pub fn edit_many(dir: &Path, edits: &[Edit]) -> Result<Vec<Change>, EditError> {
+    let io = |source| files::Error::Io {
+        path: String::new(),
+        source,
     };
-    let current = files::read(dir, &path)?;
-    let text = current.as_ref().map_or("", |f| f.text.as_str());
-    let new = edit_text(text, kind, name, fields).map_err(|err| match err {
-        EditError::Exists(k, n, _) => EditError::Exists(k, n, path.clone()),
-        EditError::Inline(k, n, _) => EditError::Inline(k, n, path.clone()),
-        EditError::Parse { message, .. } => EditError::Parse {
-            path: path.clone(),
-            message,
-        },
-        other => other,
-    })?;
-    Ok(Change {
-        path,
-        base: current.map(|f| f.hash),
-        text: Some(new),
-    })
+    let mut found: Option<Vec<Object>> = None;
+    // Path -> (hash it was read with, current text), in first-use order.
+    let mut texts: Vec<(String, Option<String>, String)> = Vec::new();
+    for e in edits {
+        let path = match (&e.name, &e.path) {
+            (None, Some(path)) => {
+                files::resolve(dir, path)?;
+                path.clone()
+            }
+            (None, None) => e.kind.ui_file().to_string(),
+            (Some(name), _) => {
+                if found.is_none() {
+                    found = Some(objects(dir).map_err(io)?.0);
+                }
+                found
+                    .as_ref()
+                    .and_then(|list| list.iter().find(|o| o.kind == e.kind && o.name == *name))
+                    .ok_or_else(|| EditError::NotFound(e.kind.key(), name.clone()))?
+                    .path
+                    .clone()
+            }
+        };
+        let i = match texts.iter().position(|(p, _, _)| *p == path) {
+            Some(i) => i,
+            None => {
+                let current = files::read(dir, &path)?;
+                let (hash, text) = match current {
+                    Some(f) => (Some(f.hash), f.text),
+                    None => (None, String::new()),
+                };
+                texts.push((path.clone(), hash, text));
+                texts.len() - 1
+            }
+        };
+        let new = edit_text(&texts[i].2, e.kind, e.name.as_deref(), e.fields.as_ref()).map_err(
+            |err| match err {
+                EditError::Exists(k, n, _) => EditError::Exists(k, n, path.clone()),
+                EditError::Inline(k, n, _) => EditError::Inline(k, n, path.clone()),
+                EditError::Parse { message, .. } => EditError::Parse {
+                    path: path.clone(),
+                    message,
+                },
+                other => other,
+            },
+        )?;
+        texts[i].2 = new;
+    }
+    Ok(texts
+        .into_iter()
+        .map(|(path, base, text)| Change {
+            path,
+            base,
+            text: Some(text),
+        })
+        .collect())
 }
 
 /// [`edit`] on the text of one file.
@@ -295,13 +350,19 @@ pub fn edit_text(
                 message: e.message().to_string(),
             })?;
     let key = kind.key();
+    // Notify rules may be unnamed; everything else needs a name.
     let new_name = match fields {
-        Some(f) => Some(
-            f.get("name")
+        Some(f) => {
+            let n = f
+                .get("name")
                 .and_then(Value::as_str)
-                .filter(|n| !n.is_empty())
-                .ok_or(EditError::NoName)?,
-        ),
+                .filter(|n| !n.is_empty());
+            match (n, kind) {
+                (Some(n), _) => Some(n),
+                (None, Kind::Notify) => None,
+                (None, _) => return Err(EditError::NoName),
+            }
+        }
         None => None,
     };
     let not_found = || EditError::NotFound(key, name.unwrap_or_default().into());
@@ -353,6 +414,15 @@ pub fn edit_text(
             }),
             Some(_) => return Err(inline()),
         };
+        // A new name must not be taken by another object in this file.
+        if let (Some(new), Some(Item::ArrayOfTables(list))) = (new_name, doc.get(key))
+            && name != Some(new)
+            && list
+                .iter()
+                .any(|t| t.get("name").and_then(Item::as_str) == Some(new))
+        {
+            return Err(EditError::Exists(key, new.into(), String::new()));
+        }
         match (name, position, fields) {
             (Some(_), None, _) => return Err(not_found()),
             (Some(_), Some(i), None) => {
@@ -693,6 +763,39 @@ name = "db01""#,
             out,
             "[[host]]\nname = \"h\"\n  [host.service.a]\n  passive = true\n  freshness = \"1h\"\n  [host.service.c]\n  enabled = false\n\n[host.service.b]\ncheck = \"x\"\n"
         );
+    }
+
+    #[test]
+    fn many_edits_of_one_file_build_on_each_other() {
+        let dir = std::env::temp_dir().join(format!("watcher-edit-many-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("hosts")).unwrap();
+        std::fs::write(dir.join("hosts/web.toml"), "[[host]]\nname = \"web01\"\n").unwrap();
+        let clone = |name: &str| Edit {
+            kind: Kind::Host,
+            name: None,
+            fields: Some(fields(&format!("name = \"{name}\"\nroles = [\"web\"]"))),
+            path: Some("hosts/web.toml".into()),
+        };
+        let changes = edit_many(&dir, &[clone("web02"), clone("web03")]).unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "hosts/web.toml");
+        assert_eq!(
+            changes[0].base,
+            Some(crate::files::hash("[[host]]\nname = \"web01\"\n"))
+        );
+        let text = changes[0].text.as_deref().unwrap();
+        assert!(
+            text.contains("web01") && text.contains("web02") && text.contains("web03"),
+            "{text}"
+        );
+
+        let bad = Edit {
+            path: Some("../etc.toml".into()),
+            ..clone("x")
+        };
+        assert!(matches!(edit_many(&dir, &[bad]), Err(EditError::File(_))));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

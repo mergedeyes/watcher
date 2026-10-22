@@ -235,6 +235,11 @@ function items(text: string): string[] {
 		.filter(Boolean);
 }
 
+/** A deep copy of TOML data; works on Svelte state proxies, unlike structuredClone. */
+function copy<T>(v: T): T {
+	return JSON.parse(JSON.stringify(v)) as T;
+}
+
 function isTable(v: unknown): v is Record<string, unknown> {
 	return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -259,7 +264,7 @@ function selectorToForm(v: unknown, selects: 'host' | 'service'): Record<string,
 /** The selector to write; keys the form doesn't show are kept. */
 function selectorFromForm(form: Record<string, string>, raw: unknown, selects: 'host' | 'service'): unknown {
 	if (form.list?.trim()) return items(form.list);
-	const out: Record<string, unknown> = isTable(raw) ? structuredClone(raw) : {};
+	const out: Record<string, unknown> = isTable(raw) ? copy(raw) : {};
 	for (const [key] of SELECTOR_FIELDS[selects]) {
 		const [a, b] = key.split('.');
 		const text = (form[key] ?? '').trim();
@@ -326,7 +331,7 @@ function servicesFromForm(rows: ServiceRow[], raw: unknown): unknown {
 	const out: Record<string, unknown> = {};
 	for (const [name, check, forEach, groups, enabled, orig] of rows) {
 		if (!name.trim()) continue;
-		const entry: Record<string, unknown> = isTable(before[orig]) ? structuredClone(before[orig]) : {};
+		const entry: Record<string, unknown> = isTable(before[orig]) ? copy(before[orig]) : {};
 		const set = (key: string, value: unknown) => {
 			if (value === undefined || value === '') delete entry[key];
 			else entry[key] = value;
@@ -413,4 +418,28 @@ export function fromForm(kind: Kind, raw: Record<string, unknown>, values: FormV
 export function otherKeys(kind: Kind, raw: Record<string, unknown>): string[] {
 	const known = new Set(fields(kind).map((f) => f.key));
 	return Object.keys(raw).filter((k) => !known.has(k));
+}
+
+/**
+ * Names for clones: comma- or line-separated, with numeric ranges keeping
+ * their padding (`web[03-05]` is web03, web04, web05). Throws on errors.
+ */
+export function expandNames(text: string, max = 1000): string[] {
+	const out: string[] = [];
+	for (const item of text.split(/[,\n]/).map((s) => s.trim()).filter(Boolean)) {
+		const m = item.match(/^(.*)\[(\d+)-(\d+)\](.*)$/);
+		if (!m) {
+			out.push(item);
+			continue;
+		}
+		const [, before, from, to, after] = m as unknown as [string, string, string, string, string];
+		const [a, b] = [Number(from), Number(to)];
+		if (b < a) throw new Error(`${item}: range goes down`);
+		if (b - a + 1 + out.length > max) throw new Error(`more than ${max} names`);
+		for (let n = a; n <= b; n++) out.push(`${before}${String(n).padStart(from.length, '0')}${after}`);
+	}
+	const dup = out.find((n, i) => out.indexOf(n) !== i);
+	if (dup) throw new Error(`${dup} is listed twice`);
+	if (out.length > max) throw new Error(`more than ${max} names`);
+	return out;
 }

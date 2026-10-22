@@ -232,6 +232,40 @@ pub struct EditBody {
     name: Option<String>,
     /// The object's fields as written (including `name`); absent to delete.
     fields: Option<serde_json::Map<String, serde_json::Value>>,
+    /// For a new object: the file it goes to (default: the kind's UI file).
+    path: Option<String>,
+}
+
+impl EditBody {
+    fn into_edit(self) -> Result<edit::Edit, ApiError> {
+        let fields = self
+            .fields
+            .map(|f| {
+                toml::Table::deserialize(serde_json::Value::Object(f))
+                    .map_err(|e| ApiError::BadRequest(format!("fields: {e}")))
+            })
+            .transpose()?;
+        Ok(edit::Edit {
+            kind: self.kind,
+            name: self.name,
+            fields,
+            path: self.path,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+pub struct EditManyBody {
+    edits: Vec<EditBody>,
+}
+
+fn edit_error(files: &ConfigFiles, err: EditError) -> Result<Response, ApiError> {
+    match err {
+        EditError::File(err) => Ok(file_error(files, err)),
+        err @ EditError::NotFound(..) => Err(ApiError::NotFound(err.to_string())),
+        err @ EditError::Exists(..) => Err(ApiError::Conflict(err.to_string())),
+        err => Err(ApiError::BadRequest(err.to_string())),
+    }
 }
 
 /// The file change for creating, updating or deleting one object. Nothing
@@ -244,23 +278,36 @@ pub async fn edit(
     admin(&hub, &user)?;
     let files = files(&hub)?;
     writable(files)?;
-    let fields = body
-        .fields
-        .map(|f| {
-            toml::Table::deserialize(serde_json::Value::Object(f))
-                .map_err(|e| ApiError::BadRequest(format!("fields: {e}")))
-        })
-        .transpose()?;
+    let e = body.into_edit()?;
     let dir = files.dir.clone();
-    let result =
-        blocking(move || edit::edit(&dir, body.kind, body.name.as_deref(), fields.as_ref()))
-            .await?;
-    match result {
-        Ok(change) => Ok(Json(change).into_response()),
-        Err(EditError::File(err)) => Ok(file_error(files, err)),
-        Err(err @ EditError::NotFound(..)) => Err(ApiError::NotFound(err.to_string())),
-        Err(err @ EditError::Exists(..)) => Err(ApiError::Conflict(err.to_string())),
-        Err(err) => Err(ApiError::BadRequest(err.to_string())),
+    match blocking(move || edit::edit_many(&dir, &[e])).await? {
+        Ok(mut changes) => Ok(Json(changes.remove(0)).into_response()),
+        Err(err) => edit_error(files, err),
+    }
+}
+
+/// The file changes for several objects at once, e.g. clones: edits of the
+/// same file build on each other, giving one change per file.
+pub async fn edit_many(
+    State(hub): Shared,
+    user: User,
+    Json(body): Json<EditManyBody>,
+) -> Result<Response, ApiError> {
+    admin(&hub, &user)?;
+    let files = files(&hub)?;
+    writable(files)?;
+    if body.edits.is_empty() || body.edits.len() > 1000 {
+        return Err(ApiError::BadRequest("1 to 1000 edits".into()));
+    }
+    let edits = body
+        .edits
+        .into_iter()
+        .map(EditBody::into_edit)
+        .collect::<Result<Vec<_>, _>>()?;
+    let dir = files.dir.clone();
+    match blocking(move || edit::edit_many(&dir, &edits)).await? {
+        Ok(changes) => Ok(Json(json!({ "changes": changes })).into_response()),
+        Err(err) => edit_error(files, err),
     }
 }
 

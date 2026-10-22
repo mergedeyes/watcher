@@ -97,6 +97,7 @@
 								<th>Fields</th>
 							{/if}
 							<th class="hide-narrow">File</th>
+							{#if config.writable}<th></th>{/if}
 						</tr>
 					</thead>
 					<tbody>
@@ -133,9 +134,12 @@
 									<td class="mono">{keys(o)}</td>
 								{/if}
 								<td class="nowrap hide-narrow"><a class="mono" href={fileHref(o.path, o.line)}>{o.path}:{o.line}</a></td>
+								{#if config.writable}
+									<td class="nowrap">{#if o.name}<a href="/config/{kind.path}/edit?clone={encodeURIComponent(o.name)}">Clone</a>{/if}</td>
+								{/if}
 							</tr>
 						{:else}
-							<tr><td colspan="6" class="empty">No {kind.label.toLowerCase()}.</td></tr>
+							<tr><td colspan="7" class="empty">No {kind.label.toLowerCase()}.</td></tr>
 						{/each}
 					</tbody>
 				</table>

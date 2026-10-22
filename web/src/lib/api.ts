@@ -361,6 +361,10 @@ export const api = {
 	/** The file change for creating (no name), updating or deleting (no fields) an object. */
 	editObject: (kind: Kind, name: string | null, fields: Record<string, unknown> | null) =>
 		send<Change>('POST', '/config/edit', { kind, name, fields }),
+	/** File changes for several objects at once (clones); `path` puts new objects into that file. */
+	editMany: (
+		edits: { kind: Kind; name: string | null; fields: Record<string, unknown> | null; path?: string }[]
+	) => send<{ changes: Change[] }>('POST', '/config/edit-many', { edits }),
 	preview: (changes: Change[]) => send<Preview>('POST', '/config/preview', { changes }),
 	apply: (changes: Change[]) =>
 		send<{ changes: Changes; diagnostics: Problem[] }>('POST', '/config/apply', { changes })
