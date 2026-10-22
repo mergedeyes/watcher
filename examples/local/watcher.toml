@@ -1,0 +1,4 @@
+# Standalone instance for trying Watcher locally:
+#   watcher config check examples/local/watcher.toml --services
+role = "standalone"
+conf_dir = "conf.d"

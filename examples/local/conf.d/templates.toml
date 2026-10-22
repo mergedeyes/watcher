@@ -1,0 +1,5 @@
+[template.default]
+interval = "30s"
+retry_interval = "10s"
+max_attempts = 3
+timeout = "10s"

@@ -1,0 +1,125 @@
+use anyhow::{Result, bail};
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+use watcher_config::{Bootstrap, Config, Diagnostic, load_dir};
+
+#[derive(clap::Subcommand)]
+pub enum Command {
+    /// Validate the configuration and show what it compiles to.
+    Check(CheckArgs),
+}
+
+#[derive(clap::Args)]
+pub struct CheckArgs {
+    /// watcher.toml, or a directory of object files. Defaults to
+    /// ./watcher.toml, then /etc/watcher/watcher.toml.
+    path: Option<PathBuf>,
+
+    /// List every service with its expanded command.
+    #[arg(long)]
+    services: bool,
+}
+
+pub fn run(command: Command) -> Result<ExitCode> {
+    match command {
+        Command::Check(args) => check(args),
+    }
+}
+
+fn check(args: CheckArgs) -> Result<ExitCode> {
+    let conf_dir = conf_dir(args.path.as_deref())?;
+    match load_dir(&conf_dir) {
+        Ok(loaded) => {
+            print_diagnostics(&loaded.warnings);
+            summary(&loaded.config, loaded.warnings.len());
+            if args.services {
+                print_services(&loaded.config);
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(diagnostics) => {
+            print_diagnostics(&diagnostics);
+            let errors = diagnostics
+                .iter()
+                .filter(|d| d.severity == watcher_config::Severity::Error)
+                .count();
+            eprintln!("\n{} in {}", plural(errors, "error"), conf_dir.display());
+            Ok(ExitCode::FAILURE)
+        }
+    }
+}
+
+/// Finds the object directory from a bootstrap file or a directory path.
+pub fn conf_dir(path: Option<&Path>) -> Result<PathBuf> {
+    let path = match path {
+        Some(p) if p.is_dir() => return Ok(p.to_path_buf()),
+        Some(p) => p.to_path_buf(),
+        None => {
+            let candidates = [
+                Path::new("watcher.toml"),
+                Path::new("/etc/watcher/watcher.toml"),
+            ];
+            match candidates.iter().find(|p| p.exists()) {
+                Some(p) => p.to_path_buf(),
+                None => {
+                    bail!("no watcher.toml in the current directory or /etc/watcher; pass a path")
+                }
+            }
+        }
+    };
+    Ok(Bootstrap::load(&path)?.conf_dir)
+}
+
+fn print_diagnostics(diagnostics: &[Diagnostic]) {
+    for d in diagnostics {
+        eprintln!("{d}");
+    }
+}
+
+fn summary(config: &Config, warnings: usize) {
+    let mut parts = vec![
+        plural(config.files.len(), "file"),
+        plural(config.hosts.len(), "host"),
+        plural(config.checks.len(), "check"),
+        plural(config.services.len(), "service"),
+    ];
+    if !config.contacts.is_empty() {
+        parts.push(plural(config.contacts.len(), "contact"));
+    }
+    if warnings > 0 {
+        parts.push(plural(warnings, "warning"));
+    }
+    println!("OK: {}", parts.join(", "));
+}
+
+fn print_services(config: &Config) {
+    let width = config
+        .services
+        .iter()
+        .map(|s| s.id.len())
+        .max()
+        .unwrap_or(0);
+    println!();
+    for service in &config.services {
+        let check = config.check(service);
+        let command = match &service.command {
+            watcher_exec::CommandLine::Argv(argv) => shell_words::join(argv),
+            watcher_exec::CommandLine::Shell(script) => {
+                format!("sh -c {}", shell_words::quote(script))
+            }
+        };
+        println!(
+            "  {:<width$}  every {:<5}  {command}",
+            service.id,
+            humantime::format_duration(check.interval).to_string(),
+        );
+    }
+}
+
+fn plural(n: usize, word: &str) -> String {
+    if n == 1 {
+        format!("1 {word}")
+    } else {
+        format!("{n} {word}s")
+    }
+}

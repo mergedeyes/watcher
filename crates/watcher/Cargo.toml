@@ -1,0 +1,24 @@
+[package]
+name = "watcher"
+description = "Project Watcher: infrastructure monitoring"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+humantime.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+shell-words.workspace = true
+tokio.workspace = true
+watcher-config.workspace = true
+watcher-core.workspace = true
+watcher-exec.workspace = true
+
+[lints]
+workspace = true

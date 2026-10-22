@@ -1,0 +1,22 @@
+[package]
+name = "watcher-config"
+description = "Configuration loading, templates and apply rules for Project Watcher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+humantime.workspace = true
+regex.workspace = true
+serde.workspace = true
+shell-words.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+watcher-core.workspace = true
+watcher-exec.workspace = true
+
+[lints]
+workspace = true

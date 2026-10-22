@@ -1,0 +1,9 @@
+[[host]]
+name = "localhost"
+address = "127.0.0.1"
+tags = ["linux", "local"]
+
+[[host]]
+name = "example.com"
+tags = ["web"]
+vars.url = "/"

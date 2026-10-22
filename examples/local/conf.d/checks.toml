@@ -1,0 +1,31 @@
+# Plugin paths are for Arch/CachyOS (monitoring-plugins);
+# Debian/Ubuntu use /usr/lib/nagios/plugins.
+
+[[check]]
+name = "disk_root"
+use = "default"
+apply_to = 'host.tags contains "local"'
+command = "/usr/lib/monitoring-plugins/check_disk -w 20% -c 10% -p /"
+
+[[check]]
+name = "load"
+use = "default"
+apply_to = 'host.tags contains "linux"'
+command = "/usr/lib/monitoring-plugins/check_load -w 5,4,3 -c 10,8,6"
+
+[[check]]
+name = "http"
+use = "default"
+interval = "1m"
+apply_to = '"web" in host.tags'
+command = "/usr/lib/monitoring-plugins/check_http -H $host.address$ -u $host.vars.url$"
+# Bare numbers are milliseconds for time metrics.
+thresholds.time = { warn = "> 500", crit = "> 2s" }
+
+# Any script is a check: key=value output becomes metrics.
+[[check]]
+name = "uptime"
+use = "default"
+apply_to = 'host.name == "localhost"'
+shell = true
+command = 'echo "uptime=$(cut -d" " -f1 /proc/uptime)s"'
