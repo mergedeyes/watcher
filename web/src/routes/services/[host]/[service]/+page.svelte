@@ -104,6 +104,7 @@
 						<th>Current Status</th>
 						<td>
 							<Status state={detail.state} />
+							{#if detail.flapping}<span class="tag flap">FLAPPING</span>{/if}
 							{#if detail.last_change}<span class="muted">&nbsp;for {since(detail.last_change, live.now)}</span>{/if}
 						</td>
 					</tr>
@@ -120,6 +121,18 @@
 						<tr><th>Check Duration</th><td>{formatValue(detail.duration_ms / 1000, 's')}</td></tr>
 					{/if}
 					<tr><th>Last State Change</th><td>{datetime(detail.last_hard_change) || '–'}</td></tr>
+					<tr>
+						<th>Flap Detection</th>
+						<td>
+							{#if detail.check.flap_high === null}
+								off
+							{:else}
+								{detail.flapping ? 'FLAPPING' : 'not flapping'}, {(detail.percent_change ?? 0).toFixed(1)}% state change
+								<span class="muted">(start {detail.check.flap_high}%, stop {detail.check.flap_low}%)</span>
+							{/if}
+						</td>
+					</tr>
+					{#if detail.host_check}<tr><th>Host Check</th><td>gives {detail.host} UP/DOWN</td></tr>{/if}
 					{#if detail.check.command}
 						<tr>
 							<th>Check Interval</th>

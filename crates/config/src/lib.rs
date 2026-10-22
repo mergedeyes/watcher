@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
-use watcher_core::{Format, ThresholdSpec};
+use watcher_core::{FlapThresholds, Format, ThresholdSpec};
 use watcher_exec::CommandLine;
 
 /// Where an object or problem was defined.
@@ -50,6 +50,9 @@ pub struct Host {
     pub address: String,
     /// The node that runs this host's checks; `None` for the local instance.
     pub node: Option<String>,
+    /// The check whose result is the host state (UP/DOWN); without one the
+    /// host counts as UP.
+    pub check: Option<String>,
     pub tags: Vec<String>,
     pub vars: BTreeMap<String, String>,
     pub enabled: bool,
@@ -71,6 +74,8 @@ pub struct Check {
     /// Passive checks only: a missing result for this long turns the
     /// service UNKNOWN.
     pub freshness: Option<Duration>,
+    /// Flap detection thresholds; `None` when turned off.
+    pub flap: Option<FlapThresholds>,
     pub thresholds: BTreeMap<String, ThresholdSpec>,
     /// Contact names.
     pub notify: Vec<String>,
@@ -100,6 +105,7 @@ impl Check {
             max_attempts: Self::DEFAULT_MAX_ATTEMPTS,
             timeout: Self::DEFAULT_TIMEOUT,
             freshness: None,
+            flap: Some(FlapThresholds::DEFAULT),
             thresholds: BTreeMap::new(),
             notify: Vec::new(),
             vars: BTreeMap::new(),
@@ -188,6 +194,19 @@ impl Config {
 
     pub fn check(&self, service: &Service) -> &Check {
         &self.checks[service.check]
+    }
+
+    /// The service that gives `host` its UP/DOWN state.
+    pub fn host_check(&self, host: &Host) -> Option<&Service> {
+        let check = host.check.as_deref()?;
+        self.services
+            .iter()
+            .find(|s| self.host(s).name == host.name && self.check(s).name == check)
+    }
+
+    /// Whether `service` gives its host its state.
+    pub fn is_host_check(&self, service: &Service) -> bool {
+        self.host(service).check.as_deref() == Some(self.check(service).name.as_str())
     }
 }
 

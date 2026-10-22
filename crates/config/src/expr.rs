@@ -442,6 +442,7 @@ mod tests {
             name: name.into(),
             address: format!("{name}.example"),
             node: None,
+            check: None,
             tags: tags.iter().map(|t| t.to_string()).collect(),
             vars: BTreeMap::from([("os".to_string(), "debian".to_string())]),
             enabled: true,

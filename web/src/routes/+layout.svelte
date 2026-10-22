@@ -46,7 +46,10 @@
 		auth.expire();
 	}
 
-	let problems = $derived(live.services.filter((s) => s.state !== null && s.state !== 'ok').length);
+	let problems = $derived(
+		live.services.filter((s) => s.state !== null && s.state !== 'ok').length +
+			live.hosts.filter((h) => h.state === 'down').length
+	);
 	let bare = $derived(page.url.pathname === '/login' || !auth.allowed);
 
 	const NAV = [

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { live } from '#lib/live.svelte.ts';
 	import ServiceTable from '#lib/ServiceTable.svelte';
+	import HostProblems from '#lib/HostProblems.svelte';
 	import Totals from '#lib/Totals.svelte';
 
 	let problems = $derived(live.services.filter((s) => s.state !== null && s.state !== 'ok'));
@@ -12,14 +13,12 @@
 	});
 
 	let hosts = $derived.by(() => {
-		const c = { total: live.hosts.length, ok: 0, problems: 0, pending: 0 };
-		for (const h of live.hosts) {
-			if (h.state === null) c.pending++;
-			else if (h.state === 'ok') c.ok++;
-			else c.problems++;
-		}
+		const c = { total: live.hosts.length, up: 0, down: 0, pending: 0 };
+		for (const h of live.hosts) c[h.state ?? 'pending']++;
 		return c;
 	});
+
+	let downHosts = $derived(live.hosts.filter((h) => h.state === 'down'));
 </script>
 
 <div class="content">
@@ -33,8 +32,8 @@
 				title="Host Status Totals"
 				items={[
 					{ key: 'total', label: 'Total', count: hosts.total, href: '/hosts' },
-					{ key: 'ok', label: 'OK', count: hosts.ok, href: '/hosts?state=ok', state: 'ok' },
-					{ key: 'problems', label: 'Problems', count: hosts.problems, href: '/hosts?state=problems', state: 'critical' },
+					{ key: 'up', label: 'Up', count: hosts.up, href: '/hosts?state=up', state: 'ok' },
+					{ key: 'down', label: 'Down', count: hosts.down, href: '/hosts?state=down', state: 'critical' },
 					{ key: 'pending', label: 'Pending', count: hosts.pending, href: '/hosts?state=pending' }
 				]}
 			/>
@@ -51,8 +50,15 @@
 			/>
 		</div>
 
+		{#if downHosts.length > 0}
+			<section class="panel">
+				<div class="panel-title">Hosts DOWN <span class="muted">{downHosts.length}</span></div>
+				<HostProblems hosts={downHosts} />
+			</section>
+		{/if}
+
 		<section class="panel">
-			<div class="panel-title">Unhandled Problems <span class="muted">{problems.length}</span></div>
+			<div class="panel-title">Service Problems <span class="muted">{problems.length}</span></div>
 			<ServiceTable rows={problems} sort="status" empty="No problems." />
 		</section>
 	{/if}

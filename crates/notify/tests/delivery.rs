@@ -19,6 +19,7 @@ fn notification(service: &str) -> Notification {
         host: "web01".into(),
         address: "10.0.0.5".into(),
         service: service.into(),
+        host_check: false,
         state: State::Critical,
         previous_state: Some(State::Ok),
         attempts: 3,

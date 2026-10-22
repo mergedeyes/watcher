@@ -92,13 +92,14 @@ class Live {
 		if (host) this.#recount(host);
 	}
 
-	/** Host counts and worst state, from the live service list. */
+	/** Host counts, worst service state and host state, from the live service list. */
 	#recount(host: HostView) {
 		const counts = { ok: 0, warning: 0, critical: 0, unknown: 0, pending: 0 };
-		let worst: HostView['state'] = null;
+		let worst: HostView['worst'] = null;
 		const rank = { ok: 0, warning: 1, unknown: 2, critical: 3 } as const;
 		for (const s of this.services) {
 			if (s.host !== host.name) continue;
+			if (s.service === host.check) this.#hostState(host, s);
 			if (s.state === null) {
 				counts.pending++;
 				continue;
@@ -107,7 +108,20 @@ class Live {
 			if (worst === null || rank[s.state] > rank[worst]) worst = s.state;
 		}
 		host.services = counts;
-		host.state = worst;
+		host.worst = worst;
+	}
+
+	/** The host state from its host check: OK/WARNING is UP (confirmed), else DOWN. */
+	#hostState(host: HostView, check: ServiceView) {
+		const up = check.state === 'ok' || check.state === 'warning';
+		host.state = check.state === null ? null : up ? 'up' : 'down';
+		host.state_type = up ? 'hard' : check.state_type;
+		host.attempt = check.attempt;
+		host.max_attempts = check.max_attempts;
+		host.last_check = check.last_check;
+		host.last_change = check.last_change;
+		host.output = check.output;
+		host.flapping = check.flapping;
 	}
 }
 

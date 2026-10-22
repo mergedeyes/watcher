@@ -19,7 +19,8 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio::time::Instant;
 use watcher_core::{
-    CheckResult, Format, RawOutput, ServiceState, StateChange, Termination, ThresholdSpec, evaluate,
+    CheckResult, FlapThresholds, Format, RawOutput, ServiceState, StateChange, Termination,
+    ThresholdSpec, evaluate,
 };
 
 /// A check to run periodically.
@@ -38,6 +39,8 @@ pub struct Job {
     /// Passive jobs: how long a result stays valid before the job turns
     /// UNKNOWN.
     pub freshness: Option<Duration>,
+    /// Flap detection; `None` turns it off.
+    pub flap: Option<FlapThresholds>,
 }
 
 /// A check result and the state it led to.
@@ -51,6 +54,9 @@ pub struct Event {
     pub state: ServiceState,
     /// Set when the state or state type changed.
     pub change: Option<StateChange>,
+    /// `Some(true)` when the service started flapping with this result,
+    /// `Some(false)` when it stopped.
+    pub flap: Option<bool>,
 }
 
 /// Requests to a running scheduler.
@@ -180,20 +186,21 @@ fn apply(slot: &mut Slot, id: String, result: CheckResult, duration: Duration) -
     let (state, change) = match slot.state.as_mut() {
         Some(state) => {
             let change = state.apply(result.state, max_attempts, now);
-            (state.clone(), change)
+            (state, change)
         }
         None => {
             let (state, change) = ServiceState::first(result.state, max_attempts, now);
-            slot.state = Some(state.clone());
-            (state, Some(change))
+            (slot.state.insert(state), Some(change))
         }
     };
+    let flap = state.detect_flapping(slot.job.flap);
     Event {
         id,
         result,
         duration,
-        state,
+        state: state.clone(),
         change,
+        flap,
     }
 }
 
@@ -339,6 +346,7 @@ mod tests {
             retry_interval: Duration::from_millis(interval_ms / 4),
             max_attempts: 3,
             freshness: None,
+            flap: Some(FlapThresholds::DEFAULT),
         }
     }
 

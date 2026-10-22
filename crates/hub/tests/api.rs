@@ -20,6 +20,7 @@ tags = ["web"]
 
 [[host]]
 name = "db01"
+check = "backup"
 
 [[check]]
 name = "http"
@@ -29,6 +30,11 @@ interval = "1h"
 
 [[check]]
 name = "backup"
+passive = true
+hosts = ["db01"]
+
+[[check]]
+name = "dump"
 passive = true
 hosts = ["db01"]
 "#;
@@ -109,6 +115,7 @@ fn event(id: &str, exit: i32, stdout: &str) -> Event {
         duration: Duration::from_millis(5),
         state,
         change: Some(change),
+        flap: None,
     }
 }
 
@@ -117,11 +124,11 @@ async fn health_and_lists() {
     let hub = hub();
     let (status, health) = call(&hub, "GET", "/api/v1/health", None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(health["services"], 2);
+    assert_eq!(health["services"], 3);
     assert_eq!(health["database"], Value::Null);
 
     let (_, list) = call(&hub, "GET", "/api/v1/services", None).await;
-    assert_eq!(list["counts"]["pending"], 2);
+    assert_eq!(list["counts"]["pending"], 3);
     assert_eq!(list["services"][0]["state"], Value::Null);
 
     hub.record(&event("web01/http", 2, "HTTP CRITICAL - down | time=1.5s"));
@@ -144,8 +151,14 @@ async fn health_and_lists() {
 
     let (_, hosts) = call(&hub, "GET", "/api/v1/hosts", None).await;
     assert_eq!(hosts[0]["name"], "web01");
-    assert_eq!(hosts[0]["state"], "critical");
+    // No host check: UP. The worst service state is separate.
+    assert_eq!(hosts[0]["state"], "up");
+    assert_eq!(hosts[0]["check"], Value::Null);
+    assert_eq!(hosts[0]["worst"], "critical");
+    // The host check has no result yet: pending.
     assert_eq!(hosts[1]["state"], Value::Null);
+    assert_eq!(hosts[1]["check"], "backup");
+    assert_eq!(hosts[1]["worst"], Value::Null);
 
     let (status, web) = call(&hub, "GET", "/api/v1/hosts/web01", None).await;
     assert_eq!(status, StatusCode::OK);
@@ -178,6 +191,17 @@ async fn passive_results() {
     assert_eq!(detail["output"], "BACKUP CRITICAL - failed");
     assert_eq!(detail["passive"], true);
     assert_eq!(detail["check"]["command"], Value::Null);
+    assert_eq!(detail["host_check"], true);
+
+    // It is db01's host check: the host is DOWN (passive: 1 attempt, hard).
+    let (_, db) = call(&hub, "GET", "/api/v1/hosts/db01", None).await;
+    assert_eq!(db["host"]["state"], "down");
+    assert_eq!(db["host"]["state_type"], "hard");
+    assert_eq!(db["host"]["output"], "BACKUP CRITICAL - failed");
+    // Other services of the host don't notify; the host check does.
+    assert!(hub.host_down("db01/dump"));
+    assert!(!hub.host_down("db01/backup"));
+    assert!(!hub.host_down("web01/http"));
 
     let body = json!({"state": "ok", "output": "fine"});
     let (_, detail) = call(

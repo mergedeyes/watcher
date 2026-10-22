@@ -5,35 +5,60 @@ retry_interval = "2s"
 max_attempts = 3
 shell = true
 
+# Hosts get UP/DOWN from their ping check.
+[template.server]
+check = "ping"
+
 [[host]]
+use = "server"
 name = "web01"
 address = "10.0.1.11"
 tags = ["linux", "web"]
 
 [[host]]
+use = "server"
 name = "web02"
 address = "10.0.1.12"
 tags = ["linux", "web"]
 
 [[host]]
+use = "server"
 name = "db01"
 address = "10.0.2.21"
 tags = ["linux", "db"]
 vars.role = "primary"
 
 [[host]]
+use = "server"
 name = "mq-01"
 address = "10.0.3.31"
 tags = ["linux"]
 
 [[host]]
+use = "server"
 name = "backup01"
 address = "10.0.4.41"
 
 [[host]]
+use = "server"
 name = "as400-prod"
 address = "10.0.9.5"
 tags = ["ibmi"]
+
+# backup01 is DOWN; notifications for its other services are held back.
+[[check]]
+name = "ping"
+use = "fast"
+apply_to = 'host.name ~ "."'
+command = 'if [ $host.name$ = backup01 ]; then echo "PING CRITICAL - Packet loss = 100%"; exit 2; fi; echo "PING OK - Packet loss = 0%, RTA = 0.$((RANDOM % 9 + 1)) ms | rta=0.$((RANDOM % 9 + 1))ms;100;500 pl=0%;20;60"'
+
+# Changes state every 6 s: flap detection starts after a few changes.
+[[check]]
+name = "flappy"
+use = "fast"
+hosts = ["web02"]
+max_attempts = 1
+command = 'if [ $(( $(date +%s) / 6 % 2 )) = 0 ]; then echo "SVC OK"; else echo "SVC CRITICAL - down"; exit 2; fi'
 
 [[check]]
 name = "load"

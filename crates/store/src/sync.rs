@@ -1,6 +1,6 @@
 use crate::{Result, Store, from_epoch};
 use std::collections::{BTreeMap, HashMap};
-use watcher_core::{ServiceState, State, StateType};
+use watcher_core::{FLAP_WINDOW, FlapHistory, ServiceState, State, StateType};
 
 /// How [`Store::sync_with`] treats objects that are not in the given lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,13 +155,26 @@ impl Store {
     /// The last persisted state of every active service, keyed by
     /// `host/service`, so a restart continues where it stopped.
     pub async fn load_states(&self) -> Result<HashMap<String, StoredState>> {
-        type Row = (String, String, String, i32, f64, f64, f64, String, String);
+        type Row = (
+            String,
+            String,
+            String,
+            i32,
+            f64,
+            f64,
+            f64,
+            String,
+            String,
+            i64,
+            i16,
+            bool,
+        );
         let rows: Vec<Row> = sqlx::query_as(
             "SELECT h.name || '/' || s.name, st.state, st.state_type, st.attempt,
                     extract(epoch FROM st.last_check)::float8,
                     extract(epoch FROM st.last_change)::float8,
                     extract(epoch FROM st.last_hard_change)::float8,
-                    st.output, st.long_output
+                    st.output, st.long_output, st.history, st.history_len, st.flapping
              FROM service_state st
              JOIN services s ON s.id = st.service_id
              JOIN hosts h ON h.id = s.host_id
@@ -189,6 +202,11 @@ impl Store {
                 last_check: from_epoch(last_check),
                 last_change: from_epoch(last_change),
                 last_hard_change: from_epoch(last_hard_change),
+                history: FlapHistory {
+                    bits: row.9 as u64,
+                    len: row.10.clamp(0, i16::from(FLAP_WINDOW)) as u8,
+                },
+                flapping: row.11,
             };
             states.insert(
                 key,

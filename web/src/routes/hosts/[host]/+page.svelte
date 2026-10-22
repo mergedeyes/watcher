@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { api, ApiError } from '#lib/api.ts';
+	import { api, ApiError, serviceHref } from '#lib/api.ts';
+	import { datetime, since } from '#lib/format.ts';
 	import { live } from '#lib/live.svelte.ts';
 	import ServiceTable from '#lib/ServiceTable.svelte';
 	import Status from '#lib/Status.svelte';
@@ -34,6 +35,35 @@
 			<h1>{host.name}</h1>
 			<Status state={host.state} />
 		</div>
+
+		<section class="panel">
+			<div class="panel-title">Host State Information</div>
+			<table class="grid kv">
+				<tbody>
+					<tr>
+						<th>Host Status</th>
+						<td>
+							<Status state={host.state} />
+							{#if host.flapping}<span class="tag flap">FLAPPING</span>{/if}
+							{#if host.last_change}<span class="muted">&nbsp;for {since(host.last_change, live.now)}</span>{/if}
+						</td>
+					</tr>
+					{#if host.check}
+						<tr><th>Status Information</th><td class="info">{host.output || '–'}</td></tr>
+						<tr>
+							<th>Current Attempt</th>
+							<td>
+								{#if host.attempt !== null}{host.attempt}/{host.max_attempts} ({host.state_type?.toUpperCase()} state){:else}–{/if}
+							</td>
+						</tr>
+						<tr><th>Last Check Time</th><td>{datetime(host.last_check) || '–'}</td></tr>
+						<tr><th>Host Check</th><td><a href={serviceHref(host.name, host.check)}>{host.check}</a></td></tr>
+					{:else}
+						<tr><th>Host Check</th><td class="muted">none (assumed UP)</td></tr>
+					{/if}
+				</tbody>
+			</table>
+		</section>
 
 		<section class="panel">
 			<div class="panel-title">Host Information</div>
