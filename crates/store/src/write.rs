@@ -1,7 +1,7 @@
 use crate::sync::state_type_str;
 use crate::{Record, Result, Store, epoch};
 use std::collections::HashMap;
-use watcher_core::State;
+use watcher_core::{HostState, State, StateType};
 
 /// Identity of a series: service id, metric name, labels as JSON.
 pub(crate) type SeriesKey = (i32, String, String);
@@ -174,38 +174,59 @@ async fn write_tx(
     .execute(&mut *conn)
     .await?;
 
-    // State changes, in order.
-    let changes: Vec<_> = records
-        .iter()
-        .filter_map(|&(id, r)| r.change.map(|c| (id, r, c)))
-        .collect();
-    if !changes.is_empty() {
-        let ids: Vec<i32> = changes.iter().map(|c| c.0).collect();
-        let ts: Vec<f64> = changes
-            .iter()
-            .map(|c| epoch(c.1.state.last_check))
-            .collect();
-        let from: Vec<Option<&str>> = changes
-            .iter()
-            .map(|c| c.2.from.map(|f| state_str(f.0)))
-            .collect();
-        let to: Vec<&str> = changes.iter().map(|c| state_str(c.2.to.0)).collect();
-        let types: Vec<&str> = changes.iter().map(|c| state_type_str(c.2.to.1)).collect();
-        let hard: Vec<bool> = changes.iter().map(|c| c.2.hard).collect();
-        let output: Vec<String> = changes.iter().map(|c| clean(&c.1.result.message)).collect();
+    // State changes, in order: the service's, its host's if it is the
+    // host check, and flapping start/stop.
+    let mut events = EventRows::default();
+    for &(id, r) in records {
+        let ts = epoch(r.state.last_check);
+        let output = clean(&r.result.message);
+        if let Some(c) = r.change {
+            let event = Event {
+                kind: "service",
+                from: c.from.map(|f| state_str(f.0)),
+                to: state_str(c.to.0),
+                state_type: c.to.1,
+                hard: c.hard,
+            };
+            events.push(id, ts, event, &output);
+            if let Some(h) = c.host().filter(|_| r.host_check) {
+                let event = Event {
+                    kind: "host",
+                    from: h.from.map(|f| host_str(f.0)),
+                    to: host_str(h.to.0),
+                    state_type: h.to.1,
+                    hard: h.hard,
+                };
+                events.push(id, ts, event, &output);
+            }
+        }
+        if let Some(started) = r.flap {
+            let event = Event {
+                kind: if started { "flap_start" } else { "flap_stop" },
+                from: None,
+                to: state_str(r.state.state),
+                state_type: r.state.state_type,
+                hard: false,
+            };
+            let percent = format!("{:.1}% state change", r.state.history.percent_change());
+            events.push(id, ts, event, &percent);
+        }
+    }
+    if !events.ids.is_empty() {
         sqlx::query(
-            "INSERT INTO state_events (service_id, ts, from_state, to_state, state_type, hard, output)
-             SELECT u.id, to_timestamp(u.ts), u.from_state, u.to_state, u.state_type, u.hard, u.output
-             FROM UNNEST($1::int[], $2::float8[], $3::text[], $4::text[], $5::text[], $6::bool[], $7::text[])
-                  AS u(id, ts, from_state, to_state, state_type, hard, output)",
+            "INSERT INTO state_events (service_id, ts, kind, from_state, to_state, state_type, hard, output)
+             SELECT u.id, to_timestamp(u.ts), u.kind, u.from_state, u.to_state, u.state_type, u.hard, u.output
+             FROM UNNEST($1::int[], $2::float8[], $3::text[], $4::text[], $5::text[], $6::text[], $7::bool[], $8::text[])
+                  AS u(id, ts, kind, from_state, to_state, state_type, hard, output)",
         )
-        .bind(&ids)
-        .bind(&ts)
-        .bind(&from)
-        .bind(&to)
-        .bind(&types)
-        .bind(&hard)
-        .bind(&output)
+        .bind(&events.ids)
+        .bind(&events.ts)
+        .bind(&events.kinds)
+        .bind(&events.from)
+        .bind(&events.to)
+        .bind(&events.types)
+        .bind(&events.hard)
+        .bind(&events.output)
         .execute(&mut *conn)
         .await?;
     }
@@ -291,6 +312,48 @@ impl StateRows {
         self.history.push(r.state.history.bits as i64);
         self.history_len.push(i16::from(r.state.history.len));
         self.flapping.push(r.state.flapping);
+    }
+}
+
+/// One `state_events` row, without service, time and output.
+struct Event {
+    kind: &'static str,
+    from: Option<&'static str>,
+    to: &'static str,
+    state_type: StateType,
+    hard: bool,
+}
+
+/// Rows for `state_events`, as columns.
+#[derive(Default)]
+struct EventRows {
+    ids: Vec<i32>,
+    ts: Vec<f64>,
+    kinds: Vec<&'static str>,
+    from: Vec<Option<&'static str>>,
+    to: Vec<&'static str>,
+    types: Vec<&'static str>,
+    hard: Vec<bool>,
+    output: Vec<String>,
+}
+
+impl EventRows {
+    fn push(&mut self, id: i32, ts: f64, event: Event, output: &str) {
+        self.ids.push(id);
+        self.ts.push(ts);
+        self.kinds.push(event.kind);
+        self.from.push(event.from);
+        self.to.push(event.to);
+        self.types.push(state_type_str(event.state_type));
+        self.hard.push(event.hard);
+        self.output.push(output.to_string());
+    }
+}
+
+fn host_str(s: HostState) -> &'static str {
+    match s {
+        HostState::Up => "up",
+        HostState::Down => "down",
     }
 }
 

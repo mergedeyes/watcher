@@ -367,21 +367,57 @@ struct EventsQuery {
     service: Option<String>,
     /// Only events before this time (see `from` of points), for paging.
     before: Option<String>,
+    /// Only events at or after this time, like `before`.
+    since: Option<String>,
+    /// Comma-separated: `service,host,flapping`.
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    /// Comma-separated states changed to: `ok,warning,critical,unknown,up,down`.
+    state: Option<String>,
+    /// `soft` or `hard`.
+    state_type: Option<String>,
+    /// Only hard changes: confirmed problems and their recoveries.
     #[serde(default)]
     hard: bool,
     limit: Option<i64>,
 }
 
+/// Splits a comma-separated parameter, checking every item against `known`.
+fn list_param(name: &str, value: Option<&str>, known: &[&str]) -> Result<Vec<String>, ApiError> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| match known.contains(&s) {
+            true => Ok(s.to_string()),
+            false => Err(ApiError::BadRequest(format!("{name}: unknown value {s:?}"))),
+        })
+        .collect()
+}
+
 async fn events(AxState(hub): Shared, Query(q): Query<EventsQuery>) -> ApiResult<Vec<StateEvent>> {
-    let before = q
-        .before
-        .as_deref()
-        .map(|s| parse_time(s, SystemTime::now()))
-        .transpose()?;
+    let now = SystemTime::now();
+    let time = |s: &Option<String>| s.as_deref().map(|s| parse_time(s, now)).transpose();
+    let mut kinds = list_param("type", q.kind.as_deref(), &["service", "host", "flapping"])?;
+    if let Some(i) = kinds.iter().position(|k| k == "flapping") {
+        kinds.splice(i..=i, ["flap_start".into(), "flap_stop".into()]);
+    }
+    let states = ["ok", "warning", "critical", "unknown", "up", "down"];
+    let state_type = list_param("state_type", q.state_type.as_deref(), &["soft", "hard"])?;
+    if state_type.len() > 1 {
+        return Err(ApiError::BadRequest("state_type: soft or hard".into()));
+    }
     let filter = EventFilter {
         host: q.host,
         service: q.service,
-        before,
+        before: time(&q.before)?,
+        since: time(&q.since)?,
+        kinds,
+        states: list_param("state", q.state.as_deref(), &states)?,
+        state_type: state_type.into_iter().next(),
         hard_only: q.hard,
         limit: q.limit.unwrap_or(100),
     };

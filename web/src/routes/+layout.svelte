@@ -68,7 +68,8 @@
 			items: [
 				{ href: '/hosts', label: 'Hosts' },
 				{ href: '/services', label: 'Services' },
-				{ href: '/problems', label: 'Problems' }
+				{ href: '/problems', label: 'Problems' },
+				{ href: '/alerts', label: 'Alerts' }
 			]
 		}
 	];

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { api, ApiError, hostHref, type Series, type ServiceDetail, type StateEvent } from '#lib/api.ts';
+	import { api, ApiError, HISTORY_DELAY, hostHref, type Series, type ServiceDetail, type StateEvent } from '#lib/api.ts';
+	import AlertTable from '#lib/AlertTable.svelte';
 	import Chart from '#lib/Chart.svelte';
 	import { datetime, duration, formatThreshold, formatValue, seriesName, since } from '#lib/format.ts';
 	import Status from '#lib/Status.svelte';
@@ -71,10 +72,20 @@
 				if (e instanceof ApiError && e.status === 404) missing = true;
 			}
 		);
-		api.events(h, s).then(
-			(ev) => (events = ev),
-			(e) => (noHistory = e instanceof ApiError && e.noDatabase)
-		);
+	});
+
+	// History reaches the database about a second after a result: fetch
+	// now and again once it is written.
+	$effect(() => {
+		const [h, s, _] = [host, name, lastCheck];
+		const load = () =>
+			api.events({ host: h, service: s, type: 'service,flapping', limit: 20 }).then(
+				(ev) => (events = ev),
+				(e) => (noHistory = e instanceof ApiError && e.noDatabase)
+			);
+		load();
+		const later = setTimeout(load, HISTORY_DELAY);
+		return () => clearTimeout(later);
 	});
 
 	$effect(() => {
@@ -219,31 +230,11 @@
 
 		{#if !noHistory}
 			<section class="panel">
-				<div class="panel-title">Alert History</div>
-				{#if events.length === 0}
-					<div class="empty">No state changes.</div>
-				{:else}
-					<table class="grid">
-						<thead>
-							<tr>
-								<th>Time</th>
-								<th>Status</th>
-								<th class="hide-narrow">Type</th>
-								<th>Status Information</th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each events as e (e.ts)}
-								<tr>
-									<td class="nowrap">{datetime(e.ts)}</td>
-									<td><Status state={e.to_state} /></td>
-									<td class="hide-narrow">{e.state_type.toUpperCase()}</td>
-									<td class="info">{e.output}</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				{/if}
+				<div class="panel-title">
+					Alert History
+					<a class="more" href="/alerts?host={encodeURIComponent(host)}&service={encodeURIComponent(name)}">All</a>
+				</div>
+				<AlertTable {events} empty="No state changes." />
 			</section>
 		{/if}
 	{/if}
@@ -264,6 +255,11 @@
 
 	.pre {
 		white-space: pre-wrap;
+	}
+
+	.more {
+		font-weight: 400;
+		font-size: 12px;
 	}
 
 	.ranges {

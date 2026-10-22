@@ -1,4 +1,4 @@
-use crate::state::State;
+use crate::state::{HostState, State};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
@@ -97,6 +97,42 @@ pub struct StateChange {
     /// A hard change: a confirmed problem, a change between problem
     /// states, or a recovery from a hard problem.
     pub hard: bool,
+}
+
+/// A change of a host's UP/DOWN state, caused by its host check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostChange {
+    pub from: Option<(HostState, StateType)>,
+    pub to: (HostState, StateType),
+    /// A confirmed DOWN, or a recovery from a confirmed DOWN.
+    pub hard: bool,
+}
+
+impl StateChange {
+    /// The host's change if this is a change of its host check: `None`
+    /// when UP/DOWN and the state type stay the same (CRITICAL -> UNKNOWN,
+    /// WARNING -> OK). UP is always HARD.
+    pub fn host(&self) -> Option<HostChange> {
+        let host = |(s, t): (State, StateType)| match HostState::from_check(s) {
+            HostState::Up => (HostState::Up, StateType::Hard),
+            HostState::Down => (HostState::Down, t),
+        };
+        let from = self.from.map(host);
+        let to = host(self.to);
+        if from == Some(to) {
+            return None;
+        }
+        // The hard state before: soft problems start from a hard UP.
+        let before = self.from.map(|(s, t)| match t {
+            StateType::Soft => HostState::Up,
+            StateType::Hard => HostState::from_check(s),
+        });
+        Some(HostChange {
+            from,
+            to,
+            hard: self.hard && before != Some(to.0),
+        })
+    }
 }
 
 impl ServiceState {
@@ -350,5 +386,34 @@ mod tests {
         s.flapping = true;
         assert_eq!(s.detect_flapping(None), Some(false));
         assert_eq!(s.detect_flapping(None), None);
+    }
+
+    #[test]
+    fn host_changes_follow_up_down() {
+        use HostState::{Down, Up};
+        let mut changes = Vec::new();
+        let (mut s, first) = ServiceState::first(Ok, 2, T);
+        changes.push(first.host());
+        for r in [Warning, Ok, Critical, Unknown, Unknown, Ok, Critical, Ok] {
+            changes.push(s.apply(r, 2, T).and_then(|c| c.host()));
+        }
+        let change = |from, to, hard| Some(HostChange { from, to, hard });
+        assert_eq!(
+            changes,
+            [
+                change(None, (Up, Hard), true),
+                // WARNING is still UP.
+                None,
+                None,
+                change(Some((Up, Hard)), (Down, Soft), false),
+                change(Some((Down, Soft)), (Down, Hard), true),
+                // CRITICAL -> UNKNOWN: DOWN either way.
+                None,
+                change(Some((Down, Hard)), (Up, Hard), true),
+                change(Some((Up, Hard)), (Down, Soft), false),
+                // A soft DOWN that ends isn't a hard change.
+                change(Some((Down, Soft)), (Up, Hard), false),
+            ]
+        );
     }
 }

@@ -138,6 +138,8 @@ fn record(service: &str, exit: i32, stdout: &str, prev: Option<&ServiceState>) -
         state,
         change,
         duration: Duration::from_millis(12),
+        flap: None,
+        host_check: false,
     }
 }
 
@@ -246,6 +248,31 @@ async fn sync_ingest_and_restore() {
         assert_eq!((events[0].service.as_str(), events[0].to_state.as_str()), ("disk", "warning"));
         let hard = EventFilter { limit: 10, hard_only: true, host: Some("web01".into()), ..Default::default() };
         assert_eq!(store.events(&hard).await.unwrap().len(), 1);
+
+        // Changes of a host check are host events too; flapping is recorded.
+        let mut up = record("web01/http", 0, "HTTP OK", Some(http));
+        up.host_check = true;
+        up.flap = Some(true);
+        ingest_all(&store, ids.clone(), vec![up]).await;
+        let of = |kinds: &[&str]| EventFilter {
+            limit: 10,
+            kinds: kinds.iter().map(|k| k.to_string()).collect(),
+            ..Default::default()
+        };
+        let host = store.events(&of(&["host"])).await.unwrap();
+        assert_eq!(host.len(), 1);
+        let e = &host[0];
+        assert_eq!((e.from_state.as_deref(), e.to_state.as_str(), e.state_type.as_str(), e.hard), (Some("down"), "up", "hard", false));
+        let flap = store.events(&of(&["flap_start", "flap_stop"])).await.unwrap();
+        assert_eq!((flap.len(), flap[0].kind.as_str(), flap[0].to_state.as_str()), (1, "flap_start", "ok"));
+        assert!(flap[0].output.ends_with("% state change"), "{}", flap[0].output);
+        assert_eq!(store.events(&of(&["service"])).await.unwrap().len(), 4);
+        let soft = EventFilter { limit: 10, state_type: Some("soft".into()), ..Default::default() };
+        assert_eq!(store.events(&soft).await.unwrap().len(), 2);
+        let down_or_up = EventFilter { limit: 10, states: vec!["down".into(), "up".into()], ..Default::default() };
+        assert_eq!(store.events(&down_or_up).await.unwrap().len(), 1);
+        let later = EventFilter { limit: 10, since: Some(SystemTime::now() + Duration::from_secs(60)), ..Default::default() };
+        assert!(store.events(&later).await.unwrap().is_empty());
 
         let series = store.series("web01", "disk").await.unwrap().unwrap();
         let names: Vec<_> = series.iter().map(|s| s.metric.as_str()).collect();

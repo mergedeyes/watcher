@@ -13,7 +13,9 @@ mod unit;
 pub use eval::{CheckResult, MetricResult, RawOutput, Termination, ThresholdSpec, evaluate};
 pub use metric::Metric;
 pub use parse::{Format, ParseError, ParsedOutput, parse_output};
-pub use service::{FLAP_WINDOW, FlapHistory, FlapThresholds, ServiceState, StateChange, StateType};
+pub use service::{
+    FLAP_WINDOW, FlapHistory, FlapThresholds, HostChange, ServiceState, StateChange, StateType,
+};
 pub use state::{HostState, State};
 pub use threshold::{CmpOp, ConfigThreshold, Threshold, ThresholdError};
 pub use unit::{Unit, format_value};

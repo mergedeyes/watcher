@@ -160,12 +160,16 @@ paths:
 
   /events:
     get:
-      summary: State changes, newest first
+      summary: Alert history (state changes, host UP/DOWN, flapping), newest first
       parameters:
         - { name: host, in: query, schema: { type: string } }
         - { name: service, in: query, schema: { type: string } }
         - { name: before, in: query, description: For paging, like `from` of points, schema: { type: string } }
-        - { name: hard, in: query, schema: { type: boolean } }
+        - { name: since, in: query, description: Like `from` of points, schema: { type: string } }
+        - { name: type, in: query, description: "Comma-separated: service, host, flapping", schema: { type: string } }
+        - { name: state, in: query, description: "Comma-separated states changed to: ok, warning, critical, unknown, up, down", schema: { type: string } }
+        - { name: state_type, in: query, schema: { $ref: "#/components/schemas/StateType" } }
+        - { name: hard, in: query, description: Only hard changes, schema: { type: boolean } }
         - { name: limit, in: query, schema: { type: integer, default: 100 } }
       responses:
         "200":
@@ -559,8 +563,9 @@ components:
         host: { type: string }
         service: { type: string }
         ts: { $ref: "#/components/schemas/Time" }
-        from_state: { oneOf: [{ $ref: "#/components/schemas/State" }, { type: "null" }] }
-        to_state: { $ref: "#/components/schemas/State" }
+        kind: { type: string, enum: [service, host, flap_start, flap_stop], description: "host: UP/DOWN of the host, from its host check" }
+        from_state: { type: [string, "null"], description: "A State, or up/down for host events; null for the first result and flapping" }
+        to_state: { type: string, description: "A State, or up/down for host events" }
         state_type: { $ref: "#/components/schemas/StateType" }
         hard: { type: boolean }
         output: { type: string }
