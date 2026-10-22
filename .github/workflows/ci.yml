@@ -37,7 +37,8 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    # Database tests run against both backends; see compose.yaml.
+    # Database tests run against both backends, email tests against
+    # Mailpit; see compose.yaml.
     services:
       timescale:
         image: timescale/timescaledb:latest-pg18
@@ -57,9 +58,13 @@ jobs:
         options: >-
           --health-cmd "pg_isready -h 127.0.0.1 -U watcher"
           --health-interval 2s --health-timeout 5s --health-retries 15
+      mailpit:
+        image: axllent/mailpit:latest
+        ports: ["1025:1025", "8025:8025"]
     env:
       WATCHER_TEST_TIMESCALE_URL: postgres://watcher:watcher@localhost:55432/postgres
       WATCHER_TEST_POSTGRES_URL: postgres://watcher:watcher@localhost:55433/postgres
+      WATCHER_TEST_MAILPIT: localhost
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable

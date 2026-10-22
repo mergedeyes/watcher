@@ -24,6 +24,7 @@ watcher-config.workspace = true
 watcher-core.workspace = true
 watcher-exec.workspace = true
 watcher-hub.workspace = true
+watcher-notify.workspace = true
 watcher-store.workspace = true
 
 [lints]

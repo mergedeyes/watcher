@@ -11,7 +11,7 @@ mod expr;
 mod load;
 mod macros;
 
-pub use bootstrap::{Bootstrap, BootstrapError, Database, Role};
+pub use bootstrap::{Bootstrap, BootstrapError, Database, Role, Smtp, SmtpTls};
 pub use expr::{Expr, ExprError};
 pub use load::load_dir;
 
