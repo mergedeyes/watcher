@@ -70,6 +70,23 @@ pub struct Notification {
 }
 
 impl Notification {
+    /// The message sent by `watcher notify test` and `watcher init`.
+    pub fn test(contact: &str, public_url: Option<String>) -> Self {
+        Notification {
+            kind: Kind::Test,
+            host: "watcher".into(),
+            address: "watcher".into(),
+            service: "test".into(),
+            state: State::Ok,
+            previous_state: None,
+            attempts: 1,
+            output: format!("Test notification for contact {contact}."),
+            long_output: String::new(),
+            time: SystemTime::now(),
+            url: public_url,
+        }
+    }
+
     /// `web01/disk`
     pub fn service_id(&self) -> String {
         format!("{}/{}", self.host, self.service)

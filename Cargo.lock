@@ -2560,6 +2560,7 @@ dependencies = [
  "serde_json",
  "shell-words",
  "tokio",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "watcher-config",

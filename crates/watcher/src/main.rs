@@ -1,4 +1,5 @@
 mod config_cmd;
+mod init_cmd;
 mod notify_cmd;
 mod run;
 mod run_check;
@@ -20,6 +21,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Set up watcher.toml and conf.d/ (interactive, or --answers FILE).
+    Init(init_cmd::Args),
+
     /// Run a single check and print the evaluated result.
     ///
     /// Exits with the Nagios code of the final state (0 OK, 1 WARNING,
@@ -72,6 +76,7 @@ async fn main() -> ExitCode {
     let (result, failure) = match cli.command {
         Cmd::RunCheck(args) => (run_check::run(args).await, ExitCode::from(3)),
         Cmd::Run(args) => (run::run(args).await, ExitCode::FAILURE),
+        Cmd::Init(args) => (init_cmd::run(args).await, ExitCode::FAILURE),
         Cmd::Config(command) => (config_cmd::run(command), ExitCode::FAILURE),
         Cmd::Notify(command) => (notify_cmd::run(command).await, ExitCode::FAILURE),
         Cmd::User { command, db } => (user_cmd::user(command, db).await, ExitCode::FAILURE),

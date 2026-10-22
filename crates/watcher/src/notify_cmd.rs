@@ -2,10 +2,8 @@ use crate::config_cmd;
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::SystemTime;
 use watcher_config::load_dir;
-use watcher_core::State;
-use watcher_notify::{Kind, Notification, Notifier};
+use watcher_notify::{Notification, Notifier};
 
 #[derive(clap::Subcommand)]
 pub enum Command {
@@ -47,22 +45,7 @@ async fn test(args: TestArgs) -> Result<ExitCode> {
     let public_url = bootstrap.as_ref().and_then(|b| b.public_url.clone());
     let notifier = Notifier::new(smtp, public_url.clone()).context("invalid [smtp] settings")?;
 
-    let notification = Notification {
-        kind: Kind::Test,
-        host: "watcher".into(),
-        address: "watcher".into(),
-        service: "test".into(),
-        state: State::Ok,
-        previous_state: None,
-        attempts: 1,
-        output: format!(
-            "If you can read this, notifications to {} work.",
-            contact.name
-        ),
-        long_output: String::new(),
-        time: SystemTime::now(),
-        url: public_url,
-    };
+    let notification = Notification::test(&contact.name, public_url);
     let results = notifier.deliver(contact, &notification).await;
     if results.is_empty() {
         bail!("contact {:?} has no email address or webhook", contact.name);

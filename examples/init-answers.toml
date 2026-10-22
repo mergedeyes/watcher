@@ -1,0 +1,25 @@
+# Answers for headless setup:
+#   watcher init /etc/watcher --answers init-answers.toml
+# Every key is optional. Unset keys use the defaults below.
+
+role = "standalone"                 # standalone | hub
+listen = "127.0.0.1:8080"           # non-loopback needs database_url
+public_url = "https://watcher.example.com"
+database_url = "postgres://watcher:secret@db.example.com/watcher"
+
+alert_email = ["ops@example.com"]   # contact "admins"
+alert_webhook = "https://hooks.example.com/watcher"
+monitor_localhost = true            # disk, load, swap of this machine
+test_notification = false           # send a test to the contact after setup
+
+[admin]                             # needs database_url
+username = "admin"
+password_file = "/run/secrets/watcher-admin"   # or: password = "..."
+
+[smtp]
+host = "mail.example.com"
+port = 587                          # default: 587 starttls, 465 tls, 25 none
+tls = "starttls"                    # starttls | tls | none
+username = "watcher"
+password_file = "/run/secrets/smtp" # or: password = "..." (written to smtp.pass, 0600)
+from = "Watcher <watcher@example.com>"
