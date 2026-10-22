@@ -178,6 +178,23 @@ pub async fn scripts(State(hub): Shared, user: User) -> Result<Response, ApiErro
     Ok(Json(json!({ "dirs": dirs, "scripts": scripts })).into_response())
 }
 
+/// The Config Tree of an object in the running configuration (§4.6):
+/// where it and its values come from, and where it is used.
+pub async fn tree(
+    State(hub): Shared,
+    user: User,
+    Path((kind, name)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    admin(&hub, &user)?;
+    let config = hub.config();
+    let base = hub.config_files.get().map(|f| f.dir.clone());
+    let builder = watcher_config::tree::Builder::new(&config, base.as_deref());
+    match builder.tree(&kind, &name) {
+        Some(tree) => Ok(Json(tree).into_response()),
+        None => Err(ApiError::NotFound(format!("no {kind} {name:?}"))),
+    }
+}
+
 pub async fn file(
     State(hub): Shared,
     user: User,

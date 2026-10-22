@@ -7,18 +7,12 @@ use std::io::{BufRead, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use watcher_config::{Bootstrap, Contact, Role, Smtp, SmtpTls, Tls, load_dir};
+use watcher_config::{Bootstrap, Contact, InstanceRole, Smtp, SmtpTls, Tls, load_dir};
 use watcher_hub::auth::hash_password;
 use watcher_notify::{Mailer, Notification, Notifier};
 use watcher_store::Store;
 
 pub(crate) const MIN_PASSWORD: usize = 10;
-const PLUGIN_DIRS: [&str; 4] = [
-    "/usr/lib/monitoring-plugins",
-    "/usr/lib/nagios/plugins",
-    "/usr/lib64/nagios/plugins",
-    "/usr/local/nagios/libexec",
-];
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -40,7 +34,7 @@ pub struct Args {
 #[serde(deny_unknown_fields)]
 pub struct Answers {
     #[serde(default)]
-    pub role: Role,
+    pub role: InstanceRole,
     pub instance_name: Option<String>,
     pub listen: Option<String>,
     pub public_url: Option<String>,
@@ -149,8 +143,8 @@ async fn ask(p: &mut Prompter<'_>) -> Result<Answers> {
 
     a.role = loop {
         match p.ask("Role (standalone, hub)", "standalone")?.as_str() {
-            "standalone" => break Role::Standalone,
-            "hub" => break Role::Hub,
+            "standalone" => break InstanceRole::Standalone,
+            "hub" => break InstanceRole::Hub,
             "node" => p.note("node role: not available yet")?,
             other => p.note(&format!("unknown role: {other}"))?,
         }
@@ -372,7 +366,7 @@ pub(crate) struct Plan {
 
 impl Plan {
     pub(crate) fn new(a: &Answers, dir: &Path) -> Result<Self> {
-        if a.role == Role::Node {
+        if a.role == InstanceRole::Node {
             bail!("role node: not available yet");
         }
         let listen: SocketAddr = a
@@ -512,13 +506,28 @@ impl Plan {
                 contents: c,
                 private: false,
             });
-        }
-        if a.monitor_localhost {
             files.push(PlannedFile {
-                path: conf_dir.join("localhost.toml"),
-                contents: localhost_config(contact),
+                path: conf_dir.join("notify.toml"),
+                contents:
+                    "# Every matching rule notifies. Narrow with hosts, services and states.\n\
+                           [[notify]]\nname = \"admins\"\ncontacts = [\"admins\"]\n"
+                        .into(),
                 private: false,
             });
+        }
+        if a.monitor_localhost {
+            let (checks, roles, hosts) = localhost_config();
+            for (name, contents) in [
+                ("checks.toml", checks),
+                ("roles.toml", roles),
+                ("hosts.toml", hosts),
+            ] {
+                files.push(PlannedFile {
+                    path: conf_dir.join(name),
+                    contents,
+                    private: false,
+                });
+            }
         }
         Ok(Plan { files, conf_dir })
     }
@@ -581,6 +590,7 @@ pub(crate) async fn apply(a: &Answers, plan: &Plan) -> Result<()> {
                 Vec::new()
             },
             webhook: a.alert_webhook.clone(),
+            groups: Vec::new(),
             origin: Default::default(),
         };
         for (channel, result) in notifier
@@ -616,62 +626,53 @@ pub(crate) fn write_file(path: &Path, contents: &str, private: bool) -> std::io:
 }
 
 /// Checks for this machine: monitoring plugins if installed, else shell.
-fn localhost_config(notify: bool) -> String {
-    let host = hostname();
-    let notify_line = if notify {
-        "notify = [\"admins\"]\n"
-    } else {
-        ""
-    };
-    let mut c = format!(
-        "[template.local]\ninterval = \"1m\"\nmax_attempts = 3\n{notify_line}\n[[host]]\nname = {}\naddress = \"127.0.0.1\"\ntags = [\"local\"]\n",
-        q(&host)
-    );
-    let check = |name: &str, command: &str, extra: &str| {
-        format!(
-            "\n[[check]]\nname = {}\nuse = \"local\"\napply_to = 'host.tags contains \"local\"'\ncommand = {}\n{extra}",
-            q(name),
-            q(command)
-        )
-    };
-    match plugin_dir() {
-        Some(dir) => {
-            let dir = dir.display();
-            c += &check(
-                "disk_root",
-                &format!("{dir}/check_disk -w 20% -c 10% -p /"),
-                "",
-            );
-            c += &check(
-                "load",
-                &format!("{dir}/check_load -r -w 1.5,1.2,1 -c 3,2.5,2"),
-                "",
-            );
-            c += &check("swap", &format!("{dir}/check_swap -w 20% -c 10%"), "");
-        }
+/// Returns checks.toml, roles.toml and hosts.toml.
+fn localhost_config() -> (String, String, String) {
+    let (checks, services) = match plugin_dir() {
+        // Bare names: the plugin directories are check directories.
+        Some(_) => (
+            "[check.disk]\n\
+             command = \"check_disk -w $warn$ -c $crit$ -p $path$\"\n\
+             vars = { warn = \"20%\", crit = \"10%\" }\n\
+             \n\
+             [check.load]\n\
+             command = \"check_load -r -w 1.5,1.2,1 -c 3,2.5,2\"\n\
+             \n\
+             [check.swap]\n\
+             command = \"check_swap -w 20% -c 10%\"\n"
+                .to_string(),
+            "service.disk_root = { check = \"disk\", vars.path = \"/\" }\n\
+             service.load = {}\n\
+             service.swap = {}\n",
+        ),
         None => {
             let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
-            c += &check(
-                "disk_root",
-                r#"df -P / | awk 'NR==2 {sub("%","",$5); print "used=" $5 "%"}'"#,
-                "shell = true\nthresholds.used = { warn = \"> 80\", crit = \"> 90\" }\n",
-            );
-            c += &check(
-                "load",
-                r#"echo "load1=$(cut -d' ' -f1 /proc/loadavg) load5=$(cut -d' ' -f2 /proc/loadavg)""#,
-                &format!(
-                    "shell = true\nthresholds.load1 = {{ warn = \"> {}\", crit = \"> {}\" }}\n",
+            let disk = r#"df -P $path$ | awk 'NR==2 {sub("%","",$5); print "used=" $5 "%"}'"#;
+            let load = r#"echo "load1=$(cut -d' ' -f1 /proc/loadavg) load5=$(cut -d' ' -f2 /proc/loadavg)""#;
+            (
+                format!(
+                    "[check.disk]\nshell = true\ncommand = {}\nthresholds.used = {{ warn = \"> 80\", crit = \"> 90\" }}\n\
+                     \n[check.load]\nshell = true\ncommand = {}\nthresholds.load1 = {{ warn = \"> {}\", crit = \"> {}\" }}\n",
+                    q(disk),
+                    q(load),
                     cpus * 2,
                     cpus * 4
                 ),
-            );
+                "service.disk_root = { check = \"disk\", vars.path = \"/\" }\n\
+                 service.load = {}\n",
+            )
         }
-    }
-    c
+    };
+    let roles = format!("[role.linux]\ninterval = \"1m\"\n{services}");
+    let hosts = format!(
+        "[[host]]\nname = {}\naddress = \"127.0.0.1\"\nroles = [\"linux\"]\n",
+        q(&hostname())
+    );
+    (checks, roles, hosts)
 }
 
 pub(crate) fn plugin_dir() -> Option<PathBuf> {
-    PLUGIN_DIRS
+    watcher_config::check_dirs::PLUGIN_DIRS
         .iter()
         .map(PathBuf::from)
         .find(|d| d.join("check_disk").exists())
@@ -721,7 +722,7 @@ mod tests {
             tty: false,
         };
         let a = ask(&mut p).await.unwrap();
-        assert_eq!(a.role, Role::Standalone);
+        assert_eq!(a.role, InstanceRole::Standalone);
         assert_eq!(a.database_url, None);
         assert_eq!(a.listen.as_deref(), Some("127.0.0.1:8080"));
         assert_eq!(a.public_url.as_deref(), Some("http://127.0.0.1:8080"));
@@ -785,7 +786,10 @@ from = "Watcher <watcher@example.com>"
                 "watcher.toml",
                 "smtp.pass",
                 "conf.d/contacts.toml",
-                "conf.d/localhost.toml"
+                "conf.d/notify.toml",
+                "conf.d/checks.toml",
+                "conf.d/roles.toml",
+                "conf.d/hosts.toml"
             ]
         );
         for f in &plan.files {
@@ -812,7 +816,12 @@ from = "Watcher <watcher@example.com>"
         let loaded = load_dir(&plan.conf_dir).unwrap();
         assert_eq!(loaded.config.contacts[0].email, ["ops@example.com"]);
         assert!(loaded.config.services.len() >= 2);
-        assert!(loaded.config.checks.iter().all(|c| c.notify == ["admins"]));
+        let service = &loaded.config.services[0];
+        let to =
+            loaded
+                .config
+                .recipients(service, false, watcher_config::Alert::Problem, "critical");
+        assert_eq!(to[0].name, "admins");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

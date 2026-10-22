@@ -1,32 +1,25 @@
-//! Command macros: `$host.address$`, `$host.vars.port$`, `$check.name$`, ...
+//! Command macros: `$host.address$`, `$host.vars.port$`, `$service.name$`,
+//! and bare vars like `$warn$`.
 //!
-//! Only `$host.…$` and `$check.…$` (plus the Nagios forms `$HOSTNAME$` and
-//! `$HOSTADDRESS$`) are macros; any other `$` is left alone, so shell
-//! variables like `$HOME` or `$1` keep working.
+//! Macros are `$host.…$`, `$service.…$`, `$check.…$`, the Nagios forms
+//! `$HOSTNAME$` and `$HOSTADDRESS$`, and `$name$` with a lowercase var name
+//! (`[a-z_][a-z0-9_]*`). Any other `$` is left alone, so shell variables
+//! like `$HOME`, `$1` or `$(cmd)` keep working.
 //!
 //! Values are substituted after the command is split into arguments, so a
 //! value with spaces stays one argument. In shell mode values are quoted for
 //! `/bin/sh` instead; don't wrap macros in quotes there.
 
-use crate::{Check, Host};
 use watcher_exec::CommandLine;
 
-/// Expands macros in `command` (of `check`) for one host.
-pub fn expand(command: &str, check: &Check, host: &Host) -> Result<CommandLine, String> {
-    let lookup = |name: &str| -> Result<String, String> {
-        let value = match name.split('.').collect::<Vec<_>>().as_slice() {
-            ["host", "name"] | ["HOSTNAME"] => Some(host.name.clone()),
-            ["host", "address"] | ["HOSTADDRESS"] => Some(host.address.clone()),
-            ["host", "node"] => host.node.clone(),
-            ["host", "vars", var] => host.vars.get(*var).cloned(),
-            ["check", "name"] => Some(check.name.clone()),
-            ["check", "vars", var] => check.vars.get(*var).cloned(),
-            _ => return Err(format!("unknown macro ${name}$")),
-        };
-        value.ok_or_else(|| format!("${name}$ is not set for host {:?}", host.name))
-    };
-
-    if check.shell {
+/// Expands the macros in `command`; `lookup` gives the value of a macro
+/// name (without the `$`s) or an error.
+pub fn expand(
+    command: &str,
+    shell: bool,
+    lookup: impl Fn(&str) -> Result<String, String>,
+) -> Result<CommandLine, String> {
+    if shell {
         let script = substitute(command, |name| {
             lookup(name).map(|v| shell_words::quote(&v).into_owned())
         })?;
@@ -35,24 +28,39 @@ pub fn expand(command: &str, check: &Check, host: &Host) -> Result<CommandLine, 
         let argv = shell_words::split(command).map_err(|e| format!("cannot split command: {e}"))?;
         let argv = argv
             .iter()
-            .map(|arg| substitute(arg, lookup))
+            .map(|arg| substitute(arg, &lookup))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(CommandLine::Argv(argv))
     }
 }
 
-/// Whether `name` (without the `$`s) is a macro that [`expand`] knows.
-pub fn is_known(name: &str) -> bool {
-    matches!(
-        name.split('.').collect::<Vec<_>>().as_slice(),
-        ["host", "name" | "address" | "node"]
-            | ["host" | "check", "vars", _]
-            | ["check", "name"]
-            | ["HOSTNAME" | "HOSTADDRESS"]
-    )
+/// A fixed macro (not a var), if `name` is one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fixed<'a> {
+    HostName,
+    HostAddress,
+    HostNode,
+    HostVar(&'a str),
+    ServiceName,
+    CheckName,
 }
 
-/// Lists the macros used in `text`, for validation without a host.
+/// What a macro name refers to: a fixed macro, a var, or nothing known.
+pub fn parse(name: &str) -> Option<Result<Fixed<'_>, &str>> {
+    let fixed = match name.split('.').collect::<Vec<_>>().as_slice() {
+        ["host", "name"] | ["HOSTNAME"] => Fixed::HostName,
+        ["host", "address"] | ["HOSTADDRESS"] => Fixed::HostAddress,
+        ["host", "node"] => Fixed::HostNode,
+        ["host", "vars", var] => Fixed::HostVar(var),
+        ["service", "name"] => Fixed::ServiceName,
+        ["check", "name"] => Fixed::CheckName,
+        [var] if is_var_name(var) => return Some(Err(var)),
+        _ => return None,
+    };
+    Some(Ok(fixed))
+}
+
+/// Lists the macros used in `text`, for validation.
 pub fn names(text: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut rest = text;
@@ -61,6 +69,14 @@ pub fn names(text: &str) -> Vec<&str> {
         rest = after;
     }
     out
+}
+
+fn is_var_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 /// Replaces every macro in `text` with `lookup(name)`.
@@ -90,9 +106,11 @@ fn next_macro(text: &str) -> Option<(usize, &str, &str)> {
             .unwrap_or(body.len());
         let name = &body[..len];
         let is_macro = name.starts_with("host.")
+            || name.starts_with("service.")
             || name.starts_with("check.")
             || name == "HOSTNAME"
-            || name == "HOSTADDRESS";
+            || name == "HOSTADDRESS"
+            || is_var_name(name);
         if is_macro && body[len..].starts_with('$') {
             return Some((start, name, &body[len + 1..]));
         }
@@ -104,40 +122,22 @@ fn next_macro(text: &str) -> Option<(usize, &str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
 
-    fn expand_check(check: &Check, host: &Host) -> Result<CommandLine, String> {
-        expand(check.command.as_deref().unwrap(), check, host)
-    }
-
-    fn host() -> Host {
-        Host {
-            name: "web01".into(),
-            address: "10.0.0.5".into(),
-            node: None,
-            check: None,
-            graph: None,
-            tags: vec![],
-            vars: BTreeMap::from([("label".to_string(), "two words; rm -rf /".to_string())]),
-            enabled: true,
-            origin: Default::default(),
+    fn lookup(name: &str) -> Result<String, String> {
+        match parse(name) {
+            Some(Ok(Fixed::HostAddress)) => Ok("10.0.0.5".into()),
+            Some(Ok(Fixed::HostName)) => Ok("web01".into()),
+            Some(Ok(Fixed::HostVar("label"))) | Some(Err("label")) => {
+                Ok("two words; rm -rf /".into())
+            }
+            Some(_) => Err(format!("${name}$ is not set")),
+            None => Err(format!("unknown macro ${name}$")),
         }
-    }
-
-    fn check(command: &str, shell: bool) -> Check {
-        let mut c = Check::for_tests("disk");
-        c.command = Some(command.into());
-        c.shell = shell;
-        c
     }
 
     #[test]
     fn argv_mode_keeps_values_as_one_argument() {
-        let cmd = expand_check(
-            &check("check_ping -H $host.address$ -l '$host.vars.label$'", false),
-            &host(),
-        )
-        .unwrap();
+        let cmd = expand("check_ping -H $host.address$ -l '$label$'", false, lookup).unwrap();
         assert_eq!(
             cmd,
             CommandLine::Argv(vec![
@@ -152,48 +152,47 @@ mod tests {
 
     #[test]
     fn shell_mode_quotes_values() {
-        let cmd = expand_check(
-            &check("echo $host.vars.label$ $HOSTNAME$ $HOME $$ $1$", true),
-            &host(),
+        let cmd = expand(
+            "echo $host.vars.label$ $HOSTNAME$ $HOME $$ $1$ $((1 + 2)) $(date)",
+            true,
+            lookup,
         )
         .unwrap();
         assert_eq!(
             cmd,
-            CommandLine::Shell("echo 'two words; rm -rf /' web01 $HOME $$ $1$".into())
+            CommandLine::Shell(
+                "echo 'two words; rm -rf /' web01 $HOME $$ $1$ $((1 + 2)) $(date)".into()
+            )
         );
     }
 
     #[test]
     fn missing_and_unknown_macros_are_errors() {
-        let err = expand_check(&check("x $host.vars.port$", false), &host()).unwrap_err();
-        assert_eq!(err, "$host.vars.port$ is not set for host \"web01\"");
-        let err = expand_check(&check("x $host.adress$", false), &host()).unwrap_err();
-        assert_eq!(err, "unknown macro $host.adress$");
+        assert_eq!(
+            expand("x $port$", false, lookup).unwrap_err(),
+            "$port$ is not set"
+        );
+        assert_eq!(
+            expand("x $host.adress$", false, lookup).unwrap_err(),
+            "unknown macro $host.adress$"
+        );
     }
 
     #[test]
-    fn known_macros() {
-        for name in [
-            "host.name",
-            "host.address",
-            "host.node",
-            "host.vars.x",
-            "check.name",
-            "check.vars.y",
-            "HOSTNAME",
-        ] {
-            assert!(is_known(name), "{name}");
-        }
-        for name in ["host.adress", "host.vars", "host.vars.a.b", "check.address"] {
-            assert!(!is_known(name), "{name}");
-        }
+    fn parses_macro_names() {
+        assert_eq!(parse("host.vars.x"), Some(Ok(Fixed::HostVar("x"))));
+        assert_eq!(parse("service.name"), Some(Ok(Fixed::ServiceName)));
+        assert_eq!(parse("warn"), Some(Err("warn")));
+        assert_eq!(parse("host.adress"), None);
+        assert_eq!(parse("host.vars.a.b"), None);
+        assert_eq!(parse("Warn"), None);
     }
 
     #[test]
     fn lists_macro_names() {
         assert_eq!(
-            names("a $host.name$ $X$ $check.vars.y$b"),
-            ["host.name", "check.vars.y"]
+            names("a $host.name$ $X$ $warn$ $service.name$b"),
+            ["host.name", "warn", "service.name"]
         );
     }
 }

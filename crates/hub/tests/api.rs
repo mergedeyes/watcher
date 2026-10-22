@@ -14,29 +14,25 @@ use watcher_exec::scheduler::{Event, schedule};
 use watcher_hub::{AuthSettings, Hub, jobs};
 
 const CONFIG: &str = r#"
+[check.http]
+command = "check_http -H $host.address$"
+interval = "1h"
+
+[role.web]
+hosts = { tags = ["web"] }
+service.http = {}
+
 [[host]]
 name = "web01"
 tags = ["web"]
 
 [[host]]
 name = "db01"
-check = "backup"
-
-[[check]]
-name = "http"
-apply_to = '"web" in host.tags'
-command = "check_http -H $host.address$"
-interval = "1h"
-
-[[check]]
-name = "backup"
-passive = true
-hosts = ["db01"]
-
-[[check]]
-name = "dump"
-passive = true
-hosts = ["db01"]
+host_check = "backup"
+  [host.service.backup]
+  passive = true
+  [host.service.dump]
+  passive = true
 "#;
 
 fn config() -> Arc<Config> {

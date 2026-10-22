@@ -7,6 +7,21 @@ use watcher_config::{Bootstrap, CheckDirs, Config, Diagnostic, load_dir};
 pub enum Command {
     /// Validate the configuration and show what it compiles to.
     Check(CheckArgs),
+    /// Show where an object and its values come from (the Config Tree).
+    Explain(ExplainArgs),
+}
+
+#[derive(clap::Args)]
+pub struct ExplainArgs {
+    /// `<host>`, `<host>/<service>`, or `<kind> <name>` with kind one of
+    /// host, service, role, check, hostgroup, servicegroup, contact,
+    /// contactgroup, notify.
+    #[arg(required = true, num_args = 1..=2)]
+    target: Vec<String>,
+
+    /// watcher.toml, or a directory of object files.
+    #[arg(long, short)]
+    config: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -23,6 +38,32 @@ pub struct CheckArgs {
 pub fn run(command: Command) -> Result<ExitCode> {
     match command {
         Command::Check(args) => check(args),
+        Command::Explain(args) => explain(args),
+    }
+}
+
+fn explain(args: ExplainArgs) -> Result<ExitCode> {
+    let (kind, name) = match args.target.as_slice() {
+        [name] if name.contains('/') => ("service", name.as_str()),
+        [name] => ("host", name.as_str()),
+        [kind, name] => (kind.as_str(), name.as_str()),
+        _ => unreachable!("clap allows one or two values"),
+    };
+    let (_, conf_dir) = locate(args.config.as_deref())?;
+    let config = match load_dir(&conf_dir) {
+        Ok(loaded) => loaded.config,
+        Err(diagnostics) => {
+            print_diagnostics(&diagnostics);
+            bail!("the configuration has errors");
+        }
+    };
+    let builder = watcher_config::tree::Builder::new(&config, Some(&conf_dir));
+    match builder.tree(kind, name) {
+        Some(tree) => {
+            print!("{}", watcher_config::tree::render(&tree));
+            Ok(ExitCode::SUCCESS)
+        }
+        None => bail!("no {kind} {name:?}"),
     }
 }
 
@@ -96,6 +137,7 @@ fn summary(config: &Config, warnings: usize) {
     let mut parts = vec![
         plural(config.files.len(), "file"),
         plural(config.hosts.len(), "host"),
+        plural(config.roles.len(), "role"),
         plural(config.checks.len(), "check"),
         plural(config.services.len(), "service"),
     ];
@@ -117,14 +159,14 @@ fn print_services(config: &Config) {
         .unwrap_or(0);
     println!();
     for service in &config.services {
-        let check = config.check(service);
+        let settings = &service.settings;
         let (timing, command) = match &service.command {
             Some(command) => (
-                format!("every {}", humantime::format_duration(check.interval)),
+                format!("every {}", humantime::format_duration(settings.interval)),
                 command.to_string(),
             ),
             None => {
-                let timing = check.freshness.map_or("passive".to_string(), |f| {
+                let timing = settings.freshness.map_or("passive".to_string(), |f| {
                     format!("fresh {}", humantime::format_duration(f))
                 });
                 (timing, "(passive)".to_string())

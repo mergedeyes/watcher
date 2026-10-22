@@ -17,10 +17,12 @@ const HOSTS: &str = r#"# Web servers
 name = "web01"   # primary
 tags = ["web"]
 
-[[check]]
-name = "http"
-apply_to = '"web" in host.tags'
+[check.http]
 command = "check_http -H $host.address$"
+
+[role.web]
+hosts = { tags = ["web"] }
+service.http = {}
 "#;
 
 struct Setup {
@@ -230,7 +232,7 @@ async fn invalid_changes_are_not_written() {
         HOSTS
     );
 
-    // Deleting the host would leave the check without hosts: a warning only.
+    // Deleting the host would leave the role without hosts: a warning only.
     let (_, change) = call(
         &s.hub,
         "POST",

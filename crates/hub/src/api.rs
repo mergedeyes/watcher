@@ -48,6 +48,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/config/files/{*path}", get(config::file))
         .route("/api/v1/config/objects", get(config::objects))
         .route("/api/v1/config/scripts", get(config::scripts))
+        .route("/api/v1/config/tree/{kind}/{*name}", get(config::tree))
         .route("/api/v1/config/edit", post(config::edit))
         .route("/api/v1/config/preview", post(config::preview))
         .route("/api/v1/config/apply", post(config::apply))
@@ -478,7 +479,7 @@ mod tests {
         let mut routes: Vec<String> = source
             .lines()
             .filter_map(|l| l.trim().strip_prefix(".route(\"/api/v1"))
-            .map(|r| r.split('"').next().unwrap().replace("{*path}", "{path}"))
+            .map(|r| r.split('"').next().unwrap().replace("{*", "{"))
             .collect();
         routes.sort();
         let mut paths: Vec<String> = OPENAPI

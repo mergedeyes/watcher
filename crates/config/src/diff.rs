@@ -1,6 +1,6 @@
 //! What a new configuration changes compared to the running one.
 
-use crate::{Config, Service};
+use crate::{Assigned, Config, Host, NotifyRule, Service};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -8,7 +8,11 @@ use std::collections::BTreeMap;
 pub struct Changes {
     pub hosts: Delta,
     pub services: Delta,
+    /// Host, service and contact groups, as `hostgroup x`, ...
+    pub groups: Delta,
     pub contacts: Delta,
+    /// Notify rules, by name or place.
+    pub notify: Delta,
     pub sinks: Delta,
 }
 
@@ -30,36 +34,42 @@ impl Changes {
     pub fn is_empty(&self) -> bool {
         self.hosts.is_empty()
             && self.services.is_empty()
+            && self.groups.is_empty()
             && self.contacts.is_empty()
+            && self.notify.is_empty()
             && self.sinks.is_empty()
     }
 }
 
 /// Compares objects by what they do; where they are defined doesn't matter.
 pub fn changes(old: &Config, new: &Config) -> Changes {
+    let groups = |c: &Config| -> Vec<(String, Option<String>)> {
+        let mut out = Vec::new();
+        for (kind, list) in [
+            ("hostgroup", &c.hostgroups),
+            ("servicegroup", &c.servicegroups),
+            ("contactgroup", &c.contactgroups),
+        ] {
+            out.extend(
+                list.iter()
+                    .map(|g| (format!("{kind} {}", g.name), g.title.clone())),
+            );
+        }
+        out
+    };
     Changes {
-        hosts: delta(
-            &old.hosts,
-            &new.hosts,
-            |h| h.name.clone(),
-            |a, b| {
-                let mut b = b.clone();
-                b.origin = a.origin.clone();
-                *a == b
-            },
-        ),
-        services: delta(
-            &old.services,
-            &new.services,
-            |s| s.id.clone(),
-            |a, b| same_service(old, a, new, b),
-        ),
+        hosts: delta(&old.hosts, &new.hosts, |h| h.name.clone(), same_host),
+        services: delta(&old.services, &new.services, |s| s.id.clone(), same_service),
+        groups: delta(&groups(old), &groups(new), |g| g.0.clone(), |a, b| a == b),
         contacts: delta(
             &old.contacts,
             &new.contacts,
             |c| c.name.clone(),
-            |a, b| a.email == b.email && a.webhook == b.webhook,
+            |a, b| {
+                a.email == b.email && a.webhook == b.webhook && names(&a.groups) == names(&b.groups)
+            },
         ),
+        notify: delta(&old.notify, &new.notify, NotifyRule::label, same_rule),
         sinks: delta(
             &old.sinks,
             &new.sinks,
@@ -69,17 +79,41 @@ pub fn changes(old: &Config, new: &Config) -> Changes {
     }
 }
 
-fn same_service(old: &Config, a: &Service, new: &Config, b: &Service) -> bool {
-    let (x, y) = (old.check(a), new.check(b));
+fn names(list: &[Assigned]) -> Vec<&str> {
+    let mut out: Vec<&str> = list.iter().map(|a| a.name.as_str()).collect();
+    out.sort();
+    out
+}
+
+fn same_host(a: &Host, b: &Host) -> bool {
+    a.address == b.address
+        && a.node == b.node
+        && names(&a.roles) == names(&b.roles)
+        && a.tags == b.tags
+        && names(&a.groups) == names(&b.groups)
+        && a.vars == b.vars
+        && a.host_check == b.host_check
+        && a.graph == b.graph
+        && a.enabled == b.enabled
+}
+
+fn same_service(a: &Service, b: &Service) -> bool {
     a.command == b.command
         && a.check_hash == b.check_hash
-        && x.interval == y.interval
-        && x.retry_interval == y.retry_interval
-        && x.max_attempts == y.max_attempts
-        && x.timeout == y.timeout
-        && x.freshness == y.freshness
-        && x.thresholds == y.thresholds
-        && x.notify == y.notify
+        && a.settings == b.settings
+        && names(&a.groups) == names(&b.groups)
+}
+
+fn same_rule(a: &NotifyRule, b: &NotifyRule) -> bool {
+    // Selectors have no equality; their source text is part of the file, so
+    // compare what is cheap and treat a moved rule as unchanged.
+    a.contacts == b.contacts
+        && a.contact_groups == b.contact_groups
+        && a.states == b.states
+        && a.on == b.on
+        && a.enabled == b.enabled
+        && a.hosts.is_some() == b.hosts.is_some()
+        && a.services.is_some() == b.services.is_some()
 }
 
 fn delta<T>(
@@ -128,37 +162,43 @@ mod tests {
     fn reports_added_removed_and_changed() {
         let old = config(
             r#"
+[check.ping]
+command = "check_ping -H $host.address$"
+[role.base]
+hosts = {}
+service.ping = {}
 [[host]]
 name = "a"
 [[host]]
 name = "b"
-[[check]]
-name = "ping"
-apply_to = "true"
-command = "check_ping -H $host.address$"
 "#,
         );
         let new = config(
             r#"
+[check.ping]
+command = "check_ping -H $host.address$"
+[role.base]
+hosts = {}
+service.ping = {}
+[hostgroup.all]
+members = {}
 [[host]]
 name = "a"
 address = "10.0.0.1"
 [[host]]
 name = "c"
-[[check]]
-name = "ping"
-apply_to = "true"
-command = "check_ping -H $host.address$"
 "#,
         );
         let c = changes(&old, &new);
         assert_eq!(c.hosts.added, ["c"]);
         assert_eq!(c.hosts.removed, ["b"]);
+        // The address, and the new host group.
         assert_eq!(c.hosts.changed, ["a"]);
         assert_eq!(c.services.added, ["c/ping"]);
         assert_eq!(c.services.removed, ["b/ping"]);
         // The address is in the command.
         assert_eq!(c.services.changed, ["a/ping"]);
+        assert_eq!(c.groups.added, ["hostgroup all"]);
         assert!(changes(&new, &new).is_empty());
     }
 }

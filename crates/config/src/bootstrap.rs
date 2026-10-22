@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 #[serde(deny_unknown_fields)]
 pub struct Bootstrap {
     #[serde(default)]
-    pub role: Role,
+    pub role: InstanceRole,
     /// Directory with the object files. Relative paths are resolved against
     /// the directory of `watcher.toml`.
     #[serde(default = "default_conf_dir")]
@@ -94,7 +94,7 @@ impl ConfigMode {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Role {
+pub enum InstanceRole {
     /// Hub and local node in one process.
     #[default]
     Standalone,
@@ -102,12 +102,12 @@ pub enum Role {
     Node,
 }
 
-impl Role {
+impl InstanceRole {
     pub fn as_str(self) -> &'static str {
         match self {
-            Role::Standalone => "standalone",
-            Role::Hub => "hub",
-            Role::Node => "node",
+            InstanceRole::Standalone => "standalone",
+            InstanceRole::Hub => "hub",
+            InstanceRole::Node => "node",
         }
     }
 }
@@ -248,7 +248,7 @@ mod tests {
         )
         .unwrap();
         let b = Bootstrap::load(&path).unwrap();
-        assert_eq!(b.role, Role::Hub);
+        assert_eq!(b.role, InstanceRole::Hub);
         assert_eq!(b.conf_dir, dir.join("conf.d"));
         assert_eq!(b.listen, "127.0.0.1:8080");
         assert_eq!(b.check_dirs().dirs()[0], dir.join("checks"));

@@ -200,22 +200,22 @@ pub fn jobs(config: &Config, check_dirs: &CheckDirs) -> Vec<Job> {
         .services
         .iter()
         .map(|service| {
-            let check = config.check(service);
+            let settings = &service.settings;
             Job {
                 id: service.id.clone(),
                 command: service.command.clone(),
                 options: ExecOptions {
-                    timeout: check.timeout,
+                    timeout: settings.timeout,
                     output_limit: DEFAULT_OUTPUT_LIMIT,
                     path: Some(path.clone()),
                 },
-                format: check.format,
-                thresholds: check.thresholds.clone(),
-                interval: check.interval,
-                retry_interval: check.retry_interval,
-                max_attempts: check.max_attempts,
-                freshness: check.freshness,
-                flap: check.flap,
+                format: settings.format,
+                thresholds: settings.thresholds.clone(),
+                interval: settings.interval,
+                retry_interval: settings.retry_interval,
+                max_attempts: settings.max_attempts,
+                freshness: settings.freshness,
+                flap: settings.flap,
             }
         })
         .collect()
@@ -231,7 +231,7 @@ pub fn specs(config: &Config) -> (Vec<HostSpec>, Vec<ServiceSpec>) {
             address: h.address.clone(),
             node: h.node.clone(),
             tags: h.tags.clone(),
-            vars: h.vars.clone(),
+            vars: serde_json::json!(h.vars),
         })
         .collect();
     let services = config
@@ -239,7 +239,7 @@ pub fn specs(config: &Config) -> (Vec<HostSpec>, Vec<ServiceSpec>) {
         .iter()
         .map(|s| ServiceSpec {
             host: config.host(s).name.clone(),
-            name: config.check(s).name.clone(),
+            name: s.name.clone(),
             check_hash: s.check_hash.clone(),
         })
         .collect();

@@ -1,0 +1,9 @@
+[hostgroup.web-servers]
+title = "Web Servers"
+
+[hostgroup.dc1]
+title = "Datacenter 1"
+members = { address = "10.0.1.*" }
+
+[servicegroup.webshop]
+title = "Webshop"

@@ -5,7 +5,7 @@
 //! server's own PATH, so lookup works the same for direct commands and for
 //! `shell = true`, and a script added to a directory works without a reload.
 
-use crate::{Config, Diagnostic, Severity};
+use crate::{Config, Diagnostic, Origin, Severity};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -99,29 +99,37 @@ impl CheckDirs {
             .collect()
     }
 
-    /// Warnings for checks whose program doesn't exist. Only direct commands
-    /// are checked, not `shell = true` scripts.
+    /// Warnings for services whose program doesn't exist, at the place the
+    /// command is written (usually the check). Only direct commands are
+    /// checked, not `shell = true` scripts.
     pub fn missing_commands(&self, config: &Config) -> Vec<Diagnostic> {
-        let mut programs = BTreeMap::new();
+        let mut found: BTreeMap<(Origin, String), String> = BTreeMap::new();
         for service in &config.services {
-            if let Some(CommandLine::Argv(argv)) = &service.command
-                && let Some(program) = argv.first()
-            {
-                programs
-                    .entry((service.check, program.as_str()))
-                    .or_insert(());
-            }
+            let Some(CommandLine::Argv(argv)) = &service.command else {
+                continue;
+            };
+            let Some(program) = argv.first() else {
+                continue;
+            };
+            let origin = service
+                .sources
+                .get("command")
+                .map_or(&service.origin, |s| &s.origin);
+            let what = match &service.check {
+                Some(check) => format!("check {check:?}"),
+                None => format!("service {:?}", service.id),
+            };
+            found
+                .entry((origin.clone(), program.clone()))
+                .or_insert(what);
         }
-        programs
-            .into_keys()
-            .filter(|(_, program)| self.find(program).is_none())
-            .map(|(check, program)| Diagnostic {
-                origin: Some(config.checks[check].origin.clone()),
+        found
+            .into_iter()
+            .filter(|((_, program), _)| self.find(program).is_none())
+            .map(|((origin, program), what)| Diagnostic {
+                origin: Some(origin),
                 severity: Severity::Warning,
-                message: format!(
-                    "check {:?}: command not found: {program}",
-                    config.checks[check].name
-                ),
+                message: format!("{what}: command not found: {program}"),
             })
             .collect()
     }
@@ -186,27 +194,27 @@ mod tests {
         std::fs::write(
             conf.join("a.toml"),
             r#"
+[check.here]
+command = "check_here -H $host.address$"
+
+[check.gone]
+command = "check_gone"
+
+[check.script]
+shell = true
+command = "check_gone | head -1"
+
+[role.all]
+hosts = {}
+service.here = {}
+service.gone = {}
+service.script = {}
+
 [[host]]
 name = "h1"
 
 [[host]]
 name = "h2"
-
-[[check]]
-name = "here"
-command = "check_here -H $host.address$"
-apply_to = 'host.name ~ "."'
-
-[[check]]
-name = "gone"
-command = "check_gone"
-apply_to = 'host.name ~ "."'
-
-[[check]]
-name = "script"
-shell = true
-command = "check_gone | head -1"
-apply_to = 'host.name ~ "."'
 "#,
         )
         .unwrap();

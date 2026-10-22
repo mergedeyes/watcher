@@ -330,6 +330,20 @@ paths:
                   objects: { type: array, items: { $ref: "#/components/schemas/ConfigObject" } }
                   diagnostics: { type: array, items: { $ref: "#/components/schemas/Problem" } }
 
+  /config/tree/{kind}/{name}:
+    get:
+      summary: Config Tree of an object in the running config (admins)
+      parameters:
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [host, service, role, check, hostgroup, servicegroup, contact, contactgroup, notify] } }
+        - { name: name, in: path, required: true, description: "host/service for services", schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TreeNode" }
+        "404": { $ref: "#/components/responses/Error" }
+
   /config/scripts:
     get:
       summary: Check directories and the executables in them (admins)
@@ -362,7 +376,7 @@ paths:
               type: object
               required: [kind]
               properties:
-                kind: { type: string, enum: [host, check, template, contact, sink] }
+                kind: { type: string, enum: [check, role, host, hostgroup, servicegroup, contact, contactgroup, notify, sink] }
                 name: { type: [string, "null"] }
                 fields: { type: [object, "null"], example: { name: web01, address: 10.0.0.5, tags: [linux] } }
       responses:
@@ -484,6 +498,7 @@ components:
         output: { type: string }
         passive: { type: boolean }
         flapping: { type: boolean }
+        groups: { type: array, items: { type: string }, description: Service groups }
     ServiceDetail:
       allOf:
         - $ref: "#/components/schemas/ServiceView"
@@ -498,6 +513,8 @@ components:
             check:
               type: object
               properties:
+                name: { type: [string, "null"], description: "The check it runs; null for an inline command" }
+                role: { type: [string, "null"], description: "The role it comes from; null for a host's own service" }
                 command: { type: [string, "null"] }
                 interval_s: { type: number }
                 retry_interval_s: { type: number }
@@ -505,7 +522,7 @@ components:
                 freshness_s: { type: [number, "null"] }
                 flap_low: { type: [number, "null"] }
                 flap_high: { type: [number, "null"] }
-                origin: { type: string, description: "file:line" }
+                origin: { type: string, description: "file:line of the service entry (role or host)" }
     Metric:
       type: object
       properties:
@@ -527,7 +544,9 @@ components:
         address: { type: string }
         node: { type: [string, "null"] }
         tags: { type: array, items: { type: string } }
-        vars: { type: object, additionalProperties: { type: string } }
+        vars: { type: object, description: "Values are strings, or objects (for_each data)" }
+        roles: { type: array, items: { type: string } }
+        groups: { type: array, items: { type: string }, description: Host groups }
         enabled: { type: boolean }
         state: { oneOf: [{ $ref: "#/components/schemas/HostState" }, { type: "null" }], description: "From the host check; up without one; null while pending" }
         state_type: { oneOf: [{ $ref: "#/components/schemas/StateType" }, { type: "null" }] }
@@ -602,7 +621,7 @@ components:
     ConfigObject:
       type: object
       properties:
-        kind: { type: string, enum: [host, check, template, contact, sink] }
+        kind: { type: string, enum: [check, role, host, hostgroup, servicegroup, contact, contactgroup, notify, sink] }
         name: { type: string }
         path: { type: string }
         line: { type: integer }
@@ -625,5 +644,17 @@ components:
       properties:
         hosts: { $ref: "#/components/schemas/Delta" }
         services: { $ref: "#/components/schemas/Delta" }
+        groups: { $ref: "#/components/schemas/Delta", description: "As `hostgroup x`, `servicegroup x`, `contactgroup x`" }
         contacts: { $ref: "#/components/schemas/Delta" }
+        notify: { $ref: "#/components/schemas/Delta", description: Notify rules by name or place }
         sinks: { $ref: "#/components/schemas/Delta" }
+    TreeNode:
+      type: object
+      properties:
+        kind: { type: string, description: "host, service, role, check, hostgroup, servicegroup, contact, contactgroup, notify; section or value otherwise" }
+        name: { type: string, description: "Object name to link to (host/service for services)" }
+        label: { type: string }
+        detail: { type: string, description: A value, or why something applies }
+        file: { type: string, description: Relative to the object directory }
+        line: { type: integer }
+        children: { type: array, items: { $ref: "#/components/schemas/TreeNode" } }

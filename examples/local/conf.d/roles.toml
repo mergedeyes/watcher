@@ -1,0 +1,12 @@
+[role.linux]
+interval = "30s"
+retry_interval = "10s"
+timeout = "10s"
+host_check = "load"
+# One disk service per entry of the host's vars.disks: disk_root, ...
+service.disk = { for_each = "disks" }
+service.load = {}
+
+[role.web]
+hosts = { tags = ["web"] }
+service.http = {}

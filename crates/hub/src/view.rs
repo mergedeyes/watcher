@@ -2,9 +2,9 @@
 
 use crate::LiveService;
 use serde::Serialize;
-use std::collections::BTreeMap;
+
 use std::time::SystemTime;
-use watcher_config::{Config, Host, Service};
+use watcher_config::{Assigned, Config, Host, Service, Vars};
 use watcher_core::{HostState, MetricResult, State, StateType};
 
 /// RFC 3339 with milliseconds, e.g. `2026-10-22T10:00:00.123Z`.
@@ -28,23 +28,29 @@ pub struct ServiceView {
     pub passive: bool,
     /// The state changes too often; problem notifications are held back.
     pub flapping: bool,
+    /// Service groups.
+    pub groups: Vec<String>,
+}
+
+fn names(list: &[Assigned]) -> Vec<String> {
+    list.iter().map(|a| a.name.clone()).collect()
 }
 
 impl ServiceView {
     pub fn new(config: &Config, service: &Service, live: Option<&LiveService>) -> Self {
-        let check = config.check(service);
         ServiceView {
             host: config.host(service).name.clone(),
-            service: check.name.clone(),
+            service: service.name.clone(),
             state: live.map(|l| l.state.state),
             state_type: live.map(|l| l.state.state_type),
             attempt: live.map(|l| l.state.attempt),
-            max_attempts: check.max_attempts,
+            max_attempts: service.settings.max_attempts,
             last_check: live.map(|l| time(l.state.last_check)),
             last_change: live.map(|l| time(l.state.last_change)),
             output: live.map(|l| l.output.clone()).unwrap_or_default(),
-            passive: check.command.is_none(),
+            passive: service.settings.passive,
             flapping: live.is_some_and(|l| l.state.flapping),
+            groups: names(&service.groups),
         }
     }
 }
@@ -69,6 +75,10 @@ pub struct ServiceDetail {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CheckView {
+    /// The check it runs; `None` for an inline command.
+    pub name: Option<String>,
+    /// The role it comes from; `None` for a host's own service.
+    pub role: Option<String>,
     /// `None` for passive checks.
     pub command: Option<String>,
     pub interval_s: f64,
@@ -78,13 +88,13 @@ pub struct CheckView {
     /// Flap detection thresholds in percent; `None` when off.
     pub flap_low: Option<f64>,
     pub flap_high: Option<f64>,
-    /// Where the check is defined, `file:line`.
+    /// Where the service is defined (role entry or host), `file:line`.
     pub origin: String,
 }
 
 impl ServiceDetail {
     pub fn new(config: &Config, service: &Service, live: Option<&LiveService>) -> Self {
-        let check = config.check(service);
+        let settings = &service.settings;
         ServiceDetail {
             view: ServiceView::new(config, service, live),
             last_hard_change: live.map(|l| time(l.state.last_hard_change)),
@@ -99,14 +109,16 @@ impl ServiceDetail {
             percent_change: live.map(|l| l.state.history.percent_change()),
             host_check: config.is_host_check(service),
             check: CheckView {
+                name: service.check.clone(),
+                role: service.role.clone(),
                 command: service.command.as_ref().map(ToString::to_string),
-                interval_s: check.interval.as_secs_f64(),
-                retry_interval_s: check.retry_interval.as_secs_f64(),
-                timeout_s: check.timeout.as_secs_f64(),
-                freshness_s: check.freshness.map(|f| f.as_secs_f64()),
-                flap_low: check.flap.map(|f| f.low),
-                flap_high: check.flap.map(|f| f.high),
-                origin: check.origin.to_string(),
+                interval_s: settings.interval.as_secs_f64(),
+                retry_interval_s: settings.retry_interval.as_secs_f64(),
+                timeout_s: settings.timeout.as_secs_f64(),
+                freshness_s: settings.freshness.map(|f| f.as_secs_f64()),
+                flap_low: settings.flap.map(|f| f.low),
+                flap_high: settings.flap.map(|f| f.high),
+                origin: service.origin.to_string(),
             },
         }
     }
@@ -140,7 +152,10 @@ pub struct HostView {
     pub address: String,
     pub node: Option<String>,
     pub tags: Vec<String>,
-    pub vars: BTreeMap<String, String>,
+    pub vars: Vars,
+    pub roles: Vec<String>,
+    /// Host groups.
+    pub groups: Vec<String>,
     pub enabled: bool,
     /// From the host check; UP without one. `None` (null) while the host
     /// check is pending.
@@ -174,10 +189,10 @@ impl HostView {
             }
         }
         let check = host
-            .check
+            .host_check
             .as_ref()
             .and_then(|name| services.iter().find(|s| s.service == *name));
-        let state = match (&host.check, check) {
+        let state = match (&host.host_check, check) {
             (None, _) => Some(HostState::Up),
             (Some(_), view) => view.and_then(|v| v.state).map(HostState::from_check),
         };
@@ -192,6 +207,8 @@ impl HostView {
             node: host.node.clone(),
             tags: host.tags.clone(),
             vars: host.vars.clone(),
+            roles: names(&host.roles),
+            groups: names(&host.groups),
             enabled: host.enabled,
             state,
             state_type,
@@ -201,7 +218,7 @@ impl HostView {
             last_change: check.and_then(|v| v.last_change.clone()),
             output: check.map(|v| v.output.clone()).unwrap_or_default(),
             flapping: check.is_some_and(|v| v.flapping),
-            check: host.check.clone(),
+            check: host.host_check.clone(),
             graph: host.graph_check().map(String::from),
             worst,
             services: counts,

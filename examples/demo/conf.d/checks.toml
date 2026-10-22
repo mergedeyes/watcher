@@ -1,0 +1,51 @@
+# Plain shell checks that report fixed problems and changing metrics, so the
+# demo needs no plugins.
+
+# backup01 is DOWN; notifications for its other services are held back.
+[check.ping]
+shell = true
+command = 'if [ $host.name$ = backup01 ]; then echo "PING CRITICAL - Packet loss = 100%"; exit 2; fi; echo "PING OK - Packet loss = 0%, RTA = 0.$((RANDOM % 9 + 1)) ms | rta=0.$((RANDOM % 9 + 1))ms;100;500 pl=0%;20;60"'
+
+[check.load]
+shell = true
+command = 'echo "load1=$(cut -d" " -f1 /proc/loadavg) load5=$(cut -d" " -f2 /proc/loadavg)"'
+thresholds.load1 = { warn = "> 8", crit = "> 16" }
+
+[check.http]
+shell = true
+command = 'echo "HTTP OK: 200 OK - 928 bytes | time=$((RANDOM % 120 + 40))ms size=928B"'
+thresholds.time = { warn = "> 500", crit = "> 2s" }
+
+[check.replication]
+shell = true
+command = 'echo "REPLICATION WARNING - replica lag 45s | lag=$((RANDOM % 10 + 40))s;30;120"; exit 1'
+
+[check.pg_connections]
+shell = true
+command = 'echo "connections=$((RANDOM % 40 + 80)) max_connections=200"'
+
+[check.queue_depth]
+shell = true
+max_attempts = 100
+command = 'echo "QUEUE CRITICAL - mail queue depth 812 | depth=812;100;500"; exit 2'
+
+[check.qsysopr_messages]
+shell = true
+command = 'echo "UNKNOWN - Mapepire connection refused (10.0.9.5:8076)"; exit 3'
+
+[check.asp_usage]
+shell = true
+command = 'echo "ASP OK - system ASP 71% used | asp1=71%;85;90"'
+
+# Changes state every 6 s: flap detection starts after a few changes.
+[check.flappy]
+shell = true
+interval = "3s"
+max_attempts = 1
+command = 'if [ $(( $(date +%s) / 6 % 2 )) = 0 ]; then echo "SVC OK"; else echo "SVC CRITICAL - down"; exit 2; fi'
+
+[check.tls_expiry]
+shell = true
+interval = "3s"
+retry_interval = "2s"
+command = 'echo "TLS CRITICAL - certificate for shop.example.com expires in 2 days | days_left=2"; exit 2'
