@@ -24,6 +24,32 @@ pub struct Bootstrap {
     pub database: Option<Database>,
     /// Mail server for email notifications.
     pub smtp: Option<Smtp>,
+    /// Who edits the object files.
+    #[serde(default)]
+    pub config_mode: ConfigMode,
+}
+
+/// Who edits the object files.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConfigMode {
+    /// Web UI and text editors; file changes are picked up automatically.
+    #[default]
+    Hybrid,
+    /// Text editors only; the web UI shows the config read-only.
+    Files,
+    /// The web UI only; file changes are not watched (SIGHUP still reloads).
+    Ui,
+}
+
+impl ConfigMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ConfigMode::Hybrid => "hybrid",
+            ConfigMode::Files => "files",
+            ConfigMode::Ui => "ui",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]

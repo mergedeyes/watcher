@@ -11,10 +11,10 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
-use watcher_config::{Config, Severity, load_dir};
+use watcher_config::{Config, ConfigMode, Severity, files, load_dir};
 use watcher_core::StateType;
 use watcher_exec::scheduler::{Control, Event, schedule};
-use watcher_hub::{AuthSettings, Hub, jobs, specs};
+use watcher_hub::{AuthSettings, ConfigFiles, Hub, jobs, specs};
 use watcher_notify::{Notifier, setup_warnings};
 use watcher_store::{Record, Store, StoredState, ingest};
 
@@ -57,8 +57,12 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         bail!("configuration has errors");
     };
     let config = Arc::new(config);
+    let mut snapshot = snapshot(&conf_dir);
+    let mode = bootstrap
+        .as_ref()
+        .map_or(ConfigMode::default(), |b| b.config_mode);
     let data_dir = bootstrap.as_ref().map(|b| b.data_dir.clone());
-    let mut sinks = Sinks::start(data_dir.as_deref(), &config).await?;
+    let sinks = Sinks::start(data_dir.as_deref(), &config).await?;
 
     let listen = match (args.listen, &bootstrap) {
         (Some(addr), _) => addr,
@@ -91,7 +95,7 @@ pub async fn run(args: Args) -> Result<ExitCode> {
             .database
             .or_else(|| bootstrap.and_then(|b| b.database).map(|d| d.url)),
     };
-    let (mut storage, restored) = match database {
+    let (storage, restored) = match database {
         Some(url) => {
             let (storage, states) = Storage::start(&url, &config).await?;
             (Some(storage), states)
@@ -119,60 +123,69 @@ pub async fn run(args: Args) -> Result<ExitCode> {
     let store = storage.as_ref().map(|s| s.store.clone());
     let auth = auth_settings(args.no_auth, listen, https, store.as_deref()).await?;
     let hub = Hub::new(config.clone(), restored, control.clone(), store, auth);
+    let (reload_tx, mut reloads) = mpsc::channel(4);
+    hub.enable_config_editing(ConfigFiles {
+        dir: conf_dir.clone(),
+        mode,
+        reload: reload_tx,
+    });
+    let (changed_tx, mut changed) = mpsc::channel(1);
+    // Kept alive until the end of `run`.
+    let _watcher = match mode {
+        ConfigMode::Ui => None,
+        _ => match crate::watch::watch(&conf_dir, changed_tx) {
+            Ok(w) => Some(w),
+            Err(err) => {
+                warn!(
+                    "cannot watch {} for changes ({err}); reload with SIGHUP",
+                    conf_dir.display()
+                );
+                None
+            }
+        },
+    };
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("cannot listen on {listen}"))?;
     let server = tokio::spawn(axum::serve(listener, hub.clone().router()).into_future());
     info!(
-        "started with {} services from {}; web UI on http://{listen} (reload with SIGHUP)",
+        "started with {} services from {}; web UI on http://{listen}",
         config.services.len(),
         conf_dir.display()
     );
 
+    let mut running = Running {
+        storage,
+        sinks,
+        control: &control,
+        notifier: &notifier,
+        notify_tx: &notify_tx,
+        config_tx: &config_tx,
+        hub: &hub,
+    };
     let mut hangup = signal(SignalKind::hangup())?;
     let mut terminate = signal(SignalKind::terminate())?;
     loop {
         tokio::select! {
-            Some(event) = events.recv() => {
-                print_event(&event, args.all);
-                hub.record(&event);
-                if event.change.is_some_and(|c| c.hard) && notify_tx.try_send(event.clone()).is_err() {
-                    warn!("notification queue is full; dropped the notification for {}", event.id);
-                }
-                let record = Record {
-                    service: event.id,
-                    result: event.result,
-                    state: event.state,
-                    change: event.change,
-                    duration: event.duration,
-                };
-                sinks.record(&record);
-                if let Some(storage) = &mut storage {
-                    storage.record(record);
-                }
-            }
+            Some(event) = events.recv() => running.record(event, args.all),
             _ = hangup.recv() => {
-                let Some(config) = load(&conf_dir) else {
-                    warn!("reload failed; keeping the running configuration");
+                snapshot = self::snapshot(&conf_dir);
+                let _ = running.reload(&conf_dir, "SIGHUP").await;
+            }
+            Some(()) = changed.recv() => {
+                // Skip events that didn't change anything, like our own
+                // writes after an API change was already reloaded.
+                let now = self::snapshot(&conf_dir);
+                if now == snapshot {
                     continue;
-                };
-                // Register new services before their first results arrive.
-                if let Some(storage) = &storage
-                    && let Err(err) = storage.sync(&config).await {
-                        error!("reload failed, cannot update the database: {err:#}");
-                        continue;
-                    }
-                info!("reloaded: {} services", config.services.len());
-                control.send(Control::Reload(jobs(&config))).await?;
-                for warning in setup_warnings(&config, &notifier) {
-                    warn!("{warning}");
                 }
-                let config = Arc::new(config);
-                if let Err(err) = sinks.reload(&config).await {
-                    error!("{err:#}");
-                }
-                config_tx.send_replace(config.clone());
-                hub.set_config(config);
+                snapshot = now;
+                let _ = running.reload(&conf_dir, "file change").await;
+            }
+            Some(request) = reloads.recv() => {
+                snapshot = self::snapshot(&conf_dir);
+                let result = running.reload(&conf_dir, &request.by).await;
+                let _ = request.reply.send(result);
             }
             _ = tokio::signal::ctrl_c() => break,
             _ = terminate.recv() => break,
@@ -181,11 +194,91 @@ pub async fn run(args: Args) -> Result<ExitCode> {
     info!("stopping");
     server.abort();
     scheduler.abort();
-    if let Some(storage) = storage {
+    if let Some(storage) = running.storage {
         storage.shutdown().await;
     }
-    sinks.shutdown().await;
+    running.sinks.shutdown().await;
     Ok(ExitCode::SUCCESS)
+}
+
+/// Where results go, and what a reload updates.
+struct Running<'a> {
+    storage: Option<Storage>,
+    sinks: Sinks,
+    control: &'a mpsc::Sender<Control>,
+    notifier: &'a Notifier,
+    notify_tx: &'a mpsc::Sender<Event>,
+    config_tx: &'a watch::Sender<Arc<Config>>,
+    hub: &'a Hub,
+}
+
+impl Running<'_> {
+    fn record(&mut self, event: Event, all: bool) {
+        print_event(&event, all);
+        self.hub.record(&event);
+        if event.change.is_some_and(|c| c.hard) && self.notify_tx.try_send(event.clone()).is_err() {
+            warn!(
+                "notification queue is full; dropped the notification for {}",
+                event.id
+            );
+        }
+        let record = Record {
+            service: event.id,
+            result: event.result,
+            state: event.state,
+            change: event.change,
+            duration: event.duration,
+        };
+        self.sinks.record(&record);
+        if let Some(storage) = &mut self.storage {
+            storage.record(record);
+        }
+    }
+
+    /// Loads the object files and switches to them. On errors the running
+    /// configuration stays.
+    async fn reload(&mut self, conf_dir: &Path, by: &str) -> Result<(), String> {
+        info!("reloading ({by})");
+        let Some(config) = load(conf_dir) else {
+            warn!("reload failed; keeping the running configuration");
+            return Err("the configuration has errors".into());
+        };
+        // Register new services before their first results arrive.
+        if let Some(storage) = &self.storage
+            && let Err(err) = storage.sync(&config).await
+        {
+            error!("reload failed, cannot update the database: {err:#}");
+            return Err(format!("cannot update the database: {err:#}"));
+        }
+        info!("reloaded: {} services", config.services.len());
+        if self
+            .control
+            .send(Control::Reload(jobs(&config)))
+            .await
+            .is_err()
+        {
+            return Err("the scheduler is not running".into());
+        }
+        for warning in setup_warnings(&config, self.notifier) {
+            warn!("{warning}");
+        }
+        let config = Arc::new(config);
+        if let Err(err) = self.sinks.reload(&config).await {
+            error!("{err:#}");
+        }
+        self.config_tx.send_replace(config.clone());
+        self.hub.set_config(config);
+        Ok(())
+    }
+}
+
+/// Hashes of the object files, to tell whether anything changed.
+fn snapshot(conf_dir: &Path) -> Vec<(String, String)> {
+    files::list(conf_dir)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|f| (f.path, f.hash))
+        .collect()
 }
 
 /// Login is required whenever there is a database (users live there),

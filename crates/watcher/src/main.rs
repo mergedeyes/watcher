@@ -5,6 +5,7 @@ mod run;
 mod run_check;
 mod sinks;
 mod user_cmd;
+mod watch;
 
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
@@ -34,7 +35,8 @@ enum Cmd {
     /// Run all configured checks on their schedule and log state changes.
     ///
     /// Stores results in PostgreSQL when a database is configured. Reloads
-    /// the configuration on SIGHUP.
+    /// the configuration when object files change, on SIGHUP, and after
+    /// changes in the web UI.
     Run(run::Args),
 
     /// Notification tools.

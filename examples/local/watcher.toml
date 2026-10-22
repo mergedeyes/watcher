@@ -2,6 +2,8 @@
 #   watcher config check examples/local/watcher.toml --services
 role = "standalone"
 conf_dir = "conf.d"
+# Who edits conf.d: hybrid (web UI + files, default), files (UI read-only), ui.
+# config_mode = "hybrid"
 # Used for links in notifications.
 public_url = "http://localhost:8080"
 

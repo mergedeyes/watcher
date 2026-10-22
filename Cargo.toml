@@ -31,6 +31,7 @@ humantime = "2"
 # TLS uses rustls with the ring provider throughout (as sqlx does); the
 # binary installs ring as the process default for reqwest.
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "hostname", "tokio1", "tokio1-rustls", "ring", "rustls-platform-verifier"] }
+notify = "8"
 nix = { version = "0.31", features = ["signal", "process"] }
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "http2"] }
@@ -46,6 +47,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "sync", "signal"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 toml = "1"
+toml_edit = "0.25"
 tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
