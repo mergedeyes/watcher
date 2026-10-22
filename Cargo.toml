@@ -16,18 +16,27 @@ publish = false
 watcher-config = { path = "crates/config" }
 watcher-core = { path = "crates/core" }
 watcher-exec = { path = "crates/exec" }
+watcher-hub = { path = "crates/hub" }
+watcher-store = { path = "crates/store" }
 
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
+axum = "0.8"
+clap = { version = "4", features = ["derive", "env"] }
+http-body-util = "0.1"
 humantime = "2"
-nix = { version = "0.29", features = ["signal", "process"] }
+nix = { version = "0.31", features = ["signal", "process"] }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 shell-words = "1"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "macros", "json"] }
 thiserror = "2"
-toml = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "sync", "signal"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+toml = "1"
+tower = { version = "0.5", features = ["util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

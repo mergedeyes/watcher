@@ -26,7 +26,8 @@ enum Cmd {
 
     /// Run all configured checks on their schedule and log state changes.
     ///
-    /// Reloads the configuration on SIGHUP. Nothing is stored yet.
+    /// Stores results in PostgreSQL when a database is configured. Reloads
+    /// the configuration on SIGHUP.
     Run(run::Args),
 
     /// Work with the configuration.
@@ -37,6 +38,14 @@ enum Cmd {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,sqlx=warn"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
+        .with_writer(std::io::stderr)
+        .init();
     // run-check fails with UNKNOWN, like any check that could not be evaluated.
     let (result, failure) = match cli.command {
         Cmd::RunCheck(args) => (run_check::run(args).await, ExitCode::from(3)),

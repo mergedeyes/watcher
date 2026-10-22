@@ -33,6 +33,16 @@ pub enum CommandLine {
     Shell(String),
 }
 
+/// Shell-like text for display, e.g. `check_disk -w '20%'`.
+impl std::fmt::Display for CommandLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CommandLine::Argv(argv) => f.write_str(&shell_words::join(argv)),
+            CommandLine::Shell(script) => write!(f, "/bin/sh -c {}", shell_words::quote(script)),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CommandError {
     #[error("empty command")]
