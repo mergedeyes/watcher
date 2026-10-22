@@ -489,8 +489,10 @@ components:
         value: { type: number }
         unit: { type: string }
         labels: { type: object, additionalProperties: { type: string } }
-        warn: { type: string }
-        crit: { type: string }
+        warn: { type: string, description: Evaluated warning threshold }
+        crit: { type: string, description: Evaluated critical threshold }
+        perf_warn: { type: string, description: Warning threshold from the plugin output }
+        perf_crit: { type: string, description: Critical threshold from the plugin output }
         min: { type: number }
         max: { type: number }
         state: { $ref: "#/components/schemas/State" }

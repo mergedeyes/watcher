@@ -56,8 +56,12 @@ export interface Metric {
 	value: number;
 	unit?: string;
 	labels?: Record<string, string>;
+	/** evaluated thresholds */
 	warn?: string;
 	crit?: string;
+	/** thresholds from the plugin output; Nagios ones are not evaluated */
+	perf_warn?: string;
+	perf_crit?: string;
 	min?: number;
 	max?: number;
 	/** absent when the metric has no thresholds */
