@@ -14,6 +14,8 @@ class Live {
 	error = $state<string | null>(null);
 	/** Ticks every 10 s, for ages like "12m". */
 	now = $state(Date.now());
+	/** Counts config reloads on the server. */
+	reloads = $state(0);
 
 	#index = new Map<string, number>();
 	#source: EventSource | null = null;
@@ -72,7 +74,10 @@ class Live {
 			if (!this.loaded) this.reload();
 		};
 		source.addEventListener('result', (e) => this.#patch(JSON.parse(e.data)));
-		source.addEventListener('reload', () => this.reload());
+		source.addEventListener('reload', () => {
+			this.reloads++;
+			this.reload();
+		});
 		source.addEventListener('lagged', () => this.reload());
 	}
 

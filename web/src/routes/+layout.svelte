@@ -64,6 +64,17 @@
 		}
 	];
 
+	// Config editing is for admins; without login everyone may.
+	let admin = $derived(!auth.status?.required || auth.status.user?.admin === true);
+
+	const CONFIG_NAV = [
+		{ href: '/config/hosts', label: 'Hosts' },
+		{ href: '/config/checks', label: 'Checks' },
+		{ href: '/config/contacts', label: 'Contacts' },
+		{ href: '/config/templates', label: 'Templates' },
+		{ href: '/config/files', label: 'Files' }
+	];
+
 	function active(href: string) {
 		const path = page.url.pathname;
 		return href === '/' ? path === '/' : path === href || path.startsWith(`${href}/`);
@@ -94,6 +105,14 @@
 						</a>
 					{/each}
 				{/each}
+				{#if admin}
+					<div class="group">Configuration</div>
+					{#each CONFIG_NAV as item (item.href)}
+						<a href={item.href} class:active={active(item.href)} aria-current={active(item.href) ? 'page' : undefined}>
+							{item.label}
+						</a>
+					{/each}
+				{/if}
 				{#if auth.status?.required}
 					<div class="group">Settings</div>
 					<a href="/account" class:active={active('/account')}>Account</a>
