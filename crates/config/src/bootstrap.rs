@@ -36,6 +36,16 @@ pub enum Role {
     Node,
 }
 
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::Standalone => "standalone",
+            Role::Hub => "hub",
+            Role::Node => "node",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Database {

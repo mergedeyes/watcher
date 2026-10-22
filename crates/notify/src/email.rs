@@ -83,7 +83,7 @@ impl Mailer {
 /// `[Watcher] PROBLEM: web01/disk is CRITICAL`
 pub(crate) fn subject(n: &Notification) -> String {
     match n.kind {
-        Kind::Test => "[Watcher] TEST: notifications work".to_string(),
+        Kind::Test => "[Watcher] TEST".to_string(),
         kind => format!(
             "[Watcher] {}: {} is {}",
             kind.as_str(),
@@ -96,7 +96,7 @@ pub(crate) fn subject(n: &Notification) -> String {
 pub(crate) fn body(n: &Notification) -> String {
     let mut b = String::new();
     let _ = match (n.kind, n.previous_state) {
-        (Kind::Test, _) => writeln!(b, "This is a test notification from Watcher."),
+        (Kind::Test, _) => writeln!(b, "TEST"),
         (_, Some(prev)) => writeln!(b, "{} is {} (was {prev})", n.service_id(), n.state),
         (_, None) => writeln!(b, "{} is {}", n.service_id(), n.state),
     };
