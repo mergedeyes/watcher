@@ -27,7 +27,7 @@ pub fn run(command: Command) -> Result<ExitCode> {
 }
 
 fn check(args: CheckArgs) -> Result<ExitCode> {
-    let conf_dir = conf_dir(args.path.as_deref())?;
+    let (_, conf_dir) = locate(args.path.as_deref())?;
     match load_dir(&conf_dir) {
         Ok(loaded) => {
             print_diagnostics(&loaded.warnings);
@@ -49,10 +49,11 @@ fn check(args: CheckArgs) -> Result<ExitCode> {
     }
 }
 
-/// Finds the object directory from a bootstrap file or a directory path.
-pub fn conf_dir(path: Option<&Path>) -> Result<PathBuf> {
+/// Finds the bootstrap file and object directory. A directory path is used
+/// as the object directory directly, without a bootstrap file.
+pub fn locate(path: Option<&Path>) -> Result<(Option<Bootstrap>, PathBuf)> {
     let path = match path {
-        Some(p) if p.is_dir() => return Ok(p.to_path_buf()),
+        Some(p) if p.is_dir() => return Ok((None, p.to_path_buf())),
         Some(p) => p.to_path_buf(),
         None => {
             let candidates = [
@@ -67,7 +68,9 @@ pub fn conf_dir(path: Option<&Path>) -> Result<PathBuf> {
             }
         }
     };
-    Ok(Bootstrap::load(&path)?.conf_dir)
+    let bootstrap = Bootstrap::load(&path)?;
+    let conf_dir = bootstrap.conf_dir.clone();
+    Ok((Some(bootstrap), conf_dir))
 }
 
 fn print_diagnostics(diagnostics: &[Diagnostic]) {

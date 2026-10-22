@@ -1,0 +1,24 @@
+[package]
+name = "watcher-store"
+description = "PostgreSQL/TimescaleDB storage for Project Watcher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+watcher-core.workspace = true
+
+[dev-dependencies]
+sqlx.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

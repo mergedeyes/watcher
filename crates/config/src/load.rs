@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use toml::{Spanned, Table, Value};
 use watcher_core::{Format, ThresholdSpec};
+use watcher_exec::CommandLine;
 
 /// Loads and compiles all `*.toml` files below `dir`.
 ///
@@ -449,6 +450,7 @@ fn services(config: &Config, sink: &mut Sink) -> Vec<Service> {
                     id: format!("{}/{}", host.name, check.name),
                     host: host_idx,
                     check: check_idx,
+                    check_hash: check_hash(&command, check.format),
                     command,
                 }),
                 Err(msg) => sink.error(
@@ -465,6 +467,21 @@ fn services(config: &Config, sink: &mut Sink) -> Vec<Service> {
         }
     }
     services
+}
+
+/// FNV-1a over the command and format: stable across builds and Rust
+/// versions, unlike `DefaultHasher`.
+fn check_hash(command: &CommandLine, format: Format) -> String {
+    let text = match command {
+        CommandLine::Argv(argv) => format!("argv\0{}\0{format}", argv.join("\0")),
+        CommandLine::Shell(script) => format!("shell\0{script}\0{format}"),
+    };
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{hash:016x}")
 }
 
 /// Merges `from` into `into`; nested tables are merged, everything else is
@@ -825,6 +842,26 @@ command = "true"
             ]
         );
         assert_eq!(config.services.len(), 1);
+    }
+
+    #[test]
+    fn check_hash_follows_command_and_format() {
+        let argv = CommandLine::Argv(vec!["check".into(), "-H".into(), "a".into()]);
+        let h = check_hash(&argv, Format::Auto);
+        assert_eq!(h, check_hash(&argv.clone(), Format::Auto));
+        assert_eq!(h.len(), 16);
+        assert_ne!(h, check_hash(&argv, Format::Nagios));
+        assert_ne!(
+            h,
+            check_hash(
+                &CommandLine::Argv(vec!["check -H".into(), "a".into()]),
+                Format::Auto
+            )
+        );
+        assert_ne!(
+            h,
+            check_hash(&CommandLine::Shell("check -H a".into()), Format::Auto)
+        );
     }
 
     #[test]

@@ -121,6 +121,9 @@ pub struct Service {
     pub check: usize,
     /// The command with macros expanded for this host.
     pub command: CommandLine,
+    /// Stable hash of what determines the meaning of the data (command and
+    /// output format). A change marks where data from a new check begins.
+    pub check_hash: String,
 }
 
 /// The compiled object configuration.

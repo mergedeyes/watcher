@@ -58,9 +58,11 @@ struct Done {
 }
 
 /// Runs `jobs` until `events` is closed. New job lists sent on `reload`
-/// replace the current one.
+/// replace the current one. `initial` holds states to continue from, e.g.
+/// restored from the database, keyed by job id.
 pub async fn schedule(
     jobs: Vec<Job>,
+    mut initial: HashMap<String, ServiceState>,
     max_concurrent: usize,
     mut reload: mpsc::Receiver<Vec<Job>>,
     events: mpsc::Sender<Event>,
@@ -70,7 +72,8 @@ pub async fn schedule(
     let mut slots: HashMap<String, Slot> = HashMap::new();
     let mut queue = BinaryHeap::new();
     let mut reload_open = true;
-    replace_jobs(&mut slots, &mut queue, jobs);
+    replace_jobs(&mut slots, &mut queue, jobs, &mut initial);
+    drop(initial);
 
     loop {
         let next_due = queue
@@ -106,7 +109,7 @@ pub async fn schedule(
                 }
             }
             jobs = reload.recv(), if reload_open => match jobs {
-                Some(jobs) => replace_jobs(&mut slots, &mut queue, jobs),
+                Some(jobs) => replace_jobs(&mut slots, &mut queue, jobs, &mut HashMap::new()),
                 None => reload_open = false,
             },
             () = events.closed() => return,
@@ -166,6 +169,7 @@ fn replace_jobs(
     slots: &mut HashMap<String, Slot>,
     queue: &mut BinaryHeap<Reverse<(Instant, String)>>,
     jobs: Vec<Job>,
+    initial: &mut HashMap<String, ServiceState>,
 ) {
     let now = Instant::now();
     let mut old = std::mem::take(slots);
@@ -184,8 +188,8 @@ fn replace_jobs(
                 let due = now + spread(&job.id, job.interval);
                 queue.push(Reverse((due, job.id.clone())));
                 Slot {
+                    state: initial.remove(&job.id),
                     job: Arc::new(job),
-                    state: None,
                     due,
                     running: false,
                 }
@@ -246,6 +250,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(16);
         tokio::spawn(schedule(
             vec![job("h/fail", "echo broken; exit 2", 400)],
+            HashMap::new(),
             4,
             reload_rx,
             tx,
@@ -269,11 +274,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn continues_from_initial_state() {
+        let (_reload_tx, reload_rx) = mpsc::channel(1);
+        let (tx, mut rx) = mpsc::channel(16);
+        let (mut restored, _) = ServiceState::first(State::Critical, 3, SystemTime::now());
+        restored.apply(State::Critical, 3, SystemTime::now());
+        let initial = HashMap::from([("h/fail".to_string(), restored)]);
+        tokio::spawn(schedule(
+            vec![job("h/fail", "exit 2", 400)],
+            initial,
+            4,
+            reload_rx,
+            tx,
+        ));
+
+        // Attempt 3 of 3: the restored soft problem becomes hard.
+        let event = collect(&mut rx, 1).await.remove(0);
+        assert_eq!(
+            (event.state.state_type, event.state.attempt),
+            (StateType::Hard, 3)
+        );
+        assert!(event.change.unwrap().hard);
+    }
+
+    #[tokio::test]
     async fn reload_adds_jobs_and_keeps_state() {
         let (reload_tx, reload_rx) = mpsc::channel(1);
         let (tx, mut rx) = mpsc::channel(16);
         let a = job("h/a", "exit 0", 100);
-        tokio::spawn(schedule(vec![a.clone()], 4, reload_rx, tx));
+        tokio::spawn(schedule(vec![a.clone()], HashMap::new(), 4, reload_rx, tx));
 
         let first = collect(&mut rx, 1).await;
         assert!(first[0].change.is_some());

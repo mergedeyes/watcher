@@ -2,3 +2,8 @@
 #   watcher config check examples/local/watcher.toml --services
 role = "standalone"
 conf_dir = "conf.d"
+
+# Store results (TimescaleDB from compose.yaml; plain PostgreSQL works too).
+# Or pass --database / set WATCHER_DATABASE_URL.
+# [database]
+# url = "postgres://watcher:watcher@localhost:55432/watcher_dev"
