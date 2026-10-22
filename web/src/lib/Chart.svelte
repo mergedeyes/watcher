@@ -66,11 +66,11 @@
 	/** Draws `data` on a time axis from `from` to `to` (unix seconds). */
 	function draw(data: uPlot.AlignedData, from: number, to: number) {
 		plot?.destroy();
-		const ink = css('--ink');
-		const ink2 = css('--ink-2');
-		const rule = css('--rule');
+		const ink = css('--link');
+		const ink2 = css('--muted');
+		const rule = css('--line');
 		const unit = series.unit;
-		const axis = { stroke: ink2, grid: { stroke: rule, width: 1 }, ticks: { stroke: rule, width: 1 }, font: '11px "IBM Plex Mono", monospace' };
+		const axis = { stroke: ink2, grid: { stroke: rule, width: 1 }, ticks: { stroke: rule, width: 1 }, font: '11px ui-monospace, Menlo, Consolas, monospace' };
 		const opts: uPlot.Options = {
 			width: box.clientWidth,
 			height: HEIGHT,
@@ -105,7 +105,7 @@
 				{ stroke: 'transparent', points: { show: false } },
 				{ stroke: 'transparent', points: { show: false } }
 			],
-			bands: [{ series: [3, 2], fill: `color-mix(in srgb, ${ink} 14%, transparent)` }],
+			bands: [{ series: [3, 2], fill: `color-mix(in srgb, ${ink} 18%, transparent)` }],
 			hooks: {
 				// Dragging selects a section; uPlot then sets the scale to it.
 				setSelect: [
@@ -181,10 +181,10 @@
 	onDestroy(() => plot?.destroy());
 </script>
 
-<figure class="plate chart">
+<figure class="panel chart">
 	<figcaption>
-		<span class="data name">{seriesName(series.metric, series.labels)}</span>
-		<span class="data value">
+		<span class="mono name">{seriesName(series.metric, series.labels)}</span>
+		<span class="mono value">
 			{#if readout}
 				{readout.time} · {formatValue(readout.avg, series.unit)}
 				{#if readout.min !== readout.max}
@@ -194,7 +194,7 @@
 				{formatValue(latest, series.unit)}
 			{/if}
 			{#if zoom}
-				<button type="button" class="reset legend" onclick={resetZoom}>Reset zoom</button>
+				<button type="button" class="reset btn" onclick={resetZoom}>Reset zoom</button>
 			{/if}
 		</span>
 	</figcaption>
@@ -230,15 +230,15 @@
 		margin-left: 10px;
 		font-size: 11px;
 		padding: 2px 8px;
-		color: var(--ink);
-		background: var(--plate);
-		border: 1px solid var(--rule);
+		color: var(--text);
+		background: var(--panel);
+		border: 1px solid var(--line);
 		border-radius: 2px;
 		cursor: pointer;
 	}
 
 	.value {
-		color: var(--ink-2);
+		color: var(--muted);
 	}
 
 	.canvas {
@@ -252,7 +252,7 @@
 		display: grid;
 		place-items: center;
 		margin: 0;
-		color: var(--ink-3);
+		color: var(--muted);
 		font-size: 13px;
 	}
 

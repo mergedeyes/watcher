@@ -41,89 +41,75 @@
 	}
 </script>
 
-<main class="page">
-	<form class="plate box" onsubmit={submit}>
-		<h1 class="legend">Sign in</h1>
+<div class="wrap">
+	<form class="panel box" onsubmit={submit}>
+		<div class="brand">Watcher</div>
 
 		{#if auth.status && !auth.status.users_exist}
-			<p class="notice">
-				No users. Create one:<br />
-				<code>watcher user add &lt;name&gt; --admin</code>
-			</p>
+			<p class="notice">No users. Create one: <code>watcher user add &lt;name&gt; --admin</code></p>
 		{/if}
 
 		<label>
-			<span class="legend">Username</span>
+			Username
 			<input name="username" autocomplete="username" required bind:value={username} />
 		</label>
 		<label>
-			<span class="legend">Password</span>
+			Password
 			<input name="password" type="password" autocomplete="current-password" required bind:value={password} />
 		</label>
 
 		{#if error}<p class="error" role="alert">{error}</p>{/if}
 
-		<button type="submit" class="legend" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+		<button type="submit" class="btn primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
 	</form>
-</main>
+</div>
 
 <style>
-	.box {
-		max-width: 380px;
-		margin: 48px auto 0;
-		padding: 28px;
-		display: flex;
-		flex-direction: column;
-		gap: 16px;
+	.wrap {
+		min-height: 100vh;
+		display: grid;
+		place-items: center;
+		padding: 16px;
+		background: var(--side-bg);
 	}
 
-	h1 {
-		font-size: 20px;
+	.box {
+		width: 100%;
+		max-width: 340px;
+		padding: 24px;
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+	}
+
+	.brand {
+		font-size: 18px;
+		font-weight: 700;
+		letter-spacing: 0.04em;
+		margin-bottom: 4px;
 	}
 
 	label {
 		display: flex;
 		flex-direction: column;
-		gap: 6px;
+		gap: 4px;
+		font-weight: 600;
+		font-size: 12px;
+		color: var(--muted);
 	}
 
-	label .legend {
-		font-size: 11px;
-		color: var(--ink-2);
-	}
-
-	input {
-		font: inherit;
-		color: var(--ink);
-		background: var(--plate-sunk);
-		border: 1px solid var(--rule);
-		border-radius: var(--radius);
-		padding: 8px 10px;
+	label input {
+		font-weight: 400;
+		font-size: 13px;
 	}
 
 	button {
 		margin-top: 4px;
-		font-size: 13px;
-		padding: 10px;
-		color: var(--plate);
-		background: var(--ink);
-		border: 0;
-		border-radius: var(--radius);
-		cursor: pointer;
-	}
-
-	button:disabled {
-		opacity: 0.6;
-		cursor: default;
+		padding: 7px;
 	}
 
 	.error {
 		margin: 0;
 		color: var(--crit);
-		font-size: 14px;
-	}
-
-	.notice code {
-		font-size: 13px;
 	}
 </style>

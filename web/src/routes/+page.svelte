@@ -1,212 +1,74 @@
 <script lang="ts">
-	import { serviceHref, type ServiceView } from '#lib/api.ts';
-	import { age, severity } from '#lib/format.ts';
 	import { live } from '#lib/live.svelte.ts';
-	import Lamp from '#lib/Lamp.svelte';
-	import Window from '#lib/Window.svelte';
+	import ServiceTable from '#lib/ServiceTable.svelte';
+	import Totals from '#lib/Totals.svelte';
 
-	/** Worst first; confirmed before unconfirmed; newest change first. */
-	function order(a: ServiceView, b: ServiceView) {
-		return (
-			severity(b.state) - severity(a.state) ||
-			Number(b.state_type === 'hard') - Number(a.state_type === 'hard') ||
-			Date.parse(b.last_change ?? '') - Date.parse(a.last_change ?? '')
-		);
-	}
+	let problems = $derived(live.services.filter((s) => s.state !== null && s.state !== 'ok'));
 
-	let problems = $derived(
-		live.services.filter((s) => s.state !== null && s.state !== 'ok').sort(order)
-	);
-
-	let counts = $derived.by(() => {
-		const c = { critical: 0, warning: 0, unknown: 0, pending: 0, ok: 0 };
+	let services = $derived.by(() => {
+		const c = { ok: 0, warning: 0, critical: 0, unknown: 0, pending: 0 };
 		for (const s of live.services) c[s.state ?? 'pending']++;
 		return c;
 	});
 
-	const TOTALS = [
-		['critical', 'Critical'],
-		['warning', 'Warning'],
-		['unknown', 'Unknown'],
-		['pending', 'Pending'],
-		['ok', 'OK']
-	] as const;
-
-	function detail(s: ServiceView) {
-		const since = age(s.last_change, live.now);
-		return s.state_type === 'soft' ? `${since} · SOFT ${s.attempt}/${s.max_attempts}` : since;
-	}
+	let hosts = $derived.by(() => {
+		const c = { total: live.hosts.length, ok: 0, problems: 0, pending: 0 };
+		for (const h of live.hosts) {
+			if (h.state === null) c.pending++;
+			else if (h.state === 'ok') c.ok++;
+			else c.problems++;
+		}
+		return c;
+	});
 </script>
 
-<main class="page">
-	<h1 class="visually-hidden">Problems</h1>
-
-	<div class="totals" aria-label="Services by state">
-		{#each TOTALS as [key, name] (key)}
-			<a
-				class="total plate"
-				href={`/services?state=${key}`}
-				data-state={key}
-				class:zero={counts[key] === 0}
-			>
-				<span class="data number">{counts[key]}</span>
-				<span class="legend">{name}</span>
-			</a>
-		{/each}
-	</div>
+<div class="content">
+	<div class="page-head"><h1>Tactical Overview</h1></div>
 
 	{#if !live.loaded}
 		<p class="notice">Loading…</p>
-	{:else if live.services.length === 0}
-		<p class="notice">No services configured.</p>
-	{:else if problems.length === 0}
-		<div class="all-clear plate">
-			<span class="legend">All OK</span>
-			<p class="data">
-				{counts.ok}/{live.services.length} OK{#if counts.pending > 0} · {counts.pending} pending{/if}
-			</p>
-		</div>
 	{:else}
-		<h2 class="section-label legend">Problems</h2>
-		<div class="panel">
-			{#each problems as s (`${s.host}/${s.service}`)}
-				<Window
-					href={serviceHref(s.host, s.service)}
-					title={s.host}
-					caption={s.service}
-					state={s.state}
-					stateType={s.state_type}
-					lastChange={s.last_change}
-					now={live.now}
-					detail={detail(s)}
-				/>
-			{/each}
+		<div class="totals">
+			<Totals
+				title="Host Status Totals"
+				items={[
+					{ key: 'total', label: 'Total', count: hosts.total, href: '/hosts' },
+					{ key: 'ok', label: 'OK', count: hosts.ok, href: '/hosts?state=ok', state: 'ok' },
+					{ key: 'problems', label: 'Problems', count: hosts.problems, href: '/hosts?state=problems', state: 'critical' },
+					{ key: 'pending', label: 'Pending', count: hosts.pending, href: '/hosts?state=pending' }
+				]}
+			/>
+			<Totals
+				title="Service Status Totals"
+				items={[
+					{ key: 'total', label: 'Total', count: live.services.length, href: '/services' },
+					{ key: 'ok', label: 'OK', count: services.ok, href: '/services?state=ok', state: 'ok' },
+					{ key: 'warning', label: 'Warning', count: services.warning, href: '/services?state=warning', state: 'warning' },
+					{ key: 'critical', label: 'Critical', count: services.critical, href: '/services?state=critical', state: 'critical' },
+					{ key: 'unknown', label: 'Unknown', count: services.unknown, href: '/services?state=unknown', state: 'unknown' },
+					{ key: 'pending', label: 'Pending', count: services.pending, href: '/services?state=pending' }
+				]}
+			/>
 		</div>
 
-		<h2 class="section-label legend">Alerts</h2>
-		<table class="list">
-			<thead>
-				<tr>
-					<th>State</th>
-					<th>Service</th>
-					<th class="hide-narrow">Duration</th>
-					<th>Output</th>
-				</tr>
-			</thead>
-			<tbody>
-				{#each problems as s (`${s.host}/${s.service}`)}
-					<tr>
-						<td><Lamp state={s.state} stateType={s.state_type} /></td>
-						<td><a href={serviceHref(s.host, s.service)}>{s.host}/{s.service}</a></td>
-						<td class="hide-narrow data">{age(s.last_change, live.now)}</td>
-						<td class="output">{s.output}</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
+		<section class="panel">
+			<div class="panel-title">Unhandled Problems <span class="muted">{problems.length}</span></div>
+			<ServiceTable rows={problems} sort="status" empty="No problems." />
+		</section>
 	{/if}
-</main>
+</div>
 
 <style>
-	.visually-hidden {
-		position: absolute;
-		width: 1px;
-		height: 1px;
-		overflow: hidden;
-		clip: rect(0 0 0 0);
-	}
-
 	.totals {
 		display: grid;
-		grid-template-columns: repeat(5, minmax(0, 1fr));
-		gap: 10px;
+		grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+		gap: 16px;
+		margin-bottom: 16px;
 	}
 
-	.total {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		padding: 12px 14px 10px;
-		text-decoration: none;
-		border-top: 4px solid var(--c, var(--rule));
-	}
-
-	.total:hover {
-		border-color: var(--ink-3);
-		border-top-color: var(--c, var(--rule));
-	}
-
-	.total[data-state='critical'] {
-		--c: var(--crit);
-	}
-	.total[data-state='warning'] {
-		--c: var(--warn);
-	}
-	.total[data-state='unknown'] {
-		--c: var(--unknown);
-	}
-	.total[data-state='ok'] {
-		--c: var(--ok);
-	}
-	.total[data-state='pending'] {
-		--c: var(--pending);
-	}
-
-	.total.zero {
-		--c: var(--rule);
-		color: var(--ink-3);
-	}
-
-	.number {
-		font-size: 30px;
-		font-weight: 500;
-		line-height: 1.1;
-	}
-
-	.total .legend {
-		font-size: 12px;
-		color: var(--ink-2);
-	}
-
-	/* The annunciator panel itself. */
-	.panel {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-		gap: 14px;
-		padding: 18px;
-		background: var(--plate-sunk);
-		border: 1px solid var(--rule);
-		border-radius: var(--radius);
-		box-shadow: inset 0 2px 6px rgb(0 0 0 / 0.08);
-	}
-
-	.all-clear {
-		margin-top: 28px;
-		padding: 28px;
-		text-align: center;
-	}
-
-	.all-clear .legend {
-		font-size: 22px;
-		color: var(--ok);
-		letter-spacing: 0.18em;
-	}
-
-	.all-clear p {
-		margin: 8px 0 0;
-		color: var(--ink-2);
-	}
-
-	@media (max-width: 640px) {
+	@media (max-width: 960px) {
 		.totals {
-			grid-template-columns: repeat(3, minmax(0, 1fr));
-		}
-		.number {
-			font-size: 24px;
-		}
-		.panel {
-			grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-			padding: 12px;
+			grid-template-columns: 1fr;
 		}
 	}
 </style>

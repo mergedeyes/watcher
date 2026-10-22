@@ -9,6 +9,7 @@
 
 	let { children } = $props();
 	let unreachable = $state<string | null>(null);
+	let menuOpen = $state(false);
 
 	onMount(async () => {
 		setUnauthorizedHandler(() => auth.expire());
@@ -19,7 +20,7 @@
 		}
 	});
 
-	// Load live data once allowed; otherwise stop it and send to the login page.
+	// Load live data once allowed; otherwise stop it and go to the login page.
 	$effect(() => {
 		if (!auth.status) return;
 		const onLogin = page.url.pathname === '/login';
@@ -34,213 +35,251 @@
 		}
 	});
 
+	// Close the mobile menu on navigation.
+	$effect(() => {
+		void page.url.pathname;
+		menuOpen = false;
+	});
+
 	async function signOut() {
 		await api.logout();
 		auth.expire();
 	}
 
-	const nav = [
-		{ href: '/', label: 'Problems' },
-		{ href: '/hosts', label: 'Hosts' },
-		{ href: '/services', label: 'Services' }
+	let problems = $derived(live.services.filter((s) => s.state !== null && s.state !== 'ok').length);
+	let bare = $derived(page.url.pathname === '/login' || !auth.allowed);
+
+	const NAV = [
+		{
+			title: 'General',
+			items: [{ href: '/', label: 'Tactical Overview' }]
+		},
+		{
+			title: 'Current Status',
+			items: [
+				{ href: '/hosts', label: 'Hosts' },
+				{ href: '/services', label: 'Services' },
+				{ href: '/problems', label: 'Problems' }
+			]
+		}
 	];
 
 	function active(href: string) {
 		const path = page.url.pathname;
-		return href === '/' ? path === '/' : path.startsWith(href);
+		return href === '/' ? path === '/' : path === href || path.startsWith(`${href}/`);
 	}
 
-	let problems = $derived(
-		live.services.filter((s) => s.state !== null && s.state !== 'ok').length
-	);
-
-	const CONNECTION = {
-		connecting: 'Connecting',
-		live: 'Live',
-		offline: 'Reconnecting'
-	} as const;
+	const CONNECTION = { connecting: 'Connecting', live: 'Live', offline: 'Reconnecting' } as const;
 </script>
 
 <svelte:head>
 	<title>{problems > 0 ? `(${problems}) ` : ''}Watcher</title>
 </svelte:head>
 
-<header class="rail">
-	<div class="rail-inner">
-		<a class="wordmark legend" href="/">Watcher</a>
-		{#if auth.allowed}
-		<nav aria-label="Main">
-			{#each nav as item (item.href)}
-				<a href={item.href} class="legend" aria-current={active(item.href) ? 'page' : undefined}>
-					{item.label}
-					{#if item.href === '/' && problems > 0}
-						<span class="count data">{problems}</span>
-					{/if}
-				</a>
-			{/each}
-		</nav>
-		<span class="connection" data-connection={live.connection} role="status">
-			<span class="pilot" aria-hidden="true"></span>
-			<span class="legend">{CONNECTION[live.connection]}</span>
-		</span>
-		{#if auth.status?.user}
-			<span class="account">
-				<a href="/account" class="legend">{auth.status.user.username}</a>
-				<button type="button" class="legend" onclick={signOut}>Sign out</button>
-			</span>
-		{/if}
-		{/if}
-	</div>
-</header>
+{#if unreachable}
+	<div class="content"><p class="notice">API unreachable: {unreachable}</p></div>
+{:else if bare}
+	{#if auth.status}{@render children()}{/if}
+{:else}
+	<div class="shell" class:open={menuOpen}>
+		<aside class="side">
+			<a class="brand" href="/">Watcher</a>
+			<nav aria-label="Main">
+				{#each NAV as group (group.title)}
+					<div class="group">{group.title}</div>
+					{#each group.items as item (item.href)}
+						<a href={item.href} class:active={active(item.href)} aria-current={active(item.href) ? 'page' : undefined}>
+							{item.label}
+							{#if item.href === '/problems' && problems > 0}<span class="badge">{problems}</span>{/if}
+						</a>
+					{/each}
+				{/each}
+				{#if auth.status?.required}
+					<div class="group">Settings</div>
+					<a href="/account" class:active={active('/account')}>Account</a>
+				{/if}
+			</nav>
+		</aside>
+		<button class="scrim" type="button" aria-label="Close menu" onclick={() => (menuOpen = false)}></button>
 
-{#if unreachable || (live.error && !live.loaded && auth.allowed)}
-	<div class="page">
-		<p class="notice">API unreachable: {unreachable ?? live.error}</p>
+		<div class="main">
+			<header class="top">
+				<button class="menu" type="button" aria-label="Menu" onclick={() => (menuOpen = !menuOpen)}>☰</button>
+				<span class="conn" data-connection={live.connection} role="status">
+					<span class="dot"></span>{CONNECTION[live.connection]}
+				</span>
+				{#if auth.status?.user}
+					<span class="user">{auth.status.user.username}</span>
+					<button class="btn" type="button" onclick={signOut}>Sign out</button>
+				{/if}
+			</header>
+			{#if live.error && !live.loaded}
+				<div class="content"><p class="notice">API unreachable: {live.error}</p></div>
+			{:else}
+				{@render children()}
+			{/if}
+		</div>
 	</div>
-{:else if auth.status && (auth.allowed || page.url.pathname === '/login')}
-	{@render children()}
 {/if}
 
 <style>
-	.rail {
-		background: var(--ink);
-		color: var(--enclosure);
-		border-bottom: 3px solid var(--rule);
+	.shell {
+		display: grid;
+		grid-template-columns: var(--sidebar) 1fr;
+		min-height: 100vh;
 	}
 
-	@media (prefers-color-scheme: dark) {
-		.rail {
-			background: #0b0c0c;
-			color: var(--ink);
-		}
+	.side {
+		background: var(--side-bg);
+		color: var(--side-text);
+		padding: 0 0 16px;
+		position: sticky;
+		top: 0;
+		height: 100vh;
+		overflow-y: auto;
 	}
 
-	.rail-inner {
-		max-width: var(--max);
-		margin: 0 auto;
-		padding: 0 var(--gutter);
-		display: flex;
-		align-items: center;
-		gap: 28px;
-		min-height: 52px;
-	}
-
-	.wordmark {
-		font-size: 18px;
-		letter-spacing: 0.22em;
+	.brand {
+		display: block;
+		padding: 14px 16px;
+		font-size: 16px;
+		font-weight: 700;
+		letter-spacing: 0.04em;
+		color: #fff;
 		text-decoration: none;
+		border-bottom: 1px solid rgb(255 255 255 / 0.06);
 	}
 
-	nav {
-		display: flex;
-		gap: 4px;
-		flex: 1;
-		min-width: 0;
-		overflow-x: auto;
+	.group {
+		padding: 14px 16px 4px;
+		font-size: 11px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: var(--side-muted);
 	}
 
 	nav a {
-		display: inline-flex;
+		display: flex;
 		align-items: center;
-		gap: 8px;
-		padding: 15px 10px 13px;
-		font-size: 13px;
+		justify-content: space-between;
+		padding: 6px 16px;
+		color: var(--side-text);
 		text-decoration: none;
-		opacity: 0.7;
-		border-bottom: 2px solid transparent;
-		white-space: nowrap;
+		border-left: 3px solid transparent;
 	}
 
 	nav a:hover {
-		opacity: 1;
+		background: var(--side-active);
+		text-decoration: none;
 	}
 
-	nav a[aria-current='page'] {
-		opacity: 1;
-		border-bottom-color: currentColor;
+	nav a.active {
+		background: var(--side-active);
+		border-left-color: var(--link);
+		color: #fff;
 	}
 
-	.count {
+	.badge {
 		background: var(--crit);
-		color: var(--on-crit);
-		border-radius: 2px;
-		padding: 0 5px;
-		font-size: 12px;
-		line-height: 18px;
+		color: #fff;
+		border-radius: 9px;
+		padding: 0 7px;
+		font-size: 11px;
+		font-weight: 700;
+		line-height: 17px;
 	}
 
-	.connection {
+	.main {
+		min-width: 0;
+	}
+
+	.top {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 12px;
+		height: 44px;
+		padding: 0 20px;
+		background: var(--panel);
+		border-bottom: 1px solid var(--line);
+	}
+
+	.menu {
+		display: none;
+		margin-right: auto;
+		font-size: 18px;
+		background: none;
+		border: 0;
+		color: var(--text);
+		cursor: pointer;
+	}
+
+	.conn {
 		display: inline-flex;
 		align-items: center;
-		gap: 8px;
+		gap: 6px;
+		color: var(--muted);
 		font-size: 12px;
-		opacity: 0.85;
-		white-space: nowrap;
 	}
 
-	/* Pilot light: steady green while live. */
-	.pilot {
+	.dot {
 		width: 8px;
 		height: 8px;
 		border-radius: 50%;
 		background: var(--pending);
 	}
 
-	[data-connection='live'] .pilot {
-		background: #3fbf6f;
-		box-shadow: 0 0 8px #3fbf6f;
+	[data-connection='live'] .dot {
+		background: var(--ok);
 	}
 
-	[data-connection='offline'] .pilot {
+	[data-connection='offline'] .dot {
 		background: var(--warn);
-		box-shadow: 0 0 8px var(--warn);
 	}
 
-	.account {
-		display: inline-flex;
-		align-items: center;
-		gap: 12px;
-		font-size: 12px;
-		white-space: nowrap;
+	.user {
+		font-weight: 600;
 	}
 
-	.account a {
-		text-decoration: none;
-		opacity: 0.85;
+	.scrim {
+		display: none;
 	}
 
-	.account button {
-		font: inherit;
-		color: inherit;
-		background: none;
-		border: 1px solid currentColor;
-		border-radius: 2px;
-		padding: 3px 8px;
-		opacity: 0.7;
-		cursor: pointer;
-	}
-
-	.account button:hover {
-		opacity: 1;
-	}
-
-	@media (max-width: 640px) {
-		.account a {
-			display: none;
+	@media (max-width: 720px) {
+		.shell {
+			grid-template-columns: 1fr;
 		}
-		.rail-inner {
-			gap: 12px;
+		.side {
+			position: fixed;
+			z-index: 20;
+			left: 0;
+			width: var(--sidebar);
+			transform: translateX(-100%);
+			transition: transform 150ms ease;
 		}
-		.wordmark {
-			font-size: 15px;
-			letter-spacing: 0.14em;
+		.open .side {
+			transform: none;
 		}
-		.connection .legend {
-			display: none;
+		.open .scrim {
+			display: block;
+			position: fixed;
+			inset: 0;
+			z-index: 10;
+			background: rgb(0 0 0 / 0.35);
+			border: 0;
 		}
-		nav a {
-			padding: 15px 6px 13px;
-			font-size: 12px;
+		.menu {
+			display: block;
+		}
+		.top {
+			padding: 0 10px;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.side {
+			transition: none;
 		}
 	}
 </style>
