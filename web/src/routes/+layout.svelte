@@ -90,7 +90,7 @@
 		return href === '/' ? path === '/' : path === href || path.startsWith(`${href}/`);
 	}
 
-	const CONNECTION = { connecting: 'Connecting', live: 'Live', offline: 'Reconnecting' } as const;
+	const CONNECTION = { connecting: 'Connecting', live: 'Live', offline: 'Reconnecting', paused: 'Paused' } as const;
 </script>
 
 <svelte:head>
@@ -134,9 +134,19 @@
 		<div class="main">
 			<header class="top">
 				<button class="menu" type="button" aria-label="Menu" onclick={() => (menuOpen = !menuOpen)}>☰</button>
-				<span class="conn" data-connection={live.connection} role="status">
+				{#if live.connection === 'paused'}
+					<button class="btn" type="button" onclick={() => live.refresh()}>Refresh</button>
+				{/if}
+				<button
+					class="conn"
+					type="button"
+					data-connection={live.connection}
+					aria-pressed={live.connection === 'paused'}
+					title={live.connection === 'paused' ? 'Resume updates' : 'Pause updates'}
+					onclick={() => (live.connection === 'paused' ? live.resume() : live.pause())}
+				>
 					<span class="dot"></span>{CONNECTION[live.connection]}
-				</span>
+				</button>
 				{#if auth.status?.user}
 					<span class="user">{auth.status.user.username}</span>
 					<button class="btn" type="button" onclick={signOut}>Sign out</button>
@@ -257,7 +267,23 @@
 		align-items: center;
 		gap: 6px;
 		color: var(--muted);
+		font: inherit;
 		font-size: 12px;
+		padding: 3px 8px;
+		background: none;
+		border: 1px solid transparent;
+		border-radius: 3px;
+		cursor: pointer;
+	}
+
+	.conn:hover {
+		border-color: var(--line);
+	}
+
+	.conn[data-connection='paused'] {
+		color: var(--text);
+		font-weight: 600;
+		border-color: var(--line);
 	}
 
 	.dot {
