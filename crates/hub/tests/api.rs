@@ -11,7 +11,7 @@ use tower::ServiceExt;
 use watcher_config::{Config, load_dir};
 use watcher_core::{Format, RawOutput, ServiceState, Termination, evaluate};
 use watcher_exec::scheduler::{Event, schedule};
-use watcher_hub::{Hub, jobs};
+use watcher_hub::{AuthSettings, Hub, jobs};
 
 const CONFIG: &str = r#"
 [[host]]
@@ -51,7 +51,13 @@ fn hub() -> Arc<Hub> {
     let config = config();
     let (control, control_rx) = mpsc::channel(8);
     let (events_tx, mut events) = mpsc::channel::<Event>(64);
-    let hub = Hub::new(config.clone(), HashMap::new(), control, None);
+    let hub = Hub::new(
+        config.clone(),
+        HashMap::new(),
+        control,
+        None,
+        AuthSettings::OFF,
+    );
     tokio::spawn(schedule(
         jobs(&config),
         HashMap::new(),

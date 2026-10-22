@@ -168,6 +168,19 @@ impl Store {
     }
 }
 
-fn rfc3339<S: serde::Serializer>(t: &SystemTime, s: S) -> std::result::Result<S::Ok, S::Error> {
+pub(crate) fn rfc3339<S: serde::Serializer>(
+    t: &SystemTime,
+    s: S,
+) -> std::result::Result<S::Ok, S::Error> {
     s.collect_str(&humantime::format_rfc3339_millis(*t))
+}
+
+pub(crate) fn rfc3339_opt<S: serde::Serializer>(
+    t: &Option<SystemTime>,
+    s: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    match t {
+        Some(t) => rfc3339(t, s),
+        None => s.serialize_none(),
+    }
 }

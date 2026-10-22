@@ -2,6 +2,7 @@ mod config_cmd;
 mod notify_cmd;
 mod run;
 mod run_check;
+mod user_cmd;
 
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
@@ -35,6 +36,22 @@ enum Cmd {
     #[command(subcommand)]
     Notify(notify_cmd::Command),
 
+    /// Manage user accounts (stored in the database).
+    User {
+        #[command(subcommand)]
+        command: user_cmd::UserCommand,
+        #[command(flatten)]
+        db: user_cmd::DbArgs,
+    },
+
+    /// Manage API tokens for scripts, e.g. to push passive results.
+    Token {
+        #[command(subcommand)]
+        command: user_cmd::TokenCommand,
+        #[command(flatten)]
+        db: user_cmd::DbArgs,
+    },
+
     /// Work with the configuration.
     #[command(subcommand)]
     Config(config_cmd::Command),
@@ -57,6 +74,8 @@ async fn main() -> ExitCode {
         Cmd::Run(args) => (run::run(args).await, ExitCode::FAILURE),
         Cmd::Config(command) => (config_cmd::run(command), ExitCode::FAILURE),
         Cmd::Notify(command) => (notify_cmd::run(command).await, ExitCode::FAILURE),
+        Cmd::User { command, db } => (user_cmd::user(command, db).await, ExitCode::FAILURE),
+        Cmd::Token { command, db } => (user_cmd::token(command, db).await, ExitCode::FAILURE),
     };
     result.unwrap_or_else(|err| {
         eprintln!("error: {err:#}");

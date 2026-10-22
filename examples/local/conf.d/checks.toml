@@ -30,8 +30,10 @@ apply_to = 'host.name == "localhost"'
 shell = true
 command = 'echo "uptime=$(cut -d" " -f1 /proc/uptime)s"'
 
-# Passive: results are pushed, e.g. from a cron job:
+# Passive: results are pushed, e.g. from a cron job, with an API token
+# (Account page, or `watcher token create <user> <name>`):
 #   curl -X POST localhost:8080/api/v1/services/localhost/backup/result \
+#        -H "Authorization: Bearer $WATCHER_TOKEN" \
 #        -H 'content-type: application/json' \
 #        -d '{"exit_code": 0, "output": "BACKUP OK | size=12GB"}'
 [[check]]

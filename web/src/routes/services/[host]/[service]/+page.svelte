@@ -55,10 +55,7 @@
 
 <main class="page">
 	{#if missing}
-		<p class="notice">
-			There is no service “{name}” on “{host}”. It may have been removed from the configuration.
-			<a href={hostHref(host)}>Go to {host}</a>
-		</p>
+		<p class="notice">Service not found: {host}/{name}</p>
 	{:else if !detail}
 		<p class="notice">Loading…</p>
 	{:else}
@@ -67,17 +64,17 @@
 		<header class="head plate" data-state={detail.state ?? 'pending'}>
 			<div class="what">
 				<h1>{detail.service}</h1>
-				<p class="muted">on <a href={hostHref(host)}>{host}</a>{detail.passive ? ' · passive check' : ''}</p>
+				<p class="muted"><a href={hostHref(host)}>{host}</a>{detail.passive ? ' · passive' : ''}</p>
 			</div>
 			<div class="status">
 				<span class="legend state">{stateName(detail.state)}</span>
 				<span class="data muted">
 					{#if detail.state === null}
-						waiting for the first result
+						no result yet
 					{:else if detail.state_type === 'soft'}
-						unconfirmed, try {detail.attempt} of {detail.max_attempts}
+						SOFT {detail.attempt}/{detail.max_attempts}
 					{:else}
-						for {age(detail.last_change, live.now)}
+						HARD · {age(detail.last_change, live.now)}
 					{/if}
 				</span>
 			</div>
@@ -92,31 +89,34 @@
 			<dd>
 				{#if detail.last_check}
 					<span class="data">{timestamp(detail.last_check)}</span>
-					<span class="muted">({age(detail.last_check, live.now)} ago{detail.duration_ms !== null ? `, took ${formatValue(detail.duration_ms / 1000, 's')}` : ''})</span>
+					<span class="muted">({age(detail.last_check, live.now)} ago)</span>
 				{:else}–{/if}
 			</dd>
-			<dt class="legend">State since</dt>
+			{#if detail.duration_ms !== null}
+				<dt class="legend">Execution time</dt>
+				<dd class="data">{formatValue(detail.duration_ms / 1000, 's')}</dd>
+			{/if}
+			<dt class="legend">Last state change</dt>
 			<dd class="data">{timestamp(detail.last_hard_change)}</dd>
 			{#if detail.check.command}
-				<dt class="legend">Schedule</dt>
-				<dd>
-					every {duration(detail.check.interval_s)}, retry every {duration(detail.check.retry_interval_s)},
-					timeout {duration(detail.check.timeout_s)}
+				<dt class="legend">Interval</dt>
+				<dd class="data">
+					{duration(detail.check.interval_s)} · retry {duration(detail.check.retry_interval_s)} · timeout {duration(detail.check.timeout_s)}
 				</dd>
 				<dt class="legend">Command</dt>
 				<dd class="data">{detail.check.command}</dd>
 			{:else}
-				<dt class="legend">Results</dt>
-				<dd>
-					pushed to the API{#if detail.check.freshness_s !== null}; UNKNOWN when none arrives for {duration(detail.check.freshness_s)}{/if}
+				<dt class="legend">Check type</dt>
+				<dd class="data">
+					passive{#if detail.check.freshness_s !== null} · freshness {duration(detail.check.freshness_s)}{/if}
 				</dd>
 			{/if}
-			<dt class="legend">Defined in</dt>
+			<dt class="legend">Source</dt>
 			<dd class="data">{detail.check.origin}</dd>
 		</dl>
 
 		{#if detail.metrics.length > 0}
-			<h2 class="section-label legend">Last values</h2>
+			<h2 class="section-label legend">Metrics</h2>
 			<table class="list">
 				<thead>
 					<tr>
@@ -142,7 +142,7 @@
 		{/if}
 
 		<div class="section-label legend graphs-head">
-			<h2>History</h2>
+			<h2>Graphs</h2>
 			{#if !noHistory && series.length > 0}
 				<div class="ranges" role="group" aria-label="Time range">
 					{#each RANGES as [value, label] (value)}
@@ -152,12 +152,9 @@
 			{/if}
 		</div>
 		{#if noHistory}
-			<p class="notice">
-				History needs a database. Start Watcher with <code>--database</code> (or <code>[database]</code> in
-				<code>watcher.toml</code>) to keep metrics and state changes.
-			</p>
+			<p class="notice">No database configured.</p>
 		{:else if series.length === 0}
-			<p class="notice">This check hasn't reported any metrics.</p>
+			<p class="notice">No metrics.</p>
 		{:else}
 			<div class="graphs">
 				{#each series as s (s.id)}
@@ -167,9 +164,9 @@
 		{/if}
 
 		{#if !noHistory}
-			<h2 class="section-label legend">State changes</h2>
+			<h2 class="section-label legend">State history</h2>
 			{#if events.length === 0}
-				<p class="notice">No state changes recorded yet.</p>
+				<p class="notice">No state changes.</p>
 			{:else}
 				<table class="list">
 					<thead>

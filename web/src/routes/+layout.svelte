@@ -1,12 +1,43 @@
 <script lang="ts">
 	import '../app.css';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
+	import { api, setUnauthorizedHandler } from '#lib/api.ts';
+	import { auth } from '#lib/auth.svelte.ts';
 	import { live } from '#lib/live.svelte.ts';
 
 	let { children } = $props();
+	let unreachable = $state<string | null>(null);
 
-	onMount(() => live.start());
+	onMount(async () => {
+		setUnauthorizedHandler(() => auth.expire());
+		try {
+			await auth.refresh();
+		} catch (e) {
+			unreachable = e instanceof Error ? e.message : String(e);
+		}
+	});
+
+	// Load live data once allowed; otherwise stop it and send to the login page.
+	$effect(() => {
+		if (!auth.status) return;
+		const onLogin = page.url.pathname === '/login';
+		if (auth.allowed) {
+			live.start();
+		} else {
+			live.stop();
+			if (!onLogin) {
+				const next = page.url.pathname + page.url.search;
+				goto(`/login?next=${encodeURIComponent(next)}`, { replaceState: true });
+			}
+		}
+	});
+
+	async function signOut() {
+		await api.logout();
+		auth.expire();
+	}
 
 	const nav = [
 		{ href: '/', label: 'Problems' },
@@ -37,6 +68,7 @@
 <header class="rail">
 	<div class="rail-inner">
 		<a class="wordmark legend" href="/">Watcher</a>
+		{#if auth.allowed}
 		<nav aria-label="Main">
 			{#each nav as item (item.href)}
 				<a href={item.href} class="legend" aria-current={active(item.href) ? 'page' : undefined}>
@@ -51,17 +83,21 @@
 			<span class="pilot" aria-hidden="true"></span>
 			<span class="legend">{CONNECTION[live.connection]}</span>
 		</span>
+		{#if auth.status?.user}
+			<span class="account">
+				<a href="/account" class="legend">{auth.status.user.username}</a>
+				<button type="button" class="legend" onclick={signOut}>Sign out</button>
+			</span>
+		{/if}
+		{/if}
 	</div>
 </header>
 
-{#if live.error && !live.loaded}
+{#if unreachable || (live.error && !live.loaded && auth.allowed)}
 	<div class="page">
-		<p class="notice">
-			Can't reach the Watcher API: {live.error}. Check that <code>watcher run</code> is running; this
-			page retries on its own.
-		</p>
+		<p class="notice">API unreachable: {unreachable ?? live.error}</p>
 	</div>
-{:else}
+{:else if auth.status && (auth.allowed || page.url.pathname === '/login')}
 	{@render children()}
 {/if}
 
@@ -160,7 +196,38 @@
 		box-shadow: 0 0 8px var(--warn);
 	}
 
+	.account {
+		display: inline-flex;
+		align-items: center;
+		gap: 12px;
+		font-size: 12px;
+		white-space: nowrap;
+	}
+
+	.account a {
+		text-decoration: none;
+		opacity: 0.85;
+	}
+
+	.account button {
+		font: inherit;
+		color: inherit;
+		background: none;
+		border: 1px solid currentColor;
+		border-radius: 2px;
+		padding: 3px 8px;
+		opacity: 0.7;
+		cursor: pointer;
+	}
+
+	.account button:hover {
+		opacity: 1;
+	}
+
 	@media (max-width: 640px) {
+		.account a {
+			display: none;
+		}
 		.rail-inner {
 			gap: 12px;
 		}

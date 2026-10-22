@@ -13,7 +13,7 @@ use tracing::{error, info, warn};
 use watcher_config::{Config, Severity, load_dir};
 use watcher_core::StateType;
 use watcher_exec::scheduler::{Control, Event, schedule};
-use watcher_hub::{Hub, jobs, specs};
+use watcher_hub::{AuthSettings, Hub, jobs, specs};
 use watcher_notify::{Notifier, setup_warnings};
 use watcher_store::{Record, Store, StoredState, ingest};
 
@@ -39,6 +39,11 @@ pub struct Args {
     #[arg(long, conflicts_with = "database")]
     no_database: bool,
 
+    /// Don't require a login for the web UI and API. Only allowed when
+    /// listening on a loopback address.
+    #[arg(long)]
+    no_auth: bool,
+
     /// Address for the HTTP API. Overrides `listen` in watcher.toml
     /// (default 127.0.0.1:8080).
     #[arg(long, value_name = "ADDR")]
@@ -60,19 +65,14 @@ pub async fn run(args: Args) -> Result<ExitCode> {
             .with_context(|| format!("invalid listen address {:?}", b.listen))?,
         (None, None) => SocketAddr::from(([127, 0, 0, 1], 8080)),
     };
-    // There are no user accounts yet, so the API must not be reachable
-    // from the network.
-    if !listen.ip().is_loopback() {
-        bail!(
-            "refusing to serve the API on {listen}: authentication is not implemented yet, \
-             so only loopback addresses are allowed"
-        );
-    }
 
     let (smtp, public_url) = bootstrap
         .as_ref()
         .map(|b| (b.smtp.clone(), b.public_url.clone()))
         .unwrap_or_default();
+    let https = public_url
+        .as_deref()
+        .is_some_and(|u| u.starts_with("https://"));
     let notifier =
         Arc::new(Notifier::new(smtp.as_ref(), public_url).context("invalid [smtp] settings")?);
     for warning in setup_warnings(&config, &notifier) {
@@ -114,7 +114,8 @@ pub async fn run(args: Args) -> Result<ExitCode> {
     ));
 
     let store = storage.as_ref().map(|s| s.store.clone());
-    let hub = Hub::new(config.clone(), restored, control.clone(), store);
+    let auth = auth_settings(args.no_auth, listen, https, store.as_deref()).await?;
+    let hub = Hub::new(config.clone(), restored, control.clone(), store, auth);
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("cannot listen on {listen}"))?;
@@ -170,6 +171,43 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         storage.shutdown().await;
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Login is required whenever there is a database (users live there),
+/// unless `--no-auth` is given. Without authentication the server only
+/// listens on loopback addresses.
+async fn auth_settings(
+    no_auth: bool,
+    listen: SocketAddr,
+    https: bool,
+    store: Option<&Store>,
+) -> Result<AuthSettings> {
+    let loopback = listen.ip().is_loopback();
+    let Some(store) = store.filter(|_| !no_auth) else {
+        if !loopback {
+            bail!(
+                "refusing to serve on {listen} without authentication: use a loopback address, \
+                 or configure a database (user accounts live there) and drop --no-auth"
+            );
+        }
+        if no_auth {
+            warn!("authentication is off (--no-auth)");
+        }
+        return Ok(AuthSettings::OFF);
+    };
+    if store.user_count().await? == 0 {
+        warn!("no user accounts yet; create one with: watcher user add <name> --admin");
+    }
+    if !loopback && !https {
+        warn!(
+            "serving logins over plain HTTP on {listen}; put Watcher behind a TLS reverse proxy \
+             and set public_url to its https:// address"
+        );
+    }
+    Ok(AuthSettings {
+        required: true,
+        secure_cookies: https,
+    })
 }
 
 /// Results going to the database.

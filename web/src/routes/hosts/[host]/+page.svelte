@@ -26,7 +26,7 @@
 
 <main class="page">
 	{#if missing}
-		<p class="notice">There is no host “{name}”. It may have been removed from the configuration.</p>
+		<p class="notice">Host not found: {name}</p>
 	{:else if !host}
 		<p class="notice">Loading…</p>
 	{:else}
@@ -49,22 +49,22 @@
 				<dd class="data">{value}</dd>
 			{/each}
 			{#if origin}
-				<dt class="legend">Defined in</dt>
+				<dt class="legend">Source</dt>
 				<dd class="data">{origin}</dd>
 			{/if}
 		</dl>
 
 		<h2 class="section-label legend">Services</h2>
 		{#if services.length === 0}
-			<p class="notice">No checks apply to this host. Give it tags or list it in a check's <code>hosts</code>.</p>
+			<p class="notice">No services.</p>
 		{:else}
 			<table class="list">
 				<thead>
 					<tr>
 						<th>State</th>
 						<th>Service</th>
-						<th class="hide-narrow">Since</th>
-						<th class="hide-narrow">Checked</th>
+						<th class="hide-narrow">Duration</th>
+						<th class="hide-narrow">Last check</th>
 						<th>Output</th>
 					</tr>
 				</thead>
@@ -74,7 +74,7 @@
 							<td><Lamp state={s.state} stateType={s.state_type} /></td>
 							<td><a href={serviceHref(s.host, s.service)}>{s.service}</a></td>
 							<td class="hide-narrow data">{age(s.last_change, live.now)}</td>
-							<td class="hide-narrow data">{s.passive ? 'passive' : `${age(s.last_check, live.now)} ago`}</td>
+							<td class="hide-narrow data">{s.passive ? 'passive' : age(s.last_check, live.now)}</td>
 							<td class="output">{s.output}</td>
 						</tr>
 					{/each}

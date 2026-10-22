@@ -17,11 +17,25 @@ class Live {
 
 	#index = new Map<string, number>();
 	#source: EventSource | null = null;
+	#timer: ReturnType<typeof setInterval> | undefined;
 
 	start() {
 		if (this.#source) return;
-		setInterval(() => (this.now = Date.now()), 10_000);
+		this.#timer = setInterval(() => (this.now = Date.now()), 10_000);
 		this.#connect();
+	}
+
+	/** Disconnects and forgets everything, e.g. after logging out. */
+	stop() {
+		this.#source?.close();
+		this.#source = null;
+		clearInterval(this.#timer);
+		this.services = [];
+		this.hosts = [];
+		this.#index.clear();
+		this.loaded = false;
+		this.error = null;
+		this.connection = 'connecting';
 	}
 
 	find(host: string, service: string): ServiceView | undefined {

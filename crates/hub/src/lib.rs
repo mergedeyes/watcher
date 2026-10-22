@@ -4,6 +4,7 @@
 //! points) comes from the database when one is configured.
 
 mod api;
+pub mod auth;
 mod ui;
 mod view;
 
@@ -16,6 +17,8 @@ use watcher_core::{CheckResult, ServiceState};
 use watcher_exec::scheduler::{Control, Event, Job};
 use watcher_exec::{DEFAULT_OUTPUT_LIMIT, ExecOptions};
 use watcher_store::{HostSpec, ServiceSpec, Store, StoredState};
+
+pub use auth::AuthSettings;
 
 /// Live state of one service.
 #[derive(Debug, Clone)]
@@ -48,17 +51,20 @@ pub struct Hub {
     updates: broadcast::Sender<Update>,
     control: mpsc::Sender<Control>,
     store: Option<Arc<Store>>,
+    auth: AuthSettings,
+    limiter: auth::Limiter,
     started: SystemTime,
 }
 
 impl Hub {
     /// `restored` seeds the live state after a restart; `control` reaches
-    /// the scheduler, for passive results.
+    /// the scheduler, for passive results. Authentication needs `store`.
     pub fn new(
         config: Arc<Config>,
         restored: HashMap<String, StoredState>,
         control: mpsc::Sender<Control>,
         store: Option<Arc<Store>>,
+        auth: AuthSettings,
     ) -> Arc<Self> {
         let services = restored
             .into_iter()
@@ -79,6 +85,8 @@ impl Hub {
             updates,
             control,
             store,
+            auth,
+            limiter: auth::Limiter::default(),
             started: SystemTime::now(),
         })
     }
