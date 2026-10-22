@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc;
 use tower::ServiceExt;
-use watcher_config::{Config, load_dir};
+use watcher_config::{CheckDirs, Config, load_dir};
 use watcher_core::{Format, RawOutput, ServiceState, Termination, evaluate};
 use watcher_exec::scheduler::{Event, schedule};
 use watcher_hub::{AuthSettings, Hub, jobs};
@@ -65,7 +65,7 @@ fn hub() -> Arc<Hub> {
         AuthSettings::OFF,
     );
     tokio::spawn(schedule(
-        jobs(&config),
+        jobs(&config, &CheckDirs::default()),
         HashMap::new(),
         4,
         control_rx,

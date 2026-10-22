@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use watcher_config::{Bootstrap, Config, Diagnostic, load_dir};
+use watcher_config::{Bootstrap, CheckDirs, Config, Diagnostic, load_dir};
 
 #[derive(clap::Subcommand)]
 pub enum Command {
@@ -27,9 +27,13 @@ pub fn run(command: Command) -> Result<ExitCode> {
 }
 
 fn check(args: CheckArgs) -> Result<ExitCode> {
-    let (_, conf_dir) = locate(args.path.as_deref())?;
+    let (bootstrap, conf_dir) = locate(args.path.as_deref())?;
     match load_dir(&conf_dir) {
-        Ok(loaded) => {
+        Ok(mut loaded) => {
+            let check_dirs = check_dirs(bootstrap.as_ref(), &conf_dir);
+            loaded
+                .warnings
+                .extend(check_dirs.missing_commands(&loaded.config));
             print_diagnostics(&loaded.warnings);
             summary(&loaded.config, loaded.warnings.len());
             if args.services {
@@ -46,6 +50,15 @@ fn check(args: CheckArgs) -> Result<ExitCode> {
             eprintln!("\n{} in {}", plural(errors, "error"), conf_dir.display());
             Ok(ExitCode::FAILURE)
         }
+    }
+}
+
+/// Where commands are looked up: from watcher.toml, or the defaults next
+/// to the object directory.
+pub fn check_dirs(bootstrap: Option<&Bootstrap>, conf_dir: &Path) -> CheckDirs {
+    match bootstrap {
+        Some(b) => b.check_dirs(),
+        None => CheckDirs::default_for(conf_dir.parent().unwrap_or(Path::new("."))),
     }
 }
 

@@ -22,6 +22,12 @@
 		config.load();
 	});
 
+	let scripts = $state<{ dirs: string[]; scripts: { name: string; dir: string }[] } | null>(null);
+	$effect(() => {
+		if (kind && SCHEMAS[kind.kind].some((g) => g.fields.some((f) => f.scripts)))
+			api.configScripts().then((s) => (scripts = s), () => (scripts = null));
+	});
+
 	// Another object: start over.
 	$effect(() => {
 		void kind;
@@ -40,6 +46,10 @@
 	});
 
 	let others = $derived(kind ? otherKeys(kind.kind, raw) : []);
+	/** Problems on disk that point at this object, e.g. a command not found. */
+	let own = $derived(
+		object ? (config.overview?.diagnostics ?? []).filter((p) => p.path === object.path && p.line === object.line) : []
+	);
 	let missing = $derived(config.loaded && name !== null && !object);
 
 	async function save(event: SubmitEvent) {
@@ -108,6 +118,9 @@
 			{/if}
 		</div>
 		<ConfigHead />
+		{#each own as p, i (i)}
+			<p class="notice problem" data-severity={p.severity}><span class="sev">{p.severity.toUpperCase()}</span> {p.message}</p>
+		{/each}
 
 		{#if missing}
 			<p class="notice">No {kind.kind} "{name}".</p>
@@ -170,10 +183,19 @@
 												inputmode={f.type === 'int' ? 'numeric' : undefined}
 												placeholder={f.placeholder}
 												required={f.required}
+												list={f.scripts && scripts ? `${id}-scripts` : undefined}
 												bind:value={values[f.key]}
 											/>
+											{#if f.scripts && scripts}
+												<datalist id="{id}-scripts">
+													{#each scripts.scripts as s (s.name)}<option value={s.name}>{s.dir}</option>{/each}
+												</datalist>
+											{/if}
 										{/if}
 										{#if f.help}<div class="help">{f.help}</div>{/if}
+										{#if f.scripts && scripts}
+											<div class="help">Check dirs: <span class="mono">{scripts.dirs.join(', ')}</span> ({scripts.scripts.length} scripts)</div>
+										{/if}
 										{#if f.suggestOne}
 											{@const current = String(values[f.key] ?? '').trim()}
 											{@const free = names(f.suggestOne).filter((n) => n !== current)}
@@ -276,6 +298,25 @@
 		margin-top: 2px;
 		font-size: 11px;
 		color: var(--muted);
+	}
+
+	.notice.problem {
+		margin: 0 0 12px;
+		color: var(--text);
+	}
+
+	.sev {
+		font-size: 11px;
+		font-weight: 700;
+		margin-right: 6px;
+	}
+
+	[data-severity='error'] .sev {
+		color: var(--crit);
+	}
+
+	[data-severity='warning'] .sev {
+		color: var(--unknown);
 	}
 
 	.suggest {

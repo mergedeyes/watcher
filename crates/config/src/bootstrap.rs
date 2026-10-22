@@ -1,3 +1,4 @@
+use crate::CheckDirs;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -31,6 +32,13 @@ pub struct Bootstrap {
     pub instance_name: Option<String>,
     /// Serve HTTPS instead of HTTP.
     pub tls: Option<Tls>,
+    /// Where bare command names are looked up before PATH, in order.
+    /// Relative paths are resolved like `conf_dir`. Default: `checks/`,
+    /// then the monitoring-plugins directories that exist.
+    pub check_dirs: Option<Vec<PathBuf>>,
+    /// The directory of watcher.toml.
+    #[serde(skip)]
+    pub dir: PathBuf,
 }
 
 /// Certificate for HTTPS.
@@ -179,6 +187,13 @@ fn default_listen() -> String {
 }
 
 impl Bootstrap {
+    pub fn check_dirs(&self) -> CheckDirs {
+        match &self.check_dirs {
+            Some(dirs) => CheckDirs::new(dirs.clone()),
+            None => CheckDirs::default_for(&self.dir),
+        }
+    }
+
     pub fn load(path: &Path) -> Result<Self, BootstrapError> {
         let text = std::fs::read_to_string(path).map_err(|source| BootstrapError::Read {
             path: path.into(),
@@ -190,7 +205,11 @@ impl Bootstrap {
                 source,
             })?;
         let base = path.parent().unwrap_or(Path::new("."));
+        bootstrap.dir = base.to_path_buf();
         bootstrap.conf_dir = base.join(&bootstrap.conf_dir);
+        for dir in bootstrap.check_dirs.iter_mut().flatten() {
+            *dir = base.join(&*dir);
+        }
         bootstrap.data_dir = base.join(&bootstrap.data_dir);
         if let Some(file) = bootstrap
             .smtp
@@ -232,7 +251,15 @@ mod tests {
         assert_eq!(b.role, Role::Hub);
         assert_eq!(b.conf_dir, dir.join("conf.d"));
         assert_eq!(b.listen, "127.0.0.1:8080");
+        assert_eq!(b.check_dirs().dirs()[0], dir.join("checks"));
         assert_eq!(b.database.unwrap().url, "postgres://localhost/w");
+
+        std::fs::write(&path, "check_dirs = [\"plugins\", \"/opt/checks\"]\n").unwrap();
+        let b = Bootstrap::load(&path).unwrap();
+        assert_eq!(
+            b.check_dirs().dirs(),
+            [dir.join("plugins"), PathBuf::from("/opt/checks")]
+        );
 
         std::fs::write(
             &path,

@@ -30,6 +30,8 @@ export interface Field {
 	suggest?: Kind;
 	/** Suggestions for a single name. */
 	suggestOne?: Kind;
+	/** Suggest the scripts in the check directories. */
+	scripts?: boolean;
 }
 
 export interface Group {
@@ -51,7 +53,7 @@ const HOST: Field[] = [
 const CHECK: Field[] = [
 	{ key: 'apply_to', label: 'Apply To', type: 'mono', placeholder: '"linux" in host.tags' },
 	{ key: 'hosts', label: 'Hosts', type: 'list', suggest: 'host', help: 'comma-separated, in addition to Apply To' },
-	{ key: 'command', label: 'Command', type: 'mono', placeholder: 'check_ping -H $host.address$ -w 100,20% -c 500,60%' },
+	{ key: 'command', label: 'Command', type: 'mono', scripts: true, placeholder: 'check_ping -H $host.address$ -w 100,20% -c 500,60%' },
 	{ key: 'shell', label: 'Shell', type: 'bool', default: false, help: 'run with /bin/sh -c' },
 	{ key: 'passive', label: 'Passive', type: 'bool', default: false, help: 'results via API, no command' },
 	{ key: 'format', label: 'Format', type: 'select', options: ['auto', 'nagios', 'key_value', 'json'] }

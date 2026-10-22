@@ -433,7 +433,10 @@ impl Plan {
         let conf_dir = dir.join("conf.d");
         let mut files = Vec::new();
         let mut toml = format!(
-            "# Written by watcher init.\nrole = {}\nconf_dir = \"conf.d\"\nlisten = {}\n",
+            "# Written by watcher init.\nrole = {}\nconf_dir = \"conf.d\"\nlisten = {}\n\
+             # Bare command names are looked up here first, then in PATH.\n\
+             # Default: checks/, then the monitoring-plugins directories.\n\
+             # check_dirs = [\"checks\", \"/usr/lib/nagios/plugins\"]\n",
             q(a.role.as_str()),
             q(&listen.to_string())
         );

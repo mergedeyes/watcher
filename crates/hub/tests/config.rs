@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tower::ServiceExt;
-use watcher_config::{ConfigMode, load_dir};
+use watcher_config::{CheckDirs, ConfigMode, load_dir};
 use watcher_hub::{AuthSettings, ConfigFiles, Hub, Reload};
 
 const HOSTS: &str = r#"# Web servers
@@ -35,6 +35,16 @@ fn setup(name: &str, mode: ConfigMode) -> Setup {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("hosts.toml"), HOSTS).unwrap();
+    // check_http is a script in a check directory.
+    let checks = dir.with_extension("checks");
+    let _ = std::fs::remove_dir_all(&checks);
+    std::fs::create_dir_all(&checks).unwrap();
+    std::fs::write(checks.join("check_http"), "#!/bin/sh\necho OK\n").unwrap();
+    std::fs::set_permissions(
+        checks.join("check_http"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
     let config = Arc::new(load_dir(&dir).unwrap().config);
     let (control, _control_rx) = mpsc::channel(8);
     let hub = Hub::new(config, HashMap::new(), control, None, AuthSettings::OFF);
@@ -54,6 +64,7 @@ fn setup(name: &str, mode: ConfigMode) -> Setup {
         dir: dir.clone(),
         mode,
         reload: reload_tx,
+        check_dirs: CheckDirs::new(vec![checks]),
     });
     Setup { hub, dir, reloads }
 }
@@ -103,6 +114,21 @@ async fn lists_files_and_objects() {
     assert_eq!(host["name"], "web01");
     assert_eq!(host["line"], 2);
     assert_eq!(host["fields"]["tags"], json!(["web"]));
+
+    let (_, scripts) = call(&s.hub, "GET", "/api/v1/config/scripts", None).await;
+    assert_eq!(scripts["scripts"][0]["name"], "check_http");
+}
+
+#[tokio::test]
+async fn warns_about_missing_commands() {
+    let s = setup("missing", ConfigMode::Hybrid);
+    let text = HOSTS.replace("check_http", "check_nothere");
+    std::fs::write(s.dir.join("hosts.toml"), text).unwrap();
+    let (_, overview) = call(&s.hub, "GET", "/api/v1/config", None).await;
+    assert_eq!(
+        overview["diagnostics"][0]["message"],
+        r#"check "http": command not found: check_nothere"#
+    );
 }
 
 #[tokio::test]

@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, SystemTime};
 use tokio::sync::{broadcast, mpsc};
-use watcher_config::Config;
+use watcher_config::{CheckDirs, Config};
 use watcher_core::{CheckResult, HostState, ServiceState, StateType};
 use watcher_exec::scheduler::{Control, Event, Job};
 use watcher_exec::{DEFAULT_OUTPUT_LIMIT, ExecOptions};
@@ -192,8 +192,10 @@ impl Hub {
     }
 }
 
-/// Scheduler jobs for all services of `config`.
-pub fn jobs(config: &Config) -> Vec<Job> {
+/// Scheduler jobs for all services of `config`. Commands are looked up in
+/// `check_dirs` first.
+pub fn jobs(config: &Config, check_dirs: &CheckDirs) -> Vec<Job> {
+    let path: Arc<std::ffi::OsStr> = check_dirs.search_path().as_os_str().into();
     config
         .services
         .iter()
@@ -205,6 +207,7 @@ pub fn jobs(config: &Config) -> Vec<Job> {
                 options: ExecOptions {
                     timeout: check.timeout,
                     output_limit: DEFAULT_OUTPUT_LIMIT,
+                    path: Some(path.clone()),
                 },
                 format: check.format,
                 thresholds: check.thresholds.clone(),
