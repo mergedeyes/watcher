@@ -4,7 +4,9 @@
 	import { api, ApiError, HISTORY_DELAY, serviceHref, type StateEvent } from '#lib/api.ts';
 	import AlertTable from '#lib/AlertTable.svelte';
 	import { auth } from '#lib/auth.svelte.ts';
+	import { editHref } from '#lib/config.svelte.ts';
 	import ConfigTree from '#lib/ConfigTree.svelte';
+	import EditMenu from '#lib/EditMenu.svelte';
 	import Graphs from '#lib/Graphs.svelte';
 	import { datetime, since } from '#lib/format.ts';
 	import { live } from '#lib/live.svelte.ts';
@@ -69,7 +71,15 @@
 		<div class="page-head">
 			<h1>{host.name}</h1>
 			<span class="head-actions">
-				{#if auth.admin}<ConfigTree kind="host" name={host.name} />{/if}
+				{#if auth.admin}
+					<EditMenu
+						targets={[
+							{ label: `Host ${host.name}`, href: editHref('hosts', host.name) },
+							...host.roles.map((r) => ({ label: `Role ${r}`, href: editHref('roles', r), hint: 'all hosts with the role' }))
+						]}
+					/>
+					<ConfigTree kind="host" name={host.name} />
+				{/if}
 				<Status state={host.state} />
 			</span>
 		</div>

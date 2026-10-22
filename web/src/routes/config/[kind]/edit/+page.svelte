@@ -17,6 +17,8 @@
 	let object = $derived(kind && name !== null ? config.find(kind.kind, name) : undefined);
 	/** Clone mode (`?clone=x`): a new form filled from x, saved into x's file. */
 	let cloneName = $derived(name === null ? page.url.searchParams.get('clone') : null);
+	/** A service to highlight in the services table (`?focus=http`, from a service page). */
+	let focus = $derived(page.url.searchParams.get('focus'));
 	let source = $derived(kind && cloneName !== null ? config.find(kind.kind, cloneName) : undefined);
 	let raw = $derived.by<Record<string, unknown>>(() => {
 		if (object) return object.fields;
@@ -55,7 +57,13 @@
 		const fields = raw;
 		const k = kind.kind;
 		untrack(() => {
-			if (values === null) values = toForm(k, fields);
+			if (values !== null) return;
+			const filled = toForm(k, fields);
+			// From a service page: on a host, a row to override the service.
+			const rows = filled.service as ServiceRow[] | undefined;
+			if (focus && k === 'host' && rows && !rows.some((r) => r[0] === focus)) rows.push([focus, '', '', '', '', '']);
+			values = filled;
+			requestAnimationFrame(() => document.querySelector('.row.svc.focused')?.scrollIntoView({ block: 'center' }));
 		});
 	});
 
@@ -243,7 +251,7 @@
 													<div class="row svc head"><span>Service</span><span>Check</span><span>For Each</span><span>Service Groups</span><span>Enabled</span><span></span></div>
 												{/if}
 												{#each rows<ServiceRow>(f.key) as row, i (i)}
-													<div class="row svc">
+													<div class="row svc" class:focused={focus !== null && row[0] === focus}>
 														<Combobox mono placeholder="name" bind:value={row[0]} label="Service" options={suggest.serviceNames()} />
 														<Combobox mono placeholder={row[0] || 'check'} bind:value={row[1]} label="Check" options={suggest.names('check')} />
 														<Combobox mono placeholder="host var" bind:value={row[2]} label="For each" options={suggest.varNames(true)} />
@@ -409,6 +417,12 @@
 
 	.row.svc > * {
 		min-width: 0;
+	}
+
+	.row.svc.focused {
+		outline: 2px solid var(--link);
+		outline-offset: 3px;
+		border-radius: 2px;
 	}
 
 	.row.svc.head {

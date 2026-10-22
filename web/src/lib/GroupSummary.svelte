@@ -2,6 +2,8 @@
 <script lang="ts">
 	import { api, type HostView, type ServiceView } from './api.ts';
 	import { live } from './live.svelte.ts';
+	import { auth } from './auth.svelte.ts';
+	import { editHref } from './config.svelte.ts';
 	import Status from './Status.svelte';
 
 	let { of }: { of: 'host' | 'service' } = $props();
@@ -46,6 +48,7 @@
 						<th>Group</th>
 						{#if of === 'host'}<th>Hosts</th>{/if}
 						<th>Services</th>
+						{#if auth.admin}<th></th>{/if}
 					</tr>
 				</thead>
 				<tbody>
@@ -72,6 +75,9 @@
 								{/each}
 								{#if count(services, (s) => s.state === null)}<span class="pair"><Status state={null} /> {count(services, (s) => s.state === null)}</span>{/if}
 							</td>
+							{#if auth.admin}
+								<td class="nowrap"><a href={editHref(of === 'host' ? 'hostgroups' : 'servicegroups', g.name)}>Edit Config</a></td>
+							{/if}
 						</tr>
 					{/each}
 				</tbody>

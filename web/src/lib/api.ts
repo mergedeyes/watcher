@@ -90,6 +90,8 @@ export interface ServiceDetail extends ServiceView {
 		name: string | null;
 		/** The role it comes from; null for a host's own service. */
 		role: string | null;
+		/** The role's service entry (`disk` for the for_each service `disk_root`). */
+		entry: string | null;
 		command: string | null;
 		interval_s: number;
 		retry_interval_s: number;
