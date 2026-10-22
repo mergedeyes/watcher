@@ -29,6 +29,7 @@ type Shared = AxState<Arc<Hub>>;
 pub fn router(hub: Arc<Hub>) -> Router {
     Router::new()
         .route("/api/v1/health", get(health))
+        .route("/api/v1/openapi.yaml", get(openapi))
         .route("/api/v1/hosts", get(hosts))
         .route("/api/v1/hosts/{host}", get(host))
         .route("/api/v1/services", get(services))
@@ -124,6 +125,16 @@ async fn health(AxState(hub): Shared) -> Json<serde_json::Value> {
         "database": hub.store.as_ref().map(|s| s.backend().to_string()),
         "instance": hub.instance.get(),
     }))
+}
+
+/// The API description; `crates/hub/openapi.yaml`.
+const OPENAPI: &str = include_str!("../openapi.yaml");
+
+async fn openapi() -> impl IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/yaml")],
+        OPENAPI,
+    )
 }
 
 /// All services as views, in config order.
@@ -422,6 +433,25 @@ fn parse_time(s: &str, now: SystemTime) -> Result<SystemTime, ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every route is described in openapi.yaml, and nothing else.
+    #[test]
+    fn openapi_lists_every_route() {
+        let source = include_str!("api.rs");
+        let mut routes: Vec<String> = source
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix(".route(\"/api/v1"))
+            .map(|r| r.split('"').next().unwrap().replace("{*path}", "{path}"))
+            .collect();
+        routes.sort();
+        let mut paths: Vec<String> = OPENAPI
+            .lines()
+            .filter(|l| l.starts_with("  /") && l.ends_with(':'))
+            .map(|l| l.trim().trim_end_matches(':').to_string())
+            .collect();
+        paths.sort();
+        assert_eq!(routes, paths);
+    }
 
     #[test]
     fn parses_times() {

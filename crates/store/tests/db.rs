@@ -357,3 +357,52 @@ async fn sink_batches_apply_exactly_once() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn readers_see_monitoring_data_only() {
+    let Ok(admin_url) = std::env::var("WATCHER_TEST_POSTGRES_URL") else {
+        eprintln!("skipped: set WATCHER_TEST_POSTGRES_URL");
+        return;
+    };
+    let db = TestDb::create(&admin_url).await;
+    let store = Store::connect(&db.url).await.unwrap();
+    let role = format!("watcher_reader_{}", std::process::id());
+    store.grant_reader(&role, "it's 'quoted'").await.unwrap();
+    // Again: updates the password.
+    store.grant_reader(&role, "reader password").await.unwrap();
+
+    let (scheme, rest) = db.url.split_once("://").unwrap();
+    let host = &rest[rest.find('@').unwrap() + 1..];
+    let url = format!("{scheme}://{role}:reader%20password@{host}");
+    let mut reader = PgConnection::connect(&url).await.expect("reader logs in");
+    let metrics: i64 = sqlx::query_scalar("SELECT count(*) FROM v_metrics")
+        .fetch_one(&mut reader)
+        .await
+        .unwrap();
+    assert_eq!(metrics, 0);
+    for secret in ["users", "sessions", "api_tokens"] {
+        let err = sqlx::query(AssertSqlSafe(format!("SELECT * FROM {secret}")))
+            .fetch_all(&mut reader)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("permission denied"),
+            "{secret}: {err}"
+        );
+    }
+    assert!(
+        sqlx::query("DELETE FROM hosts")
+            .execute(&mut reader)
+            .await
+            .is_err()
+    );
+    drop(reader);
+    drop(store);
+
+    db.drop().await;
+    let mut admin = PgConnection::connect(&admin_url).await.unwrap();
+    sqlx::query(AssertSqlSafe(format!("DROP ROLE {role}")))
+        .execute(&mut admin)
+        .await
+        .unwrap();
+}

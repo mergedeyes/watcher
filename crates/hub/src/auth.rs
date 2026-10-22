@@ -33,8 +33,9 @@ const MAX_FAILURES: u32 = 5;
 const LOCKOUT: Duration = Duration::from_secs(60);
 
 /// API paths reachable without logging in.
-const PUBLIC: [&str; 3] = [
+const PUBLIC: [&str; 4] = [
     "/api/v1/health",
+    "/api/v1/openapi.yaml",
     "/api/v1/auth/status",
     "/api/v1/auth/login",
 ];
