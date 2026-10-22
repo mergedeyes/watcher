@@ -14,7 +14,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, SystemTime};
 use tokio::sync::{broadcast, mpsc};
 use watcher_config::Config;
-use watcher_core::{CheckResult, ServiceState};
+use watcher_core::{CheckResult, HostState, ServiceState, StateType};
 use watcher_exec::scheduler::{Control, Event, Job};
 use watcher_exec::{DEFAULT_OUTPUT_LIMIT, ExecOptions};
 use watcher_store::{HostSpec, ServiceSpec, Store, StoredState};
@@ -156,6 +156,27 @@ impl Hub {
         }
     }
 
+    /// Whether notifications for service `id` are held back because its
+    /// host is confirmed DOWN by the host check (Nagios semantics). The
+    /// host check itself still notifies.
+    pub fn host_down(&self, id: &str) -> bool {
+        let live = self.live.read().unwrap_or_else(|e| e.into_inner());
+        let config = &live.config;
+        let Some(service) = config.services.iter().find(|s| s.id == id) else {
+            return false;
+        };
+        if config.is_host_check(service) {
+            return false;
+        }
+        config
+            .host_check(config.host(service))
+            .and_then(|s| live.services.get(&s.id))
+            .is_some_and(|l| {
+                HostState::from_check(l.state.state) == HostState::Down
+                    && l.state.state_type == StateType::Hard
+            })
+    }
+
     pub fn router(self: Arc<Self>) -> axum::Router {
         api::router(self)
     }
@@ -181,6 +202,7 @@ pub fn jobs(config: &Config) -> Vec<Job> {
                 retry_interval: check.retry_interval,
                 max_attempts: check.max_attempts,
                 freshness: check.freshness,
+                flap: check.flap,
             }
         })
         .collect()

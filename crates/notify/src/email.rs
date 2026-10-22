@@ -88,17 +88,24 @@ pub(crate) fn subject(n: &Notification) -> String {
             "[Watcher] {}: {} is {}",
             kind.as_str(),
             n.service_id(),
-            n.state
+            n.state_name()
         ),
     }
 }
 
 pub(crate) fn body(n: &Notification) -> String {
     let mut b = String::new();
-    let _ = match (n.kind, n.previous_state) {
+    let id = n.service_id();
+    let state = n.state_name();
+    let _ = match (n.kind, n.previous_state_name()) {
         (Kind::Test, _) => writeln!(b, "TEST"),
-        (_, Some(prev)) => writeln!(b, "{} is {} (was {prev})", n.service_id(), n.state),
-        (_, None) => writeln!(b, "{} is {}", n.service_id(), n.state),
+        (Kind::FlappingStart, _) => writeln!(
+            b,
+            "{id} is flapping ({state}); notifications are held back until it settles"
+        ),
+        (Kind::FlappingStop, _) => writeln!(b, "{id} stopped flapping ({state})"),
+        (_, Some(prev)) => writeln!(b, "{id} is {state} (was {prev})"),
+        (_, None) => writeln!(b, "{id} is {state}"),
     };
     b.push('\n');
     b.push_str(&n.output);
@@ -115,12 +122,15 @@ pub(crate) fn body(n: &Notification) -> String {
         format!("{} ({})", n.host, n.address)
     };
     let state = if n.kind == Kind::Problem && n.attempts > 1 {
-        format!("{}, confirmed after {} attempts", n.state, n.attempts)
+        format!("{state}, confirmed after {} attempts", n.attempts)
     } else {
-        n.state.to_string()
+        state.to_string()
     };
     let _ = writeln!(b, "Host:     {host}");
-    let _ = writeln!(b, "Service:  {}", n.service);
+    let _ = match n.host_check {
+        true => writeln!(b, "Check:    {} (host check, {})", n.service, n.state),
+        false => writeln!(b, "Service:  {}", n.service),
+    };
     let _ = writeln!(b, "State:    {state}");
     let _ = writeln!(b, "Time:     {}", humantime::format_rfc3339_seconds(n.time));
     if let Some(url) = &n.url {
@@ -141,6 +151,7 @@ mod tests {
             host: "web01".into(),
             address: "10.0.0.5".into(),
             service: "disk".into(),
+            host_check: false,
             state: State::Critical,
             previous_state: Some(State::Ok),
             attempts: 3,

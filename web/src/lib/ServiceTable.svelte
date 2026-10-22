@@ -78,7 +78,10 @@
 						<a href={serviceHref(s.host, s.service)}>{s.service}</a>
 						{#if s.passive}<span class="tag">passive</span>{/if}
 					</td>
-					<td><Status state={s.state} /></td>
+					<td class="nowrap">
+						<Status state={s.state} />
+						{#if s.flapping}<span class="tag flap" title="State changes too often; notifications held back">FLAPPING</span>{/if}
+					</td>
 					<td class="nowrap hide-narrow">{datetime(s.last_check)}</td>
 					<td class="nowrap hide-narrow">{since(s.last_change, live.now)}</td>
 					<td class="nowrap hide-narrow">

@@ -2,7 +2,9 @@
 //!
 //! A problem is a hard change to a non-OK state; a recovery is a hard
 //! change back to OK from a problem. Soft changes, the first OK result of a
-//! service and restored states never notify.
+//! service and restored states never notify. A host check notifies as the
+//! host: DOWN and UP, not OK to WARNING. While a service flaps, only the
+//! start and end of flapping notify.
 
 mod email;
 mod webhook;
@@ -14,7 +16,7 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 use watcher_config::{Config, Contact, Smtp};
-use watcher_core::{State, StateType};
+use watcher_core::{HostState, State, StateType};
 use watcher_exec::scheduler::Event;
 
 pub use email::Mailer;
@@ -34,6 +36,9 @@ pub enum Error {
 pub enum Kind {
     Problem,
     Recovery,
+    /// The state started changing too often; problems are held back.
+    FlappingStart,
+    FlappingStop,
     /// Sent by `watcher notify test`.
     Test,
 }
@@ -43,6 +48,8 @@ impl Kind {
         match self {
             Kind::Problem => "PROBLEM",
             Kind::Recovery => "RECOVERY",
+            Kind::FlappingStart => "FLAPPINGSTART",
+            Kind::FlappingStop => "FLAPPINGSTOP",
             Kind::Test => "TEST",
         }
     }
@@ -55,6 +62,9 @@ pub struct Notification {
     pub host: String,
     pub address: String,
     pub service: String,
+    /// About the host: `service` is its host check, and the host state
+    /// follows from `state`.
+    pub host_check: bool,
     pub state: State,
     /// The state before, when it differs (not set when a soft problem was
     /// just confirmed).
@@ -77,6 +87,7 @@ impl Notification {
             host: "watcher".into(),
             address: "watcher".into(),
             service: "test".into(),
+            host_check: false,
             state: State::Ok,
             previous_state: None,
             attempts: 1,
@@ -87,9 +98,28 @@ impl Notification {
         }
     }
 
-    /// `web01/disk`
+    /// `web01/disk`, or `web01` for a host notification.
     pub fn service_id(&self) -> String {
-        format!("{}/{}", self.host, self.service)
+        match self.host_check {
+            true => self.host.clone(),
+            false => format!("{}/{}", self.host, self.service),
+        }
+    }
+
+    /// `CRITICAL`, or `DOWN` for a host notification.
+    pub fn state_name(&self) -> &'static str {
+        self.name(self.state)
+    }
+
+    pub fn previous_state_name(&self) -> Option<&'static str> {
+        self.previous_state.map(|s| self.name(s))
+    }
+
+    fn name(&self, state: State) -> &'static str {
+        match self.host_check {
+            true => HostState::from_check(state).as_str(),
+            false => state.as_str(),
+        }
     }
 }
 
@@ -103,16 +133,44 @@ pub fn decide<'a>(
     config: &'a Config,
     public_url: Option<&str>,
 ) -> Option<(Notification, Vec<&'a Contact>)> {
-    let change = event.change.filter(|c| c.hard)?;
-    let (to, _) = change.to;
-    let from = change.from.map(|(state, _)| state);
-    let kind = match (to, from) {
-        (State::Ok, Some(prev)) if prev != State::Ok => Kind::Recovery,
-        (State::Ok, _) => return None,
-        _ => Kind::Problem,
+    let service = config.services.iter().find(|s| s.id == event.id)?;
+    let host_check = config.is_host_check(service);
+    let to = event.state.state;
+    // The hard state before: soft problems always start from a hard OK.
+    let before = event.change.and_then(|c| c.from).map(|(state, t)| {
+        if t == StateType::Soft {
+            State::Ok
+        } else {
+            state
+        }
+    });
+    let problem = |s: State| match host_check {
+        true => HostState::from_check(s) == HostState::Down,
+        false => s != State::Ok,
+    };
+    let kind = match event.flap {
+        Some(true) => Kind::FlappingStart,
+        Some(false) => Kind::FlappingStop,
+        // Flapping holds back problems and recoveries.
+        None if event.state.flapping => return None,
+        None => {
+            event.change.filter(|c| c.hard)?;
+            match (problem(to), before.map(problem)) {
+                (false, Some(true)) => Kind::Recovery,
+                (false, _) => return None,
+                // A host stays DOWN from CRITICAL to UNKNOWN.
+                (true, Some(true)) if host_check => return None,
+                (true, _) => Kind::Problem,
+            }
+        }
+    };
+    let previous = match (event.flap, host_check) {
+        (Some(_), _) => None,
+        (None, true) => before,
+        // A just confirmed problem has no other state to name.
+        (None, false) => event.change.and_then(|c| c.from).map(|(s, _)| s),
     };
 
-    let service = config.services.iter().find(|s| s.id == event.id)?;
     let check = config.check(service);
     let host = config.host(service);
     let contacts: Vec<&Contact> = check
@@ -137,8 +195,9 @@ pub fn decide<'a>(
         host: host.name.clone(),
         address: host.address.clone(),
         service: check.name.clone(),
+        host_check,
         state: to,
-        previous_state: from.filter(|f| *f != to),
+        previous_state: previous.filter(|p| *p != to),
         attempts: match event.state.state_type {
             StateType::Hard => event.state.attempt,
             StateType::Soft => 1,
@@ -277,7 +336,7 @@ pub async fn run(
                             contact.name,
                             n.kind.as_str(),
                             n.service_id(),
-                            n.state
+                            n.state_name()
                         ),
                         Err(err) => warn!(
                             "notifying {} about {} failed: {err}",
@@ -322,6 +381,16 @@ notify = ["ops"]
 name = "quiet"
 hosts = ["web 01"]
 command = "true"
+
+[[host]]
+name = "router"
+check = "ping"
+
+[[check]]
+name = "ping"
+hosts = ["router"]
+command = "true"
+notify = ["ops"]
 "#,
         )
         .unwrap();
@@ -330,8 +399,8 @@ command = "true"
         config
     }
 
-    /// Runs results through the state machine (max 3 attempts) and returns
-    /// the events.
+    /// Runs results through the state machine (max 3 attempts, flap
+    /// detection on) and returns the events.
     fn events(id: &str, results: &[(i32, &str)]) -> Vec<Event> {
         let mut state: Option<ServiceState> = None;
         results
@@ -352,12 +421,15 @@ command = "true"
                         Some(c)
                     }
                 };
+                let s = state.as_mut().unwrap();
+                let flap = s.detect_flapping(Some(watcher_core::FlapThresholds::DEFAULT));
                 Event {
                     id: id.into(),
                     result,
                     duration: Duration::ZERO,
-                    state: state.clone().unwrap(),
+                    state: s.clone(),
                     change,
+                    flap,
                 }
             })
             .collect()
@@ -424,6 +496,78 @@ command = "true"
         let evs = events("web 01/quiet", &[(2, "CRIT"), (2, "CRIT"), (2, "CRIT")]);
         assert!(evs[2].change.unwrap().hard);
         assert!(decide(&evs[2], &config, None).is_none());
+    }
+
+    #[test]
+    fn host_checks_notify_as_the_host() {
+        let config = config();
+        let sent = |results: &[(i32, &str)]| -> Vec<_> {
+            events("router/ping", results)
+                .iter()
+                .filter_map(|e| decide(e, &config, None))
+                .map(|(n, _)| {
+                    (
+                        n.kind,
+                        n.service_id(),
+                        n.state_name(),
+                        n.previous_state_name(),
+                    )
+                })
+                .collect()
+        };
+        // WARNING is still UP.
+        let warning = [
+            (0, "PING OK"),
+            (1, "PING WARNING"),
+            (1, "W"),
+            (1, "W"),
+            (0, "OK"),
+        ];
+        assert_eq!(sent(&warning), []);
+        // CRITICAL to UNKNOWN is still DOWN.
+        let down = [
+            (0, "PING OK"),
+            (2, "PING CRITICAL"),
+            (2, "C"),
+            (2, "C"),
+            (3, "U"),
+            (0, "OK"),
+        ];
+        assert_eq!(
+            sent(&down),
+            [
+                (Kind::Problem, "router".into(), "DOWN", Some("UP")),
+                (Kind::Recovery, "router".into(), "UP", Some("DOWN")),
+            ]
+        );
+    }
+
+    #[test]
+    fn flapping_holds_back_problems() {
+        let config = config();
+        let mut results = vec![(0, "OK")];
+        for _ in 0..6 {
+            results.extend([(2, "CRIT"), (2, "CRIT"), (2, "CRIT"), (0, "OK")]);
+        }
+        results.extend([(0, "OK"); 21]);
+        let evs = events("web 01/disk", &results);
+        let kinds: Vec<Kind> = evs
+            .iter()
+            .filter_map(|e| decide(e, &config, None))
+            .map(|(n, _)| n.kind)
+            .collect();
+        // Hard problems and recoveries until flapping starts, then nothing
+        // until it ends.
+        let start = kinds
+            .iter()
+            .position(|k| *k == Kind::FlappingStart)
+            .unwrap();
+        assert!(
+            kinds[..start]
+                .iter()
+                .all(|k| matches!(k, Kind::Problem | Kind::Recovery))
+        );
+        assert_eq!(&kinds[start + 1..], [Kind::FlappingStop]);
     }
 
     #[test]

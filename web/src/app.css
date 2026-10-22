@@ -351,3 +351,16 @@ a.btn:hover {
 		display: none;
 	}
 }
+
+/* Flapping marker next to a status */
+.tag.flap {
+	margin-left: 4px;
+	color: var(--unknown);
+	border-color: var(--unknown);
+	font-weight: 600;
+}
+
+/* Host rows: DOWN is tinted like CRITICAL */
+table.grid tbody tr[data-host='down'] td {
+	background: var(--tint-crit);
+}

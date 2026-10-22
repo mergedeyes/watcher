@@ -174,6 +174,17 @@
 											/>
 										{/if}
 										{#if f.help}<div class="help">{f.help}</div>{/if}
+										{#if f.suggestOne}
+											{@const current = String(values[f.key] ?? '').trim()}
+											{@const free = names(f.suggestOne).filter((n) => n !== current)}
+											{#if free.length > 0}
+												<div class="suggest">
+													{#each free.slice(0, 20) as n (n)}
+														<button type="button" class="tag" onclick={() => (values![f.key] = n)}>{n}</button>
+													{/each}
+												</div>
+											{/if}
+										{/if}
 										{#if f.suggest}
 											{@const chosen = items(String(values[f.key] ?? ''))}
 											{@const free = names(f.suggest).filter((n) => !chosen.includes(n))}

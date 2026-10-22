@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use toml::{Spanned, Table, Value};
-use watcher_core::{Format, ThresholdSpec};
+use watcher_core::{FlapThresholds, Format, ThresholdSpec};
 use watcher_exec::CommandLine;
 
 /// Loads and compiles all `*.toml` files below `dir`.
@@ -235,6 +235,19 @@ impl RawObjects {
         }
 
         config.services = services(&config, sink);
+        for host in &config.hosts {
+            if let Some(check) = &host.check
+                && host.enabled
+                && config.host_check(host).is_none()
+            {
+                let msg = if config.checks.iter().any(|c| c.name == *check) {
+                    format!("host {:?}: check {check:?} does not apply to it", host.name)
+                } else {
+                    format!("host {:?}: unknown check {check:?}", host.name)
+                };
+                sink.error(Some(&host.origin), msg);
+            }
+        }
 
         for raw in &self.sinks {
             let Some(s) = self.sink(raw, sink) else {
@@ -323,6 +336,7 @@ impl RawObjects {
         }
         Some(Host {
             address: def.address.unwrap_or_else(|| def.name.clone()),
+            check: def.check,
             name: def.name,
             node: def.node,
             tags: def.tags,
@@ -397,6 +411,15 @@ impl RawObjects {
         if max_attempts == 0 {
             error("max_attempts must be at least 1".into());
         }
+        let flap = FlapThresholds {
+            low: def.flap_low.unwrap_or(FlapThresholds::DEFAULT.low),
+            high: def.flap_high.unwrap_or(FlapThresholds::DEFAULT.high),
+        };
+        if !(0.0..=100.0).contains(&flap.low) || !(0.0..=100.0).contains(&flap.high) {
+            error("flap_low and flap_high are percentages (0 to 100)".into());
+        } else if flap.low > flap.high {
+            error("flap_low must not be above flap_high".into());
+        }
 
         let apply_to = match def.apply_to.as_deref().map(Expr::parse).transpose() {
             Ok(expr) => expr,
@@ -432,6 +455,7 @@ impl RawObjects {
             max_attempts,
             timeout,
             freshness: def.freshness,
+            flap: def.flap_detection.then_some(flap),
             thresholds: def.thresholds,
             notify: def.notify,
             vars: def.vars,
@@ -660,6 +684,7 @@ fn valid_name(name: &str) -> Result<(), &'static str> {
 struct HostDef {
     name: String,
     address: Option<String>,
+    check: Option<String>,
     node: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
@@ -698,6 +723,10 @@ struct CheckDef {
     notify: Vec<String>,
     #[serde(default, deserialize_with = "vars")]
     vars: BTreeMap<String, String>,
+    #[serde(default = "yes")]
+    flap_detection: bool,
+    flap_low: Option<f64>,
+    flap_high: Option<f64>,
     #[serde(default = "yes")]
     enabled: bool,
 }
@@ -1189,5 +1218,72 @@ buffer.on_full = "block"
         assert_eq!(loaded.config.services[0].id, "a/ok");
         assert!(load_dir(&dir.join("missing")).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn host_checks_must_apply_to_the_host() {
+        let (config, diags) = compile(&[(
+            "h.toml",
+            r#"
+[template.pinged]
+check = "ping"
+
+[[host]]
+name = "a"
+use = "pinged"
+
+[[host]]
+name = "b"
+check = "ping"
+tags = ["no-ping"]
+
+[[host]]
+name = "c"
+check = "nope"
+
+[[check]]
+name = "ping"
+apply_to = 'not (host.tags contains "no-ping")'
+command = "check_ping -H $host.address$"
+"#,
+        )]);
+        assert_eq!(
+            messages(&diags),
+            [
+                "h.toml:9: error: host \"b\": check \"ping\" does not apply to it",
+                "h.toml:14: error: host \"c\": unknown check \"nope\"",
+            ]
+        );
+        let a = &config.hosts[0];
+        assert_eq!(config.host_check(a).unwrap().id, "a/ping");
+        assert!(config.is_host_check(config.host_check(a).unwrap()));
+    }
+
+    #[test]
+    fn flap_settings() {
+        let check = |extra: &str| {
+            let text = format!(
+                "[[host]]\nname = \"a\"\n[[check]]\nname = \"x\"\nhosts = [\"a\"]\ncommand = \"true\"\n{extra}"
+            );
+            let (config, diags) = compile(&[("c.toml", text.as_str())]);
+            (config.checks.first().map(|c| c.flap), messages(&diags))
+        };
+        assert_eq!(check(""), (Some(Some(FlapThresholds::DEFAULT)), vec![]));
+        assert_eq!(check("flap_detection = false"), (Some(None), vec![]));
+        assert_eq!(
+            check("flap_low = 10\nflap_high = 30").0,
+            Some(Some(FlapThresholds {
+                low: 10.0,
+                high: 30.0
+            }))
+        );
+        assert_eq!(
+            check("flap_low = 40").1,
+            ["c.toml:3: error: check \"x\": flap_low must not be above flap_high"]
+        );
+        assert_eq!(
+            check("flap_high = 120").1,
+            ["c.toml:3: error: check \"x\": flap_low and flap_high are percentages (0 to 100)"]
+        );
     }
 }

@@ -216,11 +216,15 @@ impl Running<'_> {
     fn record(&mut self, event: Event, all: bool) {
         print_event(&event, all);
         self.hub.record(&event);
-        if event.change.is_some_and(|c| c.hard) && self.notify_tx.try_send(event.clone()).is_err() {
-            warn!(
-                "notification queue is full; dropped the notification for {}",
-                event.id
-            );
+        if event.change.is_some_and(|c| c.hard) || event.flap.is_some() {
+            if self.hub.host_down(&event.id) {
+                info!("no notification for {}: host is DOWN", event.id);
+            } else if self.notify_tx.try_send(event.clone()).is_err() {
+                warn!(
+                    "notification queue is full; dropped the notification for {}",
+                    event.id
+                );
+            }
         }
         let record = Record {
             service: event.id,
@@ -405,6 +409,14 @@ fn load(conf_dir: &Path) -> Option<Config> {
 
 fn print_event(event: &Event, all: bool) {
     let s = &event.state;
+    if let Some(started) = event.flap {
+        let what = if started { "started" } else { "stopped" };
+        info!(
+            "! {:<28} flapping {what} ({:.1}% state change)",
+            event.id,
+            s.history.percent_change()
+        );
+    }
     let kind = match s.state_type {
         StateType::Hard => "HARD".to_string(),
         StateType::Soft => format!("SOFT {}", s.attempt),

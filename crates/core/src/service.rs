@@ -25,6 +25,67 @@ pub struct ServiceState {
     pub last_change: SystemTime,
     /// When the state last changed as a hard change.
     pub last_hard_change: SystemTime,
+    /// Recent results, for flap detection.
+    #[serde(default)]
+    pub history: FlapHistory,
+    /// The state changes too often; see [`ServiceState::detect_flapping`].
+    #[serde(default)]
+    pub flapping: bool,
+}
+
+/// How many results flap detection looks at (Nagios: 21, so 20 possible
+/// changes).
+pub const FLAP_WINDOW: u8 = 21;
+
+/// The last [`FLAP_WINDOW`] states, 2 bits each, newest in the lowest bits.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct FlapHistory {
+    pub bits: u64,
+    pub len: u8,
+}
+
+impl FlapHistory {
+    pub fn push(&mut self, state: State) {
+        let mask = (1u64 << (2 * FLAP_WINDOW)) - 1;
+        self.bits = ((self.bits << 2) | state.exit_code() as u64) & mask;
+        self.len = (self.len + 1).min(FLAP_WINDOW);
+    }
+
+    /// The `i`-th newest state's code.
+    fn get(&self, i: u8) -> u64 {
+        (self.bits >> (2 * i)) & 3
+    }
+
+    /// Percent state change over the window, 0 to 100. As in Nagios,
+    /// recent changes weigh more: from 0.8 for the oldest possible change
+    /// to 1.2 for the newest.
+    pub fn percent_change(&self) -> f64 {
+        let changes = f64::from(FLAP_WINDOW - 1);
+        let mut total = 0.0;
+        for i in 1..self.len {
+            if self.get(i) != self.get(i - 1) {
+                // 0 for the oldest change in a full window, 19 for the newest.
+                let age = f64::from(FLAP_WINDOW - 1 - i);
+                total += 0.8 + age * 0.4 / (changes - 1.0);
+            }
+        }
+        total * 100.0 / changes
+    }
+}
+
+/// Percent state change that starts (`high`) and ends (`low`) flapping.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FlapThresholds {
+    pub low: f64,
+    pub high: f64,
+}
+
+impl FlapThresholds {
+    /// The Nagios defaults for services.
+    pub const DEFAULT: FlapThresholds = FlapThresholds {
+        low: 5.0,
+        high: 20.0,
+    };
 }
 
 /// A state change caused by a check result.
@@ -46,14 +107,17 @@ impl ServiceState {
         } else {
             StateType::Soft
         };
-        let s = ServiceState {
+        let mut s = ServiceState {
             state,
             state_type,
             attempt: 1,
             last_check: now,
             last_change: now,
             last_hard_change: now,
+            history: FlapHistory::default(),
+            flapping: false,
         };
+        s.history.push(state);
         let change = StateChange {
             from: None,
             to: (state, state_type),
@@ -72,6 +136,7 @@ impl ServiceState {
     ) -> Option<StateChange> {
         let before = (self.state, self.state_type);
         self.last_check = now;
+        self.history.push(state);
 
         let hard = match (self.state_type, state) {
             // Recovery. From a hard problem this is a hard change; from a soft
@@ -115,6 +180,28 @@ impl ServiceState {
             from: Some(before),
             to: after,
             hard,
+        })
+    }
+
+    /// Updates [`flapping`](Self::flapping) after a result: it starts when the
+    /// percent state change reaches `high` and ends below `low`. Returns
+    /// `Some(true)` when flapping starts, `Some(false)` when it ends.
+    /// `None` thresholds turn detection off.
+    pub fn detect_flapping(&mut self, thresholds: Option<FlapThresholds>) -> Option<bool> {
+        let flapping = match thresholds {
+            None => false,
+            Some(t) => {
+                let percent = self.history.percent_change();
+                if self.flapping {
+                    percent >= t.low
+                } else {
+                    percent >= t.high
+                }
+            }
+        };
+        (flapping != self.flapping).then(|| {
+            self.flapping = flapping;
+            flapping
         })
     }
 
@@ -201,5 +288,67 @@ mod tests {
         let (s, change) = ServiceState::first(Critical, 3, T);
         assert_eq!((s.state_type, change.hard), (Soft, false));
         assert!(s.retrying());
+    }
+
+    fn history(states: &[State]) -> FlapHistory {
+        let mut h = FlapHistory::default();
+        for &s in states {
+            h.push(s);
+        }
+        h
+    }
+
+    #[test]
+    fn percent_change_weighs_recent_changes_more() {
+        assert_eq!(history(&[Ok; 30]).percent_change(), 0.0);
+        // Every result differs: all 20 changes, weights 0.8..=1.2 average 1.
+        let alternating: Vec<State> = (0..21)
+            .map(|i| if i % 2 == 0 { Ok } else { Critical })
+            .collect();
+        assert!((history(&alternating).percent_change() - 100.0).abs() < 1e-9);
+        // One change, newest vs. oldest position in a full window.
+        let mut newest = vec![Ok; 20];
+        newest.push(Critical);
+        let mut oldest = vec![Ok];
+        oldest.extend([Critical; 20]);
+        assert!((history(&newest).percent_change() - 6.0).abs() < 1e-9);
+        assert!((history(&oldest).percent_change() - 4.0).abs() < 1e-9);
+        // Older results fall out of the window.
+        let mut gone = oldest.clone();
+        gone.push(Critical);
+        assert_eq!(history(&gone).percent_change(), 0.0);
+    }
+
+    #[test]
+    fn flapping_starts_high_and_ends_low() {
+        let t = Some(FlapThresholds::DEFAULT);
+        let (mut s, _) = ServiceState::first(Ok, 1, T);
+        let mut started = None;
+        for (i, state) in [Critical, Ok, Critical, Ok, Critical]
+            .into_iter()
+            .enumerate()
+        {
+            s.apply(state, 1, T);
+            if s.detect_flapping(t) == Some(true) {
+                started = Some(i);
+            }
+        }
+        // 4 changes of weight ~1.2 = 24% >= 20%; 3 are 18%.
+        assert_eq!(started, Some(3));
+        assert!(s.flapping);
+        let mut ended = None;
+        for i in 0..21 {
+            s.apply(Critical, 1, T);
+            if s.detect_flapping(t) == Some(false) {
+                ended = Some(i);
+                break;
+            }
+        }
+        assert!(ended.is_some());
+        assert!(s.history.percent_change() < 5.0);
+        // Turning detection off ends flapping.
+        s.flapping = true;
+        assert_eq!(s.detect_flapping(None), Some(false));
+        assert_eq!(s.detect_flapping(None), None);
     }
 }

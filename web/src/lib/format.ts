@@ -1,14 +1,21 @@
-import type { State } from './api.ts';
+import type { HostState, State } from './api.ts';
 
-const STATE_NAMES: Record<State, string> = {
+const STATE_NAMES: Record<State | HostState, string> = {
 	ok: 'OK',
 	warning: 'WARNING',
 	critical: 'CRITICAL',
-	unknown: 'UNKNOWN'
+	unknown: 'UNKNOWN',
+	up: 'UP',
+	down: 'DOWN'
 };
 
-export function stateName(state: State | null): string {
+export function stateName(state: State | HostState | null): string {
 	return state ? STATE_NAMES[state] : 'PENDING';
+}
+
+/** For sorting hosts: DOWN first, then PENDING, then UP. */
+export function hostSeverity(state: HostState | null): number {
+	return state === 'down' ? 2 : state === null ? 1 : 0;
 }
 
 /** Severity for sorting: CRITICAL first, as in the hub (OK < WARNING < UNKNOWN < CRITICAL). */

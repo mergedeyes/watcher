@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 use watcher_config::{Config, Host, Service};
-use watcher_core::{MetricResult, State, StateType};
+use watcher_core::{HostState, MetricResult, State, StateType};
 
 /// RFC 3339 with milliseconds, e.g. `2026-10-22T10:00:00.123Z`.
 pub fn time(t: SystemTime) -> String {
@@ -26,6 +26,8 @@ pub struct ServiceView {
     pub last_change: Option<String>,
     pub output: String,
     pub passive: bool,
+    /// The state changes too often; problem notifications are held back.
+    pub flapping: bool,
 }
 
 impl ServiceView {
@@ -42,6 +44,7 @@ impl ServiceView {
             last_change: live.map(|l| time(l.state.last_change)),
             output: live.map(|l| l.output.clone()).unwrap_or_default(),
             passive: check.command.is_none(),
+            flapping: live.is_some_and(|l| l.state.flapping),
         }
     }
 }
@@ -57,6 +60,10 @@ pub struct ServiceDetail {
     pub duration_ms: Option<f64>,
     /// Metrics of the last result; empty after a restart until the next check.
     pub metrics: Vec<MetricResult>,
+    /// Weighted share of state changes in the last 21 results, 0 to 100.
+    pub percent_change: Option<f64>,
+    /// This service gives its host its UP/DOWN state.
+    pub host_check: bool,
     pub check: CheckView,
 }
 
@@ -68,6 +75,9 @@ pub struct CheckView {
     pub retry_interval_s: f64,
     pub timeout_s: f64,
     pub freshness_s: Option<f64>,
+    /// Flap detection thresholds in percent; `None` when off.
+    pub flap_low: Option<f64>,
+    pub flap_high: Option<f64>,
     /// Where the check is defined, `file:line`.
     pub origin: String,
 }
@@ -86,12 +96,16 @@ impl ServiceDetail {
                 .and_then(|l| l.result.as_ref())
                 .map(|r| r.metrics.clone())
                 .unwrap_or_default(),
+            percent_change: live.map(|l| l.state.history.percent_change()),
+            host_check: config.is_host_check(service),
             check: CheckView {
                 command: service.command.as_ref().map(ToString::to_string),
                 interval_s: check.interval.as_secs_f64(),
                 retry_interval_s: check.retry_interval.as_secs_f64(),
                 timeout_s: check.timeout.as_secs_f64(),
                 freshness_s: check.freshness.map(|f| f.as_secs_f64()),
+                flap_low: check.flap.map(|f| f.low),
+                flap_high: check.flap.map(|f| f.high),
                 origin: check.origin.to_string(),
             },
         }
@@ -128,12 +142,25 @@ pub struct HostView {
     pub tags: Vec<String>,
     pub vars: BTreeMap<String, String>,
     pub enabled: bool,
+    /// From the host check; UP without one. `None` (null) while the host
+    /// check is pending.
+    pub state: Option<HostState>,
+    pub state_type: Option<StateType>,
+    pub attempt: Option<u32>,
+    pub max_attempts: Option<u32>,
+    pub last_check: Option<String>,
+    pub last_change: Option<String>,
+    pub output: String,
+    pub flapping: bool,
+    /// Name of the host check, if there is one.
+    pub check: Option<String>,
     /// The worst state of the host's services; `None` if all are pending.
-    pub state: Option<State>,
+    pub worst: Option<State>,
     pub services: Counts,
 }
 
 impl HostView {
+    /// `services` are the host's services, including its host check.
     pub fn new(host: &Host, services: &[&ServiceView]) -> Self {
         let mut counts = Counts::default();
         let mut worst: Option<State> = None;
@@ -143,6 +170,19 @@ impl HostView {
                 worst = Some(worst.map_or(state, |w| w.worst(state)));
             }
         }
+        let check = host
+            .check
+            .as_ref()
+            .and_then(|name| services.iter().find(|s| s.service == *name));
+        let state = match (&host.check, check) {
+            (None, _) => Some(HostState::Up),
+            (Some(_), view) => view.and_then(|v| v.state).map(HostState::from_check),
+        };
+        // UP is confirmed; a DOWN takes its attempts from the check.
+        let state_type = match state {
+            Some(HostState::Up) => Some(StateType::Hard),
+            _ => check.and_then(|v| v.state_type),
+        };
         HostView {
             name: host.name.clone(),
             address: host.address.clone(),
@@ -150,7 +190,16 @@ impl HostView {
             tags: host.tags.clone(),
             vars: host.vars.clone(),
             enabled: host.enabled,
-            state: worst,
+            state,
+            state_type,
+            attempt: check.and_then(|v| v.attempt),
+            max_attempts: check.map(|v| v.max_attempts),
+            last_check: check.and_then(|v| v.last_check.clone()),
+            last_change: check.and_then(|v| v.last_change.clone()),
+            output: check.map(|v| v.output.clone()).unwrap_or_default(),
+            flapping: check.is_some_and(|v| v.flapping),
+            check: host.check.clone(),
+            worst,
             services: counts,
         }
     }

@@ -140,20 +140,23 @@ async fn write_tx(
     }
     sqlx::query(
         "INSERT INTO service_state (service_id, state, state_type, attempt, last_check,
-                                    last_change, last_hard_change, output, long_output, duration)
+                                    last_change, last_hard_change, output, long_output, duration,
+                                    history, history_len, flapping)
          SELECT u.id, u.state, u.state_type, u.attempt, to_timestamp(u.last_check),
                 to_timestamp(u.last_change), to_timestamp(u.last_hard_change),
-                u.output, u.long_output, u.duration
+                u.output, u.long_output, u.duration, u.history, u.history_len, u.flapping
          FROM UNNEST($1::int[], $2::text[], $3::text[], $4::int[], $5::float8[],
-                     $6::float8[], $7::float8[], $8::text[], $9::text[], $10::float8[])
+                     $6::float8[], $7::float8[], $8::text[], $9::text[], $10::float8[],
+                     $11::int8[], $12::int2[], $13::bool[])
               AS u(id, state, state_type, attempt, last_check, last_change,
-                   last_hard_change, output, long_output, duration)
+                   last_hard_change, output, long_output, duration, history, history_len, flapping)
          ON CONFLICT (service_id) DO UPDATE SET
              state = EXCLUDED.state, state_type = EXCLUDED.state_type,
              attempt = EXCLUDED.attempt, last_check = EXCLUDED.last_check,
              last_change = EXCLUDED.last_change, last_hard_change = EXCLUDED.last_hard_change,
              output = EXCLUDED.output, long_output = EXCLUDED.long_output,
-             duration = EXCLUDED.duration",
+             duration = EXCLUDED.duration, history = EXCLUDED.history,
+             history_len = EXCLUDED.history_len, flapping = EXCLUDED.flapping",
     )
     .bind(&st.ids)
     .bind(&st.states)
@@ -165,6 +168,9 @@ async fn write_tx(
     .bind(&st.output)
     .bind(&st.long_output)
     .bind(&st.duration)
+    .bind(&st.history)
+    .bind(&st.history_len)
+    .bind(&st.flapping)
     .execute(&mut *conn)
     .await?;
 
@@ -263,6 +269,9 @@ struct StateRows {
     output: Vec<String>,
     long_output: Vec<String>,
     duration: Vec<f64>,
+    history: Vec<i64>,
+    history_len: Vec<i16>,
+    flapping: Vec<bool>,
 }
 
 impl StateRows {
@@ -278,6 +287,10 @@ impl StateRows {
         self.output.push(clean(&r.result.message));
         self.long_output.push(clean(&r.result.long_output));
         self.duration.push(r.duration.as_secs_f64());
+        // 42 bits: fits.
+        self.history.push(r.state.history.bits as i64);
+        self.history_len.push(i16::from(r.state.history.len));
+        self.flapping.push(r.state.flapping);
     }
 }
 

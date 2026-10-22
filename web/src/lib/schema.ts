@@ -28,6 +28,8 @@ export interface Field {
 	default?: boolean;
 	/** Suggestions for `list` fields: names of other objects. */
 	suggest?: Kind;
+	/** Suggestions for a single name. */
+	suggestOne?: Kind;
 }
 
 export interface Group {
@@ -41,6 +43,7 @@ const VARS: Field = { key: 'vars', label: 'Variables', type: 'vars', help: '$hos
 
 const HOST: Field[] = [
 	{ key: 'address', label: 'Address', type: 'text', placeholder: 'defaults to name' },
+	{ key: 'check', label: 'Host Check', type: 'text', suggestOne: 'check', help: 'gives UP/DOWN; none: always UP' },
 	{ key: 'tags', label: 'Tags', type: 'list', help: 'comma-separated' },
 	{ key: 'node', label: 'Node', type: 'text', placeholder: 'local' }
 ];
@@ -59,7 +62,10 @@ const SCHEDULE: Field[] = [
 	{ key: 'retry_interval', label: 'Retry Interval', type: 'duration', placeholder: 'min(interval, 1m)' },
 	{ key: 'max_attempts', label: 'Max Attempts', type: 'int', placeholder: '3 (passive: 1)' },
 	{ key: 'timeout', label: 'Timeout', type: 'duration', placeholder: '60s' },
-	{ key: 'freshness', label: 'Freshness', type: 'duration', placeholder: 'passive only, e.g. 26h' }
+	{ key: 'freshness', label: 'Freshness', type: 'duration', placeholder: 'passive only, e.g. 26h' },
+	{ key: 'flap_detection', label: 'Flap Detection', type: 'bool', default: true },
+	{ key: 'flap_high', label: 'Flap Start %', type: 'int', placeholder: '20' },
+	{ key: 'flap_low', label: 'Flap Stop %', type: 'int', placeholder: '5' }
 ];
 
 const ALERTING: Field[] = [
@@ -192,7 +198,8 @@ export function fromForm(kind: Kind, raw: Record<string, unknown>, values: FormV
 				break;
 			case 'int': {
 				const text = String(v ?? '').trim();
-				next = text === '' ? undefined : Number.isInteger(Number(text)) ? Number(text) : text;
+				// Not a number: sent as text, so the server reports it.
+				next = text === '' ? undefined : Number.isFinite(Number(text)) ? Number(text) : text;
 				break;
 			}
 			case 'vars': {

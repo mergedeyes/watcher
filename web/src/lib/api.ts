@@ -1,6 +1,7 @@
 // Types and calls for the hub API (/api/v1). Mirrors crates/hub/src/view.rs.
 
 export type State = 'ok' | 'warning' | 'critical' | 'unknown';
+export type HostState = 'up' | 'down';
 export type StateType = 'soft' | 'hard';
 
 export interface ServiceView {
@@ -15,6 +16,8 @@ export interface ServiceView {
 	last_change: string | null;
 	output: string;
 	passive: boolean;
+	/** The state changes too often; problem notifications are held back. */
+	flapping: boolean;
 }
 
 export interface Counts {
@@ -32,7 +35,19 @@ export interface HostView {
 	tags: string[];
 	vars: Record<string, string>;
 	enabled: boolean;
-	state: State | null;
+	/** From the host check; 'up' without one; null while the host check is pending. */
+	state: HostState | null;
+	state_type: StateType | null;
+	attempt: number | null;
+	max_attempts: number | null;
+	last_check: string | null;
+	last_change: string | null;
+	output: string;
+	flapping: boolean;
+	/** Name of the host check. */
+	check: string | null;
+	/** Worst service state; null if all are pending. */
+	worst: State | null;
 	services: Counts;
 }
 
@@ -54,12 +69,19 @@ export interface ServiceDetail extends ServiceView {
 	long_output: string;
 	duration_ms: number | null;
 	metrics: Metric[];
+	/** Weighted state changes in the last 21 results, 0-100. */
+	percent_change: number | null;
+	/** Gives the host its UP/DOWN state. */
+	host_check: boolean;
 	check: {
 		command: string | null;
 		interval_s: number;
 		retry_interval_s: number;
 		timeout_s: number;
 		freshness_s: number | null;
+		/** Flap detection thresholds in percent; null when off. */
+		flap_low: number | null;
+		flap_high: number | null;
 		origin: string;
 	};
 }

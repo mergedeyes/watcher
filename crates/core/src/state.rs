@@ -78,6 +78,37 @@ impl fmt::Display for State {
     }
 }
 
+/// State of a host, from its host check (Nagios semantics).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HostState {
+    Up,
+    Down,
+}
+
+impl HostState {
+    /// OK and WARNING mean UP; CRITICAL and UNKNOWN mean DOWN.
+    pub fn from_check(state: State) -> Self {
+        match state {
+            State::Ok | State::Warning => HostState::Up,
+            State::Critical | State::Unknown => HostState::Down,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HostState::Up => "UP",
+            HostState::Down => "DOWN",
+        }
+    }
+}
+
+impl fmt::Display for HostState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.pad(self.as_str())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
