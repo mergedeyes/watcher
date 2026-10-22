@@ -46,6 +46,8 @@ export interface HostView {
 	flapping: boolean;
 	/** Name of the host check. */
 	check: string | null;
+	/** The service whose graphs the host page shows. */
+	graph: string | null;
 	/** Worst service state; null if all are pending. */
 	worst: State | null;
 	services: Counts;

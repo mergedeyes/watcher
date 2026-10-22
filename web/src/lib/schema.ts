@@ -46,6 +46,7 @@ const VARS: Field = { key: 'vars', label: 'Variables', type: 'vars', help: '$hos
 const HOST: Field[] = [
 	{ key: 'address', label: 'Address', type: 'text', placeholder: 'defaults to name' },
 	{ key: 'check', label: 'Host Check', type: 'text', suggestOne: 'check', help: 'gives UP/DOWN; none: always UP' },
+	{ key: 'graph', label: 'Graph', type: 'text', suggestOne: 'check', help: 'host page graphs; default: Host Check' },
 	{ key: 'tags', label: 'Tags', type: 'list', help: 'comma-separated' },
 	{ key: 'node', label: 'Node', type: 'text', placeholder: 'local' }
 ];

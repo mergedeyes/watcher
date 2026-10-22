@@ -538,6 +538,7 @@ components:
         output: { type: string }
         flapping: { type: boolean }
         check: { type: [string, "null"], description: Host check name }
+        graph: { type: [string, "null"], description: "Service whose graphs the host page shows: `graph` of the host, or the host check" }
         worst: { oneOf: [{ $ref: "#/components/schemas/State" }, { type: "null" }], description: Worst service state }
         services: { $ref: "#/components/schemas/Counts" }
     Series:

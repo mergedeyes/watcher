@@ -247,6 +247,17 @@ impl RawObjects {
                 };
                 sink.error(Some(&host.origin), msg);
             }
+            // Only for display: a warning.
+            if let Some(graph) = &host.graph
+                && host.enabled
+                && !config
+                    .services
+                    .iter()
+                    .any(|s| config.host(s).name == host.name && config.check(s).name == *graph)
+            {
+                let msg = format!("host {:?}: graph: no service {graph:?} on it", host.name);
+                sink.warning(Some(&host.origin), msg);
+            }
         }
 
         for raw in &self.sinks {
@@ -337,6 +348,7 @@ impl RawObjects {
         Some(Host {
             address: def.address.unwrap_or_else(|| def.name.clone()),
             check: def.check,
+            graph: def.graph,
             name: def.name,
             node: def.node,
             tags: def.tags,
@@ -685,6 +697,7 @@ struct HostDef {
     name: String,
     address: Option<String>,
     check: Option<String>,
+    graph: Option<String>,
     node: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
@@ -1240,6 +1253,7 @@ tags = ["no-ping"]
 [[host]]
 name = "c"
 check = "nope"
+graph = "load"
 
 [[check]]
 name = "ping"
@@ -1252,10 +1266,12 @@ command = "check_ping -H $host.address$"
             [
                 "h.toml:9: error: host \"b\": check \"ping\" does not apply to it",
                 "h.toml:14: error: host \"c\": unknown check \"nope\"",
+                "h.toml:14: warning: host \"c\": graph: no service \"load\" on it",
             ]
         );
         let a = &config.hosts[0];
         assert_eq!(config.host_check(a).unwrap().id, "a/ping");
+        assert_eq!(a.graph_check(), Some("ping"));
         assert!(config.is_host_check(config.host_check(a).unwrap()));
     }
 
