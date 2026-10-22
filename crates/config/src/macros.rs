@@ -11,8 +11,8 @@
 use crate::{Check, Host};
 use watcher_exec::CommandLine;
 
-/// Expands macros in a check's command for one host.
-pub fn expand(check: &Check, host: &Host) -> Result<CommandLine, String> {
+/// Expands macros in `command` (of `check`) for one host.
+pub fn expand(command: &str, check: &Check, host: &Host) -> Result<CommandLine, String> {
     let lookup = |name: &str| -> Result<String, String> {
         let value = match name.split('.').collect::<Vec<_>>().as_slice() {
             ["host", "name"] | ["HOSTNAME"] => Some(host.name.clone()),
@@ -27,13 +27,12 @@ pub fn expand(check: &Check, host: &Host) -> Result<CommandLine, String> {
     };
 
     if check.shell {
-        let script = substitute(&check.command, |name| {
+        let script = substitute(command, |name| {
             lookup(name).map(|v| shell_words::quote(&v).into_owned())
         })?;
         Ok(CommandLine::Shell(script))
     } else {
-        let argv =
-            shell_words::split(&check.command).map_err(|e| format!("cannot split command: {e}"))?;
+        let argv = shell_words::split(command).map_err(|e| format!("cannot split command: {e}"))?;
         let argv = argv
             .iter()
             .map(|arg| substitute(arg, lookup))
@@ -107,6 +106,10 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
+    fn expand_check(check: &Check, host: &Host) -> Result<CommandLine, String> {
+        expand(check.command.as_deref().unwrap(), check, host)
+    }
+
     fn host() -> Host {
         Host {
             name: "web01".into(),
@@ -121,14 +124,14 @@ mod tests {
 
     fn check(command: &str, shell: bool) -> Check {
         let mut c = Check::for_tests("disk");
-        c.command = command.into();
+        c.command = Some(command.into());
         c.shell = shell;
         c
     }
 
     #[test]
     fn argv_mode_keeps_values_as_one_argument() {
-        let cmd = expand(
+        let cmd = expand_check(
             &check("check_ping -H $host.address$ -l '$host.vars.label$'", false),
             &host(),
         )
@@ -147,7 +150,7 @@ mod tests {
 
     #[test]
     fn shell_mode_quotes_values() {
-        let cmd = expand(
+        let cmd = expand_check(
             &check("echo $host.vars.label$ $HOSTNAME$ $HOME $$ $1$", true),
             &host(),
         )
@@ -160,9 +163,9 @@ mod tests {
 
     #[test]
     fn missing_and_unknown_macros_are_errors() {
-        let err = expand(&check("x $host.vars.port$", false), &host()).unwrap_err();
+        let err = expand_check(&check("x $host.vars.port$", false), &host()).unwrap_err();
         assert_eq!(err, "$host.vars.port$ is not set for host \"web01\"");
-        let err = expand(&check("x $host.adress$", false), &host()).unwrap_err();
+        let err = expand_check(&check("x $host.adress$", false), &host()).unwrap_err();
         assert_eq!(err, "unknown macro $host.adress$");
     }
 

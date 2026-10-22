@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+axum.workspace = true
 clap.workspace = true
 humantime.workspace = true
 serde.workspace = true
@@ -21,6 +22,7 @@ tracing-subscriber.workspace = true
 watcher-config.workspace = true
 watcher-core.workspace = true
 watcher-exec.workspace = true
+watcher-hub.workspace = true
 watcher-store.workspace = true
 
 [lints]

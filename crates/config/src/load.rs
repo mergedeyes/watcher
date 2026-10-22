@@ -315,17 +315,30 @@ impl RawObjects {
         if let Err(msg) = valid_name(&def.name) {
             error(msg.into());
         }
-        if def.command.trim().is_empty() {
-            error("command is empty".into());
-        } else if !def.shell {
-            if let Err(err) = shell_words::split(&def.command) {
-                error(format!("cannot split command: {err}"));
+        match (&def.command, def.passive) {
+            (None, false) => error("needs a command, or passive = true".into()),
+            (Some(_), true) => error("passive checks have no command".into()),
+            (None, true) => {}
+            (Some(command), false) => {
+                if command.trim().is_empty() {
+                    error("command is empty".into());
+                } else if !def.shell {
+                    if let Err(err) = shell_words::split(command) {
+                        error(format!("cannot split command: {err}"));
+                    }
+                }
+                for name in macros::names(command) {
+                    if !macros::is_known(name) {
+                        error(format!("unknown macro ${name}$"));
+                    }
+                }
             }
         }
-        for name in macros::names(&def.command) {
-            if !macros::is_known(name) {
-                error(format!("unknown macro ${name}$"));
-            }
+        if def.freshness.is_some() && !def.passive {
+            error("freshness only applies to passive checks".into());
+        }
+        if def.freshness.is_some_and(|f| f.is_zero()) {
+            error("freshness must be greater than 0".into());
         }
 
         let interval = def.interval.unwrap_or(Check::DEFAULT_INTERVAL);
@@ -341,7 +354,13 @@ impl RawObjects {
         if timeout.is_zero() {
             error("timeout must be greater than 0".into());
         }
-        let max_attempts = def.max_attempts.unwrap_or(Check::DEFAULT_MAX_ATTEMPTS);
+        // A passive result may come once a day: confirming a problem over
+        // several results would delay the alert by days.
+        let default_attempts = match def.passive {
+            true => 1,
+            false => Check::DEFAULT_MAX_ATTEMPTS,
+        };
+        let max_attempts = def.max_attempts.unwrap_or(default_attempts);
         if max_attempts == 0 {
             error("max_attempts must be at least 1".into());
         }
@@ -379,6 +398,7 @@ impl RawObjects {
             retry_interval,
             max_attempts,
             timeout,
+            freshness: def.freshness,
             thresholds: def.thresholds,
             notify: def.notify,
             vars: def.vars,
@@ -445,12 +465,17 @@ fn services(config: &Config, sink: &mut Sink) -> Vec<Service> {
                 continue;
             }
             matched += 1;
-            match macros::expand(check, host) {
+            let command = check
+                .command
+                .as_deref()
+                .map(|command| macros::expand(command, check, host))
+                .transpose();
+            match command {
                 Ok(command) => services.push(Service {
                     id: format!("{}/{}", host.name, check.name),
                     host: host_idx,
                     check: check_idx,
-                    check_hash: check_hash(&command, check.format),
+                    check_hash: check_hash(command.as_ref(), check.format),
                     command,
                 }),
                 Err(msg) => sink.error(
@@ -471,10 +496,11 @@ fn services(config: &Config, sink: &mut Sink) -> Vec<Service> {
 
 /// FNV-1a over the command and format: stable across builds and Rust
 /// versions, unlike `DefaultHasher`.
-fn check_hash(command: &CommandLine, format: Format) -> String {
+fn check_hash(command: Option<&CommandLine>, format: Format) -> String {
     let text = match command {
-        CommandLine::Argv(argv) => format!("argv\0{}\0{format}", argv.join("\0")),
-        CommandLine::Shell(script) => format!("shell\0{script}\0{format}"),
+        Some(CommandLine::Argv(argv)) => format!("argv\0{}\0{format}", argv.join("\0")),
+        Some(CommandLine::Shell(script)) => format!("shell\0{script}\0{format}"),
+        None => format!("passive\0{format}"),
     };
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in text.bytes() {
@@ -530,7 +556,9 @@ struct HostDef {
 #[serde(deny_unknown_fields)]
 struct CheckDef {
     name: String,
-    command: String,
+    command: Option<String>,
+    #[serde(default)]
+    passive: bool,
     #[serde(default)]
     shell: bool,
     #[serde(default)]
@@ -544,6 +572,8 @@ struct CheckDef {
     retry_interval: Option<Duration>,
     #[serde(default, deserialize_with = "duration")]
     timeout: Option<Duration>,
+    #[serde(default, deserialize_with = "duration")]
+    freshness: Option<Duration>,
     max_attempts: Option<u32>,
     #[serde(default)]
     thresholds: BTreeMap<String, ThresholdSpec>,
@@ -682,11 +712,11 @@ thresholds.depth = { warn = "> 100", crit = "> 500" }
         assert!(queue.thresholds["depth"].warn.is_some());
         assert_eq!(
             config.services[2].command,
-            watcher_exec::CommandLine::Argv(
+            Some(watcher_exec::CommandLine::Argv(
                 ["/opt/scripts/queue_depth.sh", "-H", "mq-01", "-p", "5672"]
                     .map(String::from)
                     .to_vec()
-            )
+            ))
         );
         assert_eq!(config.hosts[0].origin.line, 11);
     }
@@ -845,22 +875,69 @@ command = "true"
     }
 
     #[test]
+    fn passive_checks() {
+        let (config, diags) = compile(&[(
+            "p.toml",
+            r#"
+[[host]]
+name = "a"
+
+[[check]]
+name = "backup"
+passive = true
+freshness = "26h"
+hosts = ["a"]
+
+[[check]]
+name = "both"
+passive = true
+command = "true"
+hosts = ["a"]
+
+[[check]]
+name = "neither"
+hosts = ["a"]
+
+[[check]]
+name = "fresh"
+command = "true"
+freshness = "1h"
+hosts = ["a"]
+"#,
+        )]);
+        assert_eq!(
+            messages(&diags),
+            [
+                "p.toml:11: error: check \"both\": passive checks have no command",
+                "p.toml:17: error: check \"neither\": needs a command, or passive = true",
+                "p.toml:21: error: check \"fresh\": freshness only applies to passive checks",
+            ]
+        );
+        let backup = &config.checks[0];
+        assert_eq!(backup.command, None);
+        assert_eq!(backup.freshness, Some(Duration::from_secs(26 * 3600)));
+        assert_eq!(backup.max_attempts, 1);
+        assert_eq!(config.services[0].command, None);
+        assert_eq!(config.services[0].check_hash.len(), 16);
+    }
+
+    #[test]
     fn check_hash_follows_command_and_format() {
         let argv = CommandLine::Argv(vec!["check".into(), "-H".into(), "a".into()]);
-        let h = check_hash(&argv, Format::Auto);
-        assert_eq!(h, check_hash(&argv.clone(), Format::Auto));
+        let h = check_hash(Some(&argv), Format::Auto);
+        assert_eq!(h, check_hash(Some(&argv.clone()), Format::Auto));
         assert_eq!(h.len(), 16);
-        assert_ne!(h, check_hash(&argv, Format::Nagios));
+        assert_ne!(h, check_hash(Some(&argv), Format::Nagios));
         assert_ne!(
             h,
             check_hash(
-                &CommandLine::Argv(vec!["check -H".into(), "a".into()]),
+                Some(&CommandLine::Argv(vec!["check -H".into(), "a".into()])),
                 Format::Auto
             )
         );
         assert_ne!(
             h,
-            check_hash(&CommandLine::Shell("check -H a".into()), Format::Auto)
+            check_hash(Some(&CommandLine::Shell("check -H a".into())), Format::Auto)
         );
     }
 

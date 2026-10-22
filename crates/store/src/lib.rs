@@ -5,11 +5,13 @@
 //! extension can be used, and otherwise keeps working on the plain table.
 
 mod ingest;
+mod query;
 mod sync;
 mod write;
 
 pub use ingest::{Record, ingest};
-pub use sync::{HostSpec, ServiceSpec};
+pub use query::{EventFilter, Points, Series, StateEvent};
+pub use sync::{HostSpec, ServiceSpec, StoredState};
 
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;

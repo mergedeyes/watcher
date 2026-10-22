@@ -12,6 +12,14 @@ pub struct HostSpec {
     pub vars: BTreeMap<String, String>,
 }
 
+/// A service state as last persisted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredState {
+    pub state: ServiceState,
+    pub output: String,
+    pub long_output: String,
+}
+
 /// A service as the config defines it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ServiceSpec {
@@ -122,12 +130,14 @@ impl Store {
 
     /// The last persisted state of every active service, keyed by
     /// `host/service`, so a restart continues where it stopped.
-    pub async fn load_states(&self) -> Result<HashMap<String, ServiceState>> {
-        let rows: Vec<(String, String, String, i32, f64, f64, f64)> = sqlx::query_as(
+    pub async fn load_states(&self) -> Result<HashMap<String, StoredState>> {
+        type Row = (String, String, String, i32, f64, f64, f64, String, String);
+        let rows: Vec<Row> = sqlx::query_as(
             "SELECT h.name || '/' || s.name, st.state, st.state_type, st.attempt,
                     extract(epoch FROM st.last_check)::float8,
                     extract(epoch FROM st.last_change)::float8,
-                    extract(epoch FROM st.last_hard_change)::float8
+                    extract(epoch FROM st.last_hard_change)::float8,
+                    st.output, st.long_output
              FROM service_state st
              JOIN services s ON s.id = st.service_id
              JOIN hosts h ON h.id = s.host_id
@@ -137,7 +147,9 @@ impl Store {
         .await?;
 
         let mut states = HashMap::new();
-        for (key, state, state_type, attempt, last_check, last_change, last_hard_change) in rows {
+        for row in rows {
+            let (key, state, state_type, attempt, last_check, last_change, last_hard_change) =
+                (row.0, row.1, row.2, row.3, row.4, row.5, row.6);
             let (Some(state), Some(state_type)) =
                 (State::parse(&state), parse_state_type(&state_type))
             else {
@@ -146,15 +158,20 @@ impl Store {
                 );
                 continue;
             };
+            let state = ServiceState {
+                state,
+                state_type,
+                attempt: attempt.max(1) as u32,
+                last_check: from_epoch(last_check),
+                last_change: from_epoch(last_change),
+                last_hard_change: from_epoch(last_hard_change),
+            };
             states.insert(
                 key,
-                ServiceState {
+                StoredState {
                     state,
-                    state_type,
-                    attempt: attempt.max(1) as u32,
-                    last_check: from_epoch(last_check),
-                    last_change: from_epoch(last_change),
-                    last_hard_change: from_epoch(last_hard_change),
+                    output: row.7,
+                    long_output: row.8,
                 },
             );
         }

@@ -105,17 +105,19 @@ fn print_services(config: &Config) {
     println!();
     for service in &config.services {
         let check = config.check(service);
-        let command = match &service.command {
-            watcher_exec::CommandLine::Argv(argv) => shell_words::join(argv),
-            watcher_exec::CommandLine::Shell(script) => {
-                format!("sh -c {}", shell_words::quote(script))
+        let (timing, command) = match &service.command {
+            Some(command) => (
+                format!("every {}", humantime::format_duration(check.interval)),
+                command.to_string(),
+            ),
+            None => {
+                let timing = check.freshness.map_or("passive".to_string(), |f| {
+                    format!("fresh {}", humantime::format_duration(f))
+                });
+                (timing, "(passive)".to_string())
             }
         };
-        println!(
-            "  {:<width$}  every {:<5}  {command}",
-            service.id,
-            humantime::format_duration(check.interval).to_string(),
-        );
+        println!("  {:<width$}  {timing:<11}  {command}", service.id);
     }
 }
 

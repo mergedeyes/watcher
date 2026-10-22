@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 use tokio::sync::{mpsc, watch};
 use watcher_core::{Format, RawOutput, ServiceState, State, StateType, Termination, evaluate};
-use watcher_store::{Backend, HostSpec, Record, ServiceSpec, Store, ingest};
+use watcher_store::{Backend, EventFilter, HostSpec, Record, ServiceSpec, Store, ingest};
 
 /// A database created for one test.
 struct TestDb {
@@ -227,15 +227,39 @@ async fn sync_ingest_and_restore() {
 
         let states = store.load_states().await.unwrap();
         assert_eq!(states.len(), 2);
-        let disk = &states["web01/disk"];
+        let disk = &states["web01/disk"].state;
         assert_eq!((disk.state, disk.state_type, disk.attempt), (State::Warning, StateType::Soft, 1));
-        let http = &states["web01/http"];
+        assert_eq!(states["web01/http"].output, "HTTP CRITICAL - down\u{FFFD}x");
+        let http = &states["web01/http"].state;
         assert_eq!(http.state, State::Critical);
         let drift = http
             .last_check
             .duration_since(first_disk_state.last_check)
             .unwrap_or_else(|e| e.duration());
         assert!(drift < Duration::from_secs(5));
+
+        // Read queries for the API.
+        let events = store.events(&EventFilter { limit: 10, ..Default::default() }).await.unwrap();
+        assert_eq!(events.len(), 3);
+        assert_eq!((events[0].service.as_str(), events[0].to_state.as_str()), ("disk", "warning"));
+        let hard = EventFilter { limit: 10, hard_only: true, host: Some("web01".into()), ..Default::default() };
+        assert_eq!(store.events(&hard).await.unwrap().len(), 1);
+
+        let series = store.series("web01", "disk").await.unwrap().unwrap();
+        let names: Vec<_> = series.iter().map(|s| s.metric.as_str()).collect();
+        assert_eq!(names, ["/", "temp"]);
+        assert_eq!(series[0].unit, "B");
+        assert!(store.series("nope", "x").await.unwrap().is_none());
+
+        let now = SystemTime::now();
+        let hour = Duration::from_secs(3600);
+        let points = store.points(series[0].id, now - hour, now + hour, 600).await.unwrap().unwrap();
+        assert_eq!(points.bucket, 12.0);
+        let [(_, avg, min, max, n)] = points.points[..] else { panic!("{points:?}") };
+        let mb = 1024.0 * 1024.0;
+        assert_eq!((min, max, n), (2643.0 * mb, 2700.0 * mb, 2));
+        assert_eq!(avg, (2643.0 + 2700.0) / 2.0 * mb);
+        assert!(store.points(999_999, now - hour, now, 600).await.unwrap().is_none());
 
         if let Backend::Timescale { .. } = backend {
             assert_eq!(

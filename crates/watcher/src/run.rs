@@ -1,6 +1,7 @@
 use crate::config_cmd;
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -10,10 +11,10 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 use watcher_config::{Config, Severity, load_dir};
-use watcher_core::{ServiceState, StateType};
-use watcher_exec::scheduler::{Event, Job, schedule};
-use watcher_exec::{DEFAULT_OUTPUT_LIMIT, ExecOptions};
-use watcher_store::{HostSpec, Record, ServiceSpec, Store, ingest};
+use watcher_core::StateType;
+use watcher_exec::scheduler::{Control, Event, schedule};
+use watcher_hub::{Hub, jobs, specs};
+use watcher_store::{Record, Store, StoredState, ingest};
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -36,6 +37,11 @@ pub struct Args {
     /// Don't store results, even if a database is configured.
     #[arg(long, conflicts_with = "database")]
     no_database: bool,
+
+    /// Address for the HTTP API. Overrides `listen` in watcher.toml
+    /// (default 127.0.0.1:8080).
+    #[arg(long, value_name = "ADDR")]
+    listen: Option<SocketAddr>,
 }
 
 pub async fn run(args: Args) -> Result<ExitCode> {
@@ -43,6 +49,24 @@ pub async fn run(args: Args) -> Result<ExitCode> {
     let Some(config) = load(&conf_dir) else {
         bail!("configuration has errors");
     };
+    let config = Arc::new(config);
+
+    let listen = match (args.listen, &bootstrap) {
+        (Some(addr), _) => addr,
+        (None, Some(b)) => b
+            .listen
+            .parse()
+            .with_context(|| format!("invalid listen address {:?}", b.listen))?,
+        (None, None) => SocketAddr::from(([127, 0, 0, 1], 8080)),
+    };
+    // There are no user accounts yet, so the API must not be reachable
+    // from the network.
+    if !listen.ip().is_loopback() {
+        bail!(
+            "refusing to serve the API on {listen}: authentication is not implemented yet, \
+             so only loopback addresses are allowed"
+        );
+    }
 
     let database = match args.no_database {
         true => None,
@@ -50,31 +74,42 @@ pub async fn run(args: Args) -> Result<ExitCode> {
             .database
             .or_else(|| bootstrap.and_then(|b| b.database).map(|d| d.url)),
     };
-    let (mut storage, initial) = match database {
+    let (mut storage, restored) = match database {
         Some(url) => {
             let (storage, states) = Storage::start(&url, &config).await?;
             (Some(storage), states)
         }
         None => {
-            info!("no database configured; results are only logged");
+            info!("no database configured; results are not stored");
             (None, HashMap::new())
         }
     };
-    info!(
-        "started with {} services from {} (reload with SIGHUP)",
-        config.services.len(),
-        conf_dir.display()
-    );
+    let initial = restored
+        .iter()
+        .map(|(id, s)| (id.clone(), s.state.clone()))
+        .collect();
 
-    let (reload_tx, reload_rx) = mpsc::channel(1);
+    let (control, control_rx) = mpsc::channel(64);
     let (events_tx, mut events) = mpsc::channel(256);
     let scheduler = tokio::spawn(schedule(
         jobs(&config),
         initial,
         args.max_concurrent,
-        reload_rx,
+        control_rx,
         events_tx,
     ));
+
+    let store = storage.as_ref().map(|s| s.store.clone());
+    let hub = Hub::new(config.clone(), restored, control.clone(), store);
+    let listener = tokio::net::TcpListener::bind(listen)
+        .await
+        .with_context(|| format!("cannot listen on {listen}"))?;
+    let server = tokio::spawn(axum::serve(listener, hub.clone().router()).into_future());
+    info!(
+        "started with {} services from {}; API on http://{listen}/api/v1 (reload with SIGHUP)",
+        config.services.len(),
+        conf_dir.display()
+    );
 
     let mut hangup = signal(SignalKind::hangup())?;
     let mut terminate = signal(SignalKind::terminate())?;
@@ -82,6 +117,7 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         tokio::select! {
             Some(event) = events.recv() => {
                 print_event(&event, args.all);
+                hub.record(&event);
                 if let Some(storage) = &mut storage {
                     storage.record(event);
                 }
@@ -99,13 +135,15 @@ pub async fn run(args: Args) -> Result<ExitCode> {
                     }
                 }
                 info!("reloaded: {} services", config.services.len());
-                reload_tx.send(jobs(&config)).await?;
+                control.send(Control::Reload(jobs(&config))).await?;
+                hub.set_config(Arc::new(config));
             }
             _ = tokio::signal::ctrl_c() => break,
             _ = terminate.recv() => break,
         }
     }
     info!("stopping");
+    server.abort();
     scheduler.abort();
     if let Some(storage) = storage {
         storage.shutdown().await;
@@ -124,7 +162,7 @@ struct Storage {
 
 impl Storage {
     /// Connects, syncs the config and returns the stored service states.
-    async fn start(url: &str, config: &Config) -> Result<(Self, HashMap<String, ServiceState>)> {
+    async fn start(url: &str, config: &Config) -> Result<(Self, HashMap<String, StoredState>)> {
         let store = Store::connect(url)
             .await
             .context("cannot use the database")?;
@@ -165,7 +203,7 @@ impl Storage {
             result: event.result,
             state: event.state,
             change: event.change,
-            duration: event.execution.duration,
+            duration: event.duration,
         };
         if self.records.try_send(record).is_err() {
             self.dropped += 1;
@@ -190,30 +228,6 @@ impl Storage {
     }
 }
 
-fn specs(config: &Config) -> (Vec<HostSpec>, Vec<ServiceSpec>) {
-    let hosts = config
-        .hosts
-        .iter()
-        .map(|h| HostSpec {
-            name: h.name.clone(),
-            address: h.address.clone(),
-            node: h.node.clone(),
-            tags: h.tags.clone(),
-            vars: h.vars.clone(),
-        })
-        .collect();
-    let services = config
-        .services
-        .iter()
-        .map(|s| ServiceSpec {
-            host: config.host(s).name.clone(),
-            name: config.check(s).name.clone(),
-            check_hash: s.check_hash.clone(),
-        })
-        .collect();
-    (hosts, services)
-}
-
 /// Loads the config, logging diagnostics. `None` if it has errors.
 fn load(conf_dir: &Path) -> Option<Config> {
     let (config, diagnostics) = match load_dir(conf_dir) {
@@ -227,29 +241,6 @@ fn load(conf_dir: &Path) -> Option<Config> {
         }
     }
     config
-}
-
-fn jobs(config: &Config) -> Vec<Job> {
-    config
-        .services
-        .iter()
-        .map(|service| {
-            let check = config.check(service);
-            Job {
-                id: service.id.clone(),
-                command: service.command.clone(),
-                options: ExecOptions {
-                    timeout: check.timeout,
-                    output_limit: DEFAULT_OUTPUT_LIMIT,
-                },
-                format: check.format,
-                thresholds: check.thresholds.clone(),
-                interval: check.interval,
-                retry_interval: check.retry_interval,
-                max_attempts: check.max_attempts,
-            }
-        })
-        .collect()
 }
 
 fn print_event(event: &Event, all: bool) {

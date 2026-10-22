@@ -56,14 +56,18 @@ pub struct Host {
 #[derive(Debug, Clone)]
 pub struct Check {
     pub name: String,
-    /// Command text before macro expansion.
-    pub command: String,
+    /// Command text before macro expansion; `None` for passive checks,
+    /// whose results are pushed through the API.
+    pub command: Option<String>,
     pub shell: bool,
     pub format: Format,
     pub interval: Duration,
     pub retry_interval: Duration,
     pub max_attempts: u32,
     pub timeout: Duration,
+    /// Passive checks only: a missing result for this long turns the
+    /// service UNKNOWN.
+    pub freshness: Option<Duration>,
     pub thresholds: BTreeMap<String, ThresholdSpec>,
     /// Contact names.
     pub notify: Vec<String>,
@@ -77,6 +81,7 @@ pub struct Check {
 
 impl Check {
     pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(60);
+    /// For active checks; passive checks default to 1.
     pub const DEFAULT_MAX_ATTEMPTS: u32 = 3;
     pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -84,13 +89,14 @@ impl Check {
     pub(crate) fn for_tests(name: &str) -> Self {
         Check {
             name: name.into(),
-            command: String::new(),
+            command: None,
             shell: false,
             format: Format::Auto,
             interval: Self::DEFAULT_INTERVAL,
             retry_interval: Self::DEFAULT_INTERVAL,
             max_attempts: Self::DEFAULT_MAX_ATTEMPTS,
             timeout: Self::DEFAULT_TIMEOUT,
+            freshness: None,
             thresholds: BTreeMap::new(),
             notify: Vec::new(),
             vars: BTreeMap::new(),
@@ -119,8 +125,8 @@ pub struct Service {
     pub host: usize,
     /// Index into [`Config::checks`].
     pub check: usize,
-    /// The command with macros expanded for this host.
-    pub command: CommandLine,
+    /// The command with macros expanded for this host; `None` if passive.
+    pub command: Option<CommandLine>,
     /// Stable hash of what determines the meaning of the data (command and
     /// output format). A change marks where data from a new check begins.
     pub check_hash: String,
