@@ -1,7 +1,7 @@
 use crate::config_cmd;
 use crate::sinks::Sinks;
 use anyhow::{Context, Result, bail};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -217,6 +217,7 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
         config_tx: &config_tx,
         hub: &hub,
         check_dirs: &check_dirs,
+        host_checks: host_checks(&config),
     };
     let mut hangup = signal(SignalKind::hangup())?;
     let mut terminate = signal(SignalKind::terminate())?;
@@ -266,6 +267,8 @@ struct Running<'a> {
     config_tx: &'a watch::Sender<Arc<Config>>,
     hub: &'a Hub,
     check_dirs: &'a CheckDirs,
+    /// Ids of the services that give their host UP/DOWN.
+    host_checks: HashSet<String>,
 }
 
 impl Running<'_> {
@@ -283,11 +286,13 @@ impl Running<'_> {
             }
         }
         let record = Record {
+            host_check: self.host_checks.contains(&event.id),
             service: event.id,
             result: event.result,
             state: event.state,
             change: event.change,
             duration: event.duration,
+            flap: event.flap,
         };
         self.sinks.record(&record);
         if let Some(storage) = &mut self.storage {
@@ -322,6 +327,7 @@ impl Running<'_> {
         for warning in setup_warnings(&config, self.notifier) {
             warn!("{warning}");
         }
+        self.host_checks = host_checks(&config);
         let config = Arc::new(config);
         if let Err(err) = self.sinks.reload(&config).await {
             error!("{err:#}");
@@ -330,6 +336,15 @@ impl Running<'_> {
         self.hub.set_config(config);
         Ok(())
     }
+}
+
+fn host_checks(config: &Config) -> HashSet<String> {
+    config
+        .services
+        .iter()
+        .filter(|s| config.is_host_check(s))
+        .map(|s| s.id.clone())
+        .collect()
 }
 
 /// Hashes of the object files, to tell whether anything changed.

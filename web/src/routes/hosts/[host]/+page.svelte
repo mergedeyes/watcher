@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { api, ApiError, serviceHref } from '#lib/api.ts';
+	import { api, ApiError, HISTORY_DELAY, serviceHref, type StateEvent } from '#lib/api.ts';
+	import AlertTable from '#lib/AlertTable.svelte';
 	import { datetime, since } from '#lib/format.ts';
 	import { live } from '#lib/live.svelte.ts';
 	import ServiceTable from '#lib/ServiceTable.svelte';
@@ -12,6 +13,24 @@
 
 	let origin = $state<string | null>(null);
 	let missing = $state(false);
+	let events = $state<StateEvent[]>([]);
+	/** Set when the hub has no database: there is no history to show. */
+	let noHistory = $state(false);
+
+	// Refetch when the host check reports a change, and again once the
+	// change is in the database.
+	let lastChange = $derived(host?.last_change ?? null);
+	$effect(() => {
+		const [current, _] = [name, lastChange];
+		const load = () =>
+			api.events({ host: current, type: 'host', limit: 20 }).then(
+				(ev) => (events = ev),
+				(e) => (noHistory = e instanceof ApiError && e.noDatabase)
+			);
+		load();
+		const later = setTimeout(load, HISTORY_DELAY);
+		return () => clearTimeout(later);
+	});
 
 	$effect(() => {
 		const current = name;
@@ -85,10 +104,25 @@
 			<div class="panel-title">Services <span class="muted">{services.length}</span></div>
 			<ServiceTable rows={services} showHost={false} sort="service" />
 		</section>
+
+		{#if !noHistory}
+			<section class="panel">
+				<div class="panel-title">
+					Alert History
+					<a class="more" href="/alerts?host={encodeURIComponent(name)}">All</a>
+				</div>
+				<AlertTable {events} empty={host.check ? 'No state changes.' : 'No host check.'} />
+			</section>
+		{/if}
 	{/if}
 </div>
 
 <style>
+	.more {
+		font-weight: 400;
+		font-size: 12px;
+	}
+
 	.kv th {
 		width: 160px;
 		background: var(--panel-alt);

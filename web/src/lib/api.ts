@@ -106,15 +106,38 @@ export interface Points {
 	points: [number, number, number, number, number][];
 }
 
+/** How long after a result its history is in the database (ms): the hub writes in batches of about a second. */
+export const HISTORY_DELAY = 1500;
+
+/** `host`: UP/DOWN of the host, from its host check. */
+export type EventKind = 'service' | 'host' | 'flap_start' | 'flap_stop';
+
+/** An entry of the alert history. */
 export interface StateEvent {
 	host: string;
 	service: string;
 	ts: string;
-	from_state: State | null;
-	to_state: State;
+	kind: EventKind;
+	/** up/down for host events */
+	from_state: State | HostState | null;
+	to_state: State | HostState;
 	state_type: StateType;
 	hard: boolean;
 	output: string;
+}
+
+export interface EventQuery {
+	host?: string;
+	service?: string;
+	/** comma-separated: service, host, flapping */
+	type?: string;
+	/** comma-separated states changed to */
+	state?: string;
+	state_type?: StateType;
+	/** RFC 3339, unix seconds or a duration back from now (`24h`) */
+	since?: string;
+	before?: string;
+	limit?: number;
 }
 
 export interface User {
@@ -269,8 +292,11 @@ export const api = {
 		get<Series[]>(`/services/${seg(host)}/${seg(service)}/series`),
 	points: (id: number, from: string, points: number, signal?: AbortSignal) =>
 		get<Points>(`/series/${id}/points?from=${seg(from)}&points=${points}`, { signal }),
-	events: (host: string, service: string, limit = 20) =>
-		get<StateEvent[]>(`/events?host=${seg(host)}&service=${seg(service)}&limit=${limit}`),
+	events: (q: EventQuery) => {
+		const params = new URLSearchParams();
+		for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== '') params.set(k, String(v));
+		return get<StateEvent[]>(`/events?${params}`);
+	},
 
 	authStatus: () => get<AuthStatus>('/auth/status'),
 	login: (username: string, password: string) =>

@@ -10,6 +10,9 @@ pub struct StateEvent {
     pub service: String,
     #[serde(serialize_with = "rfc3339")]
     pub ts: SystemTime,
+    /// `service`, `host` (UP/DOWN from the host check), `flap_start` or
+    /// `flap_stop`.
+    pub kind: String,
     pub from_state: Option<String>,
     pub to_state: String,
     pub state_type: String,
@@ -47,6 +50,15 @@ pub struct EventFilter {
     pub service: Option<String>,
     /// Only events older than this, for paging backwards.
     pub before: Option<SystemTime>,
+    /// Only events at or after this.
+    pub since: Option<SystemTime>,
+    /// Event kinds (see [`StateEvent::kind`]); empty for all.
+    pub kinds: Vec<String>,
+    /// States changed to, e.g. `critical`, `down`; empty for all.
+    pub states: Vec<String>,
+    /// `soft` or `hard`.
+    pub state_type: Option<String>,
+    /// Only hard changes (confirmed problems and their recoveries).
     pub hard_only: bool,
     pub limit: i64,
 }
@@ -58,6 +70,7 @@ impl Store {
             String,
             String,
             f64,
+            String,
             Option<String>,
             String,
             String,
@@ -65,7 +78,7 @@ impl Store {
             String,
         );
         let rows: Vec<Row> = sqlx::query_as(
-            "SELECT h.name, s.name, extract(epoch FROM e.ts)::float8, e.from_state,
+            "SELECT h.name, s.name, extract(epoch FROM e.ts)::float8, e.kind, e.from_state,
                         e.to_state, e.state_type, e.hard, e.output
                  FROM state_events e
                  JOIN services s ON s.id = e.service_id
@@ -73,13 +86,21 @@ impl Store {
                  WHERE ($1::text IS NULL OR h.name = $1)
                    AND ($2::text IS NULL OR s.name = $2)
                    AND ($3::float8 IS NULL OR e.ts < to_timestamp($3))
-                   AND (NOT $4 OR e.hard)
+                   AND ($4::float8 IS NULL OR e.ts >= to_timestamp($4))
+                   AND (cardinality($5::text[]) = 0 OR e.kind = ANY($5))
+                   AND (cardinality($6::text[]) = 0 OR e.to_state = ANY($6))
+                   AND ($7::text IS NULL OR e.state_type = $7)
+                   AND (NOT $8 OR e.hard)
                  ORDER BY e.ts DESC
-                 LIMIT $5",
+                 LIMIT $9",
         )
         .bind(&filter.host)
         .bind(&filter.service)
         .bind(filter.before.map(epoch))
+        .bind(filter.since.map(epoch))
+        .bind(&filter.kinds)
+        .bind(&filter.states)
+        .bind(&filter.state_type)
         .bind(filter.hard_only)
         .bind(filter.limit.clamp(1, 10_000))
         .fetch_all(&self.pool)
@@ -87,15 +108,18 @@ impl Store {
         Ok(rows
             .into_iter()
             .map(
-                |(host, service, ts, from_state, to_state, state_type, hard, output)| StateEvent {
-                    host,
-                    service,
-                    ts: from_epoch(ts),
-                    from_state,
-                    to_state,
-                    state_type,
-                    hard,
-                    output,
+                |(host, service, ts, kind, from_state, to_state, state_type, hard, output)| {
+                    StateEvent {
+                        host,
+                        service,
+                        ts: from_epoch(ts),
+                        kind,
+                        from_state,
+                        to_state,
+                        state_type,
+                        hard,
+                        output,
+                    }
                 },
             )
             .collect())

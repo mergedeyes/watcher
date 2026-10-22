@@ -27,6 +27,13 @@ pub struct Record {
     pub change: Option<StateChange>,
     /// How long the check ran.
     pub duration: Duration,
+    /// `Some(true)` when the service started flapping, `Some(false)` when
+    /// it stopped.
+    #[serde(default)]
+    pub flap: Option<bool>,
+    /// The service gives its host UP/DOWN; its changes are also host events.
+    #[serde(default)]
+    pub host_check: bool,
 }
 
 /// Writes `records` in batches until the channel closes, then flushes.
