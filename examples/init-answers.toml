@@ -3,6 +3,7 @@
 # Every key is optional. Unset keys use the defaults below.
 
 role = "standalone"                 # standalone | hub
+instance_name = "msp-hub"           # sidebar, page title, mail subject
 listen = "127.0.0.1:8080"           # non-loopback needs database_url
 public_url = "https://watcher.example.com"
 database_url = "postgres://watcher:secret@db.example.com/watcher"
@@ -11,6 +12,9 @@ alert_email = ["ops@example.com"]   # contact "admins"
 alert_webhook = "https://hooks.example.com/watcher"
 monitor_localhost = true            # disk, load, swap of this machine
 test_notification = false           # send a test to the contact after setup
+
+[tls]                               # serve HTTPS; omit for HTTP or a TLS proxy
+self_signed = true                  # or: cert = "/etc/ssl/w.pem" and key = "/etc/ssl/w.key"
 
 [admin]                             # needs database_url
 username = "admin"

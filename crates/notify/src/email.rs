@@ -82,10 +82,14 @@ impl Mailer {
 
 /// `[Watcher] PROBLEM: web01/disk is CRITICAL`
 pub(crate) fn subject(n: &Notification) -> String {
+    let tag = match &n.instance {
+        Some(name) => format!("[Watcher {name}]"),
+        None => "[Watcher]".to_string(),
+    };
     match n.kind {
-        Kind::Test => "[Watcher] TEST".to_string(),
+        Kind::Test => format!("{tag} TEST"),
         kind => format!(
-            "[Watcher] {}: {} is {}",
+            "{tag} {}: {} is {}",
             kind.as_str(),
             n.service_id(),
             n.state_name()
@@ -159,6 +163,7 @@ mod tests {
             long_output: "/boot 68 MB (69%)".into(),
             time: SystemTime::UNIX_EPOCH,
             url: Some("https://w.example/services/web01/disk".into()),
+            instance: None,
         }
     }
 
@@ -166,6 +171,14 @@ mod tests {
     fn formats_messages() {
         let n = notification();
         assert_eq!(subject(&n), "[Watcher] PROBLEM: web01/disk is CRITICAL");
+        let named = Notification {
+            instance: Some("msp-hub".into()),
+            ..n.clone()
+        };
+        assert_eq!(
+            subject(&named),
+            "[Watcher msp-hub] PROBLEM: web01/disk is CRITICAL"
+        );
         assert_eq!(
             body(&n),
             "web01/disk is CRITICAL (was OK)\n\n\

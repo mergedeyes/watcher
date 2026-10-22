@@ -128,6 +128,8 @@ export interface AuthStatus {
 	user: User | null;
 	/** False until the first account is created on the server. */
 	users_exist: boolean;
+	/** The server runs the first-run setup wizard. */
+	setup?: boolean;
 }
 
 export interface ApiToken {
@@ -252,6 +254,7 @@ function send<T>(method: string, path: string, body?: unknown): Promise<T> {
 const seg = encodeURIComponent;
 
 export const api = {
+	health: () => get<{ status: string; version?: string; instance?: string | null }>('/health'),
 	services: () => get<{ counts: Counts; services: ServiceView[] }>('/services'),
 	hosts: () => get<HostView[]>('/hosts'),
 	host: (name: string) =>

@@ -51,7 +51,36 @@ pub struct Args {
     listen: Option<SocketAddr>,
 }
 
-pub async fn run(args: Args) -> Result<ExitCode> {
+impl Args {
+    /// The defaults, for `path`.
+    pub fn new(path: PathBuf) -> Self {
+        Args {
+            path: Some(path),
+            all: false,
+            max_concurrent: 64,
+            database: None,
+            no_database: false,
+            no_auth: false,
+            listen: None,
+        }
+    }
+}
+
+pub async fn run(mut args: Args) -> Result<ExitCode> {
+    // A watcher.toml that doesn't exist yet: set it up in the browser.
+    if let Some(path) = &args.path
+        && path.extension().is_some_and(|e| e == "toml")
+        && !path.exists()
+    {
+        let dir = path.parent().filter(|d| !d.as_os_str().is_empty());
+        let dir = dir.unwrap_or(Path::new(".")).to_path_buf();
+        let listen = args
+            .listen
+            .unwrap_or(SocketAddr::from(([127, 0, 0, 1], 8080)));
+        args.path = Some(crate::setup::run(&dir, listen).await?);
+        // The address chosen in setup applies from now on.
+        args.listen = None;
+    }
     let (bootstrap, conf_dir) = config_cmd::locate(args.path.as_deref())?;
     let Some(config) = load(&conf_dir) else {
         bail!("configuration has errors");
@@ -77,11 +106,27 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         .as_ref()
         .map(|b| (b.smtp.clone(), b.public_url.clone()))
         .unwrap_or_default();
-    let https = public_url
-        .as_deref()
-        .is_some_and(|u| u.starts_with("https://"));
-    let notifier =
-        Arc::new(Notifier::new(smtp.as_ref(), public_url).context("invalid [smtp] settings")?);
+    let tls = match bootstrap
+        .as_ref()
+        .and_then(|b| b.tls.as_ref().map(|t| (t, &b.data_dir)))
+    {
+        Some((t, data_dir)) => {
+            let names = crate::tls::names(listen, public_url.as_deref());
+            Some(crate::tls::config(t, data_dir, &names).await?)
+        }
+        None => None,
+    };
+    // Behind a TLS proxy (public_url) or serving TLS itself.
+    let https = tls.is_some()
+        || public_url
+            .as_deref()
+            .is_some_and(|u| u.starts_with("https://"));
+    let instance = bootstrap.as_ref().and_then(|b| b.instance_name.clone());
+    let notifier = Arc::new(
+        Notifier::new(smtp.as_ref(), public_url)
+            .context("invalid [smtp] settings")?
+            .with_instance(instance.clone()),
+    );
     for warning in setup_warnings(&config, &notifier) {
         warn!("{warning}");
     }
@@ -123,6 +168,9 @@ pub async fn run(args: Args) -> Result<ExitCode> {
     let store = storage.as_ref().map(|s| s.store.clone());
     let auth = auth_settings(args.no_auth, listen, https, store.as_deref()).await?;
     let hub = Hub::new(config.clone(), restored, control.clone(), store, auth);
+    if let Some(name) = instance {
+        hub.set_instance_name(name);
+    }
     let (reload_tx, mut reloads) = mpsc::channel(4);
     hub.enable_config_editing(ConfigFiles {
         dir: conf_dir.clone(),
@@ -144,12 +192,10 @@ pub async fn run(args: Args) -> Result<ExitCode> {
             }
         },
     };
-    let listener = tokio::net::TcpListener::bind(listen)
-        .await
-        .with_context(|| format!("cannot listen on {listen}"))?;
-    let server = tokio::spawn(axum::serve(listener, hub.clone().router()).into_future());
+    let scheme = if tls.is_some() { "https" } else { "http" };
+    let server = serve(listen, hub.clone().router(), tls)?;
     info!(
-        "started with {} services from {}; web UI on http://{listen}",
+        "started with {} services from {}; web UI on {scheme}://{listen}",
         config.services.len(),
         conf_dir.display()
     );
@@ -283,6 +329,28 @@ fn snapshot(conf_dir: &Path) -> Vec<(String, String)> {
         .into_iter()
         .map(|f| (f.path, f.hash))
         .collect()
+}
+
+/// Serves `router` on `listen`, over TLS when `tls` is set. Fails early if
+/// the address cannot be bound.
+pub(crate) fn serve(
+    listen: SocketAddr,
+    router: axum::Router,
+    tls: Option<axum_server::tls_rustls::RustlsConfig>,
+) -> Result<JoinHandle<std::io::Result<()>>> {
+    let listener = std::net::TcpListener::bind(listen)
+        .with_context(|| format!("cannot listen on {listen}"))?;
+    listener.set_nonblocking(true)?;
+    Ok(match tls {
+        Some(tls) => {
+            let server = axum_server::from_tcp_rustls(listener, tls)?;
+            tokio::spawn(server.serve(router.into_make_service()))
+        }
+        None => {
+            let listener = tokio::net::TcpListener::from_std(listener)?;
+            tokio::spawn(axum::serve(listener, router).into_future())
+        }
+    })
 }
 
 /// Login is required whenever there is a database (users live there),

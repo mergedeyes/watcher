@@ -27,6 +27,38 @@ pub struct Bootstrap {
     /// Who edits the object files.
     #[serde(default)]
     pub config_mode: ConfigMode,
+    /// Name of this instance, shown in the web UI and notifications.
+    pub instance_name: Option<String>,
+    /// Serve HTTPS instead of HTTP.
+    pub tls: Option<Tls>,
+}
+
+/// Certificate for HTTPS.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tls {
+    /// PEM certificate chain. Relative paths are resolved like `conf_dir`.
+    pub cert: Option<PathBuf>,
+    /// PEM private key.
+    pub key: Option<PathBuf>,
+    /// Generate a self-signed certificate in `data_dir/tls/` instead.
+    #[serde(default)]
+    pub self_signed: bool,
+}
+
+impl Tls {
+    /// Certificate and key files: the configured ones, or the self-signed
+    /// pair below `data_dir`.
+    pub fn files(&self, data_dir: &Path) -> Option<(PathBuf, PathBuf)> {
+        match (&self.cert, &self.key, self.self_signed) {
+            (Some(cert), Some(key), false) => Some((cert.clone(), key.clone())),
+            (None, None, true) => {
+                let dir = data_dir.join("tls");
+                Some((dir.join("cert.pem"), dir.join("key.pem")))
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Who edits the object files.
@@ -130,6 +162,8 @@ pub enum BootstrapError {
         path: PathBuf,
         source: toml::de::Error,
     },
+    #[error("{path}: {message}")]
+    Invalid { path: PathBuf, message: String },
 }
 
 fn default_conf_dir() -> PathBuf {
@@ -165,6 +199,17 @@ impl Bootstrap {
         {
             *file = base.join(&*file);
         }
+        if let Some(tls) = &mut bootstrap.tls {
+            if tls.files(&bootstrap.data_dir).is_none() {
+                return Err(BootstrapError::Invalid {
+                    path: path.into(),
+                    message: "[tls]: set cert and key, or self_signed = true".into(),
+                });
+            }
+            for file in [&mut tls.cert, &mut tls.key].into_iter().flatten() {
+                *file = base.join(&*file);
+            }
+        }
         Ok(bootstrap)
     }
 }
@@ -199,6 +244,21 @@ mod tests {
         assert_eq!((smtp.tls, smtp.port()), (SmtpTls::Starttls, 587));
         assert_eq!(smtp.password_file.unwrap(), dir.join("smtp.pass"));
         assert_eq!(b.public_url.as_deref(), Some("https://w.example"));
+
+        std::fs::write(&path, "[tls]\ncert = \"c.pem\"\nkey = \"k.pem\"\n").unwrap();
+        let tls = Bootstrap::load(&path).unwrap().tls.unwrap();
+        assert_eq!(
+            tls.files(Path::new("/d")),
+            Some((dir.join("c.pem"), dir.join("k.pem")))
+        );
+        std::fs::write(&path, "[tls]\nself_signed = true\n").unwrap();
+        let b = Bootstrap::load(&path).unwrap();
+        assert_eq!(
+            b.tls.unwrap().files(&b.data_dir).unwrap().0,
+            dir.join("data/tls/cert.pem")
+        );
+        std::fs::write(&path, "[tls]\ncert = \"c.pem\"\n").unwrap();
+        assert!(Bootstrap::load(&path).is_err());
 
         std::fs::write(&path, "rol = \"hub\"\n").unwrap();
         let err = Bootstrap::load(&path).unwrap_err().to_string();
