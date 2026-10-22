@@ -1,4 +1,5 @@
 mod config_cmd;
+mod notify_cmd;
 mod run;
 mod run_check;
 
@@ -30,6 +31,10 @@ enum Cmd {
     /// the configuration on SIGHUP.
     Run(run::Args),
 
+    /// Notification tools.
+    #[command(subcommand)]
+    Notify(notify_cmd::Command),
+
     /// Work with the configuration.
     #[command(subcommand)]
     Config(config_cmd::Command),
@@ -51,6 +56,7 @@ async fn main() -> ExitCode {
         Cmd::RunCheck(args) => (run_check::run(args).await, ExitCode::from(3)),
         Cmd::Run(args) => (run::run(args).await, ExitCode::FAILURE),
         Cmd::Config(command) => (config_cmd::run(command), ExitCode::FAILURE),
+        Cmd::Notify(command) => (notify_cmd::run(command).await, ExitCode::FAILURE),
     };
     result.unwrap_or_else(|err| {
         eprintln!("error: {err:#}");

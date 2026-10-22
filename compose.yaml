@@ -2,7 +2,11 @@
 #   docker compose up -d --wait
 #   export WATCHER_TEST_TIMESCALE_URL=postgres://watcher:watcher@localhost:55432/postgres
 #   export WATCHER_TEST_POSTGRES_URL=postgres://watcher:watcher@localhost:55433/postgres
-#   cargo test -p watcher-store
+#   export WATCHER_TEST_MAILPIT=localhost
+#   cargo test
+#
+# Mailpit catches all email sent to localhost:1025; read it at
+# http://localhost:8025.
 services:
   timescale:
     image: timescale/timescaledb:latest-pg18
@@ -23,6 +27,14 @@ services:
     ports: ["127.0.0.1:55433:5432"]
     healthcheck:
       test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "watcher"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+  mailpit:
+    image: axllent/mailpit:latest
+    ports: ["127.0.0.1:1025:1025", "127.0.0.1:8025:8025"]
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
       interval: 2s
       timeout: 5s
       retries: 15

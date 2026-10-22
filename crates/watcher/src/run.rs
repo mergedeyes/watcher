@@ -14,6 +14,7 @@ use watcher_config::{Config, Severity, load_dir};
 use watcher_core::StateType;
 use watcher_exec::scheduler::{Control, Event, schedule};
 use watcher_hub::{Hub, jobs, specs};
+use watcher_notify::{Notifier, setup_warnings};
 use watcher_store::{Record, Store, StoredState, ingest};
 
 #[derive(clap::Args)]
@@ -68,6 +69,19 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         );
     }
 
+    let (smtp, public_url) = bootstrap
+        .as_ref()
+        .map(|b| (b.smtp.clone(), b.public_url.clone()))
+        .unwrap_or_default();
+    let notifier =
+        Arc::new(Notifier::new(smtp.as_ref(), public_url).context("invalid [smtp] settings")?);
+    for warning in setup_warnings(&config, &notifier) {
+        warn!("{warning}");
+    }
+    let (config_tx, config_rx) = watch::channel(config.clone());
+    let (notify_tx, notify_rx) = mpsc::channel(1000);
+    tokio::spawn(watcher_notify::run(notifier.clone(), config_rx, notify_rx));
+
     let database = match args.no_database {
         true => None,
         false => args
@@ -118,6 +132,9 @@ pub async fn run(args: Args) -> Result<ExitCode> {
             Some(event) = events.recv() => {
                 print_event(&event, args.all);
                 hub.record(&event);
+                if event.change.is_some_and(|c| c.hard) && notify_tx.try_send(event.clone()).is_err() {
+                    warn!("notification queue is full; dropped the notification for {}", event.id);
+                }
                 if let Some(storage) = &mut storage {
                     storage.record(event);
                 }
@@ -135,7 +152,12 @@ pub async fn run(args: Args) -> Result<ExitCode> {
                     }
                 info!("reloaded: {} services", config.services.len());
                 control.send(Control::Reload(jobs(&config))).await?;
-                hub.set_config(Arc::new(config));
+                for warning in setup_warnings(&config, &notifier) {
+                    warn!("{warning}");
+                }
+                let config = Arc::new(config);
+                config_tx.send_replace(config.clone());
+                hub.set_config(config);
             }
             _ = tokio::signal::ctrl_c() => break,
             _ = terminate.recv() => break,
