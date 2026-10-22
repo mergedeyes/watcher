@@ -1,10 +1,13 @@
 // Live state of all services: loaded once, then patched from the hub's
 // event stream. After a reconnect or a config reload the lists are fetched
 // again, so nothing missed while disconnected stays stale.
+//
+// Paused, the stream is closed and the lists only change on refresh(). Pages
+// refetch their own data when the lists change, so they hold still too.
 
 import { api, type HostView, type ServiceView } from './api.ts';
 
-export type Connection = 'connecting' | 'live' | 'offline';
+export type Connection = 'connecting' | 'live' | 'offline' | 'paused';
 
 class Live {
 	services = $state<ServiceView[]>([]);
@@ -20,17 +23,39 @@ class Live {
 	#index = new Map<string, number>();
 	#source: EventSource | null = null;
 	#timer: ReturnType<typeof setInterval> | undefined;
+	#started = false;
 
 	start() {
-		if (this.#source) return;
+		if (this.#started) return;
+		this.#started = true;
 		this.#timer = setInterval(() => (this.now = Date.now()), 10_000);
-		this.#connect();
+		if (this.connection === 'paused') this.reload();
+		else this.#connect();
+	}
+
+	/** Stops updates until resume(); refresh() fetches once. */
+	pause() {
+		this.#source?.close();
+		this.#source = null;
+		this.connection = 'paused';
+	}
+
+	resume() {
+		if (this.connection !== 'paused') return;
+		this.connection = 'connecting';
+		if (this.#started) this.#connect();
+	}
+
+	async refresh() {
+		this.now = Date.now();
+		await this.reload();
 	}
 
 	/** Disconnects and forgets everything, e.g. after logging out. */
 	stop() {
 		this.#source?.close();
 		this.#source = null;
+		this.#started = false;
 		clearInterval(this.#timer);
 		this.services = [];
 		this.hosts = [];
