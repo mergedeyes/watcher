@@ -36,6 +36,7 @@ fn contact(email: &[&str], webhook: Option<String>) -> Contact {
         name: "ops".into(),
         email: email.iter().map(|s| s.to_string()).collect(),
         webhook,
+        groups: Vec::new(),
         origin: Default::default(),
     }
 }

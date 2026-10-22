@@ -18,6 +18,8 @@ export interface ServiceView {
 	passive: boolean;
 	/** The state changes too often; problem notifications are held back. */
 	flapping: boolean;
+	/** Service groups. */
+	groups: string[];
 }
 
 export interface Counts {
@@ -33,7 +35,11 @@ export interface HostView {
 	address: string;
 	node: string | null;
 	tags: string[];
-	vars: Record<string, string>;
+	/** Text, or tables (for_each data). */
+	vars: Record<string, unknown>;
+	roles: string[];
+	/** Host groups. */
+	groups: string[];
 	enabled: boolean;
 	/** From the host check; 'up' without one; null while the host check is pending. */
 	state: HostState | null;
@@ -80,6 +86,10 @@ export interface ServiceDetail extends ServiceView {
 	/** Gives the host its UP/DOWN state. */
 	host_check: boolean;
 	check: {
+		/** The check it runs; null for an inline command. */
+		name: string | null;
+		/** The role it comes from; null for a host's own service. */
+		role: string | null;
 		command: string | null;
 		interval_s: number;
 		retry_interval_s: number;
@@ -168,7 +178,34 @@ export interface ApiToken {
 	last_used: string | null;
 }
 
-export type Kind = 'host' | 'check' | 'template' | 'contact' | 'sink';
+export type Kind =
+	| 'check'
+	| 'role'
+	| 'host'
+	| 'hostgroup'
+	| 'servicegroup'
+	| 'contact'
+	| 'contactgroup'
+	| 'notify'
+	| 'sink';
+
+/** Kinds with a Config Tree: the config kinds plus services. */
+export type TreeKind = Exclude<Kind, 'sink'> | 'service';
+
+/** A node of a Config Tree: where an object and its values come from. */
+export interface TreeNode {
+	/** An object kind, or `section` / `value`. */
+	kind: TreeKind | 'section' | 'value';
+	/** Object name to link to (`host/service` for services). */
+	name?: string;
+	label: string;
+	/** A value, or why something applies. */
+	detail?: string;
+	/** Relative to the object directory. */
+	file?: string;
+	line?: number;
+	children?: TreeNode[];
+}
 
 /** A config error or warning; `path` is relative to the object directory. */
 export interface Problem {
@@ -218,7 +255,11 @@ export interface Delta {
 export interface Changes {
 	hosts: Delta;
 	services: Delta;
+	/** As `hostgroup x`, `servicegroup x`, `contactgroup x`. */
+	groups: Delta;
 	contacts: Delta;
+	/** Notify rules by name or place. */
+	notify: Delta;
 	sinks: Delta;
 }
 
@@ -311,11 +352,19 @@ export const api = {
 	config: () => get<ConfigOverview>('/config'),
 	configFile: (path: string) => get<ConfigFile>(`/config/files/${path.split('/').map(seg).join('/')}`),
 	configObjects: () => get<{ objects: ConfigObject[]; diagnostics: Problem[] }>('/config/objects'),
+	groups: () =>
+		get<{ hostgroups: { name: string; title: string | null }[]; servicegroups: { name: string; title: string | null }[] }>('/groups'),
+	configTree: (kind: TreeKind, name: string) =>
+		get<TreeNode>(`/config/tree/${kind}/${name.split('/').map(seg).join('/')}`),
 	/** Executables in the check directories, where bare command names are looked up. */
 	configScripts: () => get<{ dirs: string[]; scripts: { name: string; dir: string }[] }>('/config/scripts'),
 	/** The file change for creating (no name), updating or deleting (no fields) an object. */
 	editObject: (kind: Kind, name: string | null, fields: Record<string, unknown> | null) =>
 		send<Change>('POST', '/config/edit', { kind, name, fields }),
+	/** File changes for several objects at once (clones); `path` puts new objects into that file. */
+	editMany: (
+		edits: { kind: Kind; name: string | null; fields: Record<string, unknown> | null; path?: string }[]
+	) => send<{ changes: Change[] }>('POST', '/config/edit-many', { edits }),
 	preview: (changes: Change[]) => send<Preview>('POST', '/config/preview', { changes }),
 	apply: (changes: Change[]) =>
 		send<{ changes: Changes; diagnostics: Problem[] }>('POST', '/config/apply', { changes })

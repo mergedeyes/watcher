@@ -1,5 +1,5 @@
 use crate::{Result, Store, from_epoch};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use watcher_core::{FLAP_WINDOW, FlapHistory, ServiceState, State, StateType};
 
 /// How [`Store::sync_with`] treats objects that are not in the given lists.
@@ -18,7 +18,8 @@ pub struct HostSpec {
     pub address: String,
     pub node: Option<String>,
     pub tags: Vec<String>,
-    pub vars: BTreeMap<String, String>,
+    /// A JSON object; values are text, or tables (`for_each` data).
+    pub vars: serde_json::Value,
 }
 
 /// A service state as last persisted.

@@ -3,6 +3,8 @@
 	import { page } from '$app/state';
 	import { api, ApiError, HISTORY_DELAY, serviceHref, type StateEvent } from '#lib/api.ts';
 	import AlertTable from '#lib/AlertTable.svelte';
+	import { auth } from '#lib/auth.svelte.ts';
+	import ConfigTree from '#lib/ConfigTree.svelte';
 	import Graphs from '#lib/Graphs.svelte';
 	import { datetime, since } from '#lib/format.ts';
 	import { live } from '#lib/live.svelte.ts';
@@ -66,7 +68,10 @@
 	{:else}
 		<div class="page-head">
 			<h1>{host.name}</h1>
-			<Status state={host.state} />
+			<span class="head-actions">
+				{#if auth.admin}<ConfigTree kind="host" name={host.name} />{/if}
+				<Status state={host.state} />
+			</span>
 		</div>
 
 		<section class="panel">
@@ -104,9 +109,16 @@
 				<tbody>
 					<tr><th>Address</th><td class="mono">{host.address}</td></tr>
 					{#if host.node}<tr><th>Node</th><td>{host.node}</td></tr>{/if}
+					{#if host.roles.length}<tr><th>Roles</th><td>{host.roles.join(', ')}</td></tr>{/if}
 					<tr><th>Tags</th><td>{#each host.tags as t (t)}<span class="tag">{t}</span> {/each}</td></tr>
+					{#if host.groups.length}
+						<tr>
+							<th>Host Groups</th>
+							<td>{#each host.groups as g, i (g)}{i ? ', ' : ''}<a href="/hosts?group={encodeURIComponent(g)}">{g}</a>{/each}</td>
+						</tr>
+					{/if}
 					{#each Object.entries(host.vars) as [k, v] (k)}
-						<tr><th>vars.{k}</th><td class="mono">{v}</td></tr>
+						<tr><th>vars.{k}</th><td class="mono">{typeof v === 'object' ? JSON.stringify(v) : v}</td></tr>
 					{/each}
 					{#if !host.enabled}<tr><th>Enabled</th><td>no</td></tr>{/if}
 					{#if origin}<tr><th>Source</th><td class="mono">{origin}</td></tr>{/if}
@@ -147,6 +159,12 @@
 </div>
 
 <style>
+	.head-actions {
+		display: inline-flex;
+		align-items: center;
+		gap: 10px;
+	}
+
 	.more {
 		font-weight: 400;
 		font-size: 12px;

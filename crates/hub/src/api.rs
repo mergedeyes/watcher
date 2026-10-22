@@ -38,6 +38,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/services/{host}/{service}/series", get(series))
         .route("/api/v1/series/{id}/points", get(points))
         .route("/api/v1/events", get(events))
+        .route("/api/v1/groups", get(groups))
         .route("/api/v1/stream", get(stream))
         .route("/api/v1/auth/status", get(auth::status))
         .route("/api/v1/auth/login", post(auth::login))
@@ -48,7 +49,9 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/config/files/{*path}", get(config::file))
         .route("/api/v1/config/objects", get(config::objects))
         .route("/api/v1/config/scripts", get(config::scripts))
+        .route("/api/v1/config/tree/{kind}/{*name}", get(config::tree))
         .route("/api/v1/config/edit", post(config::edit))
+        .route("/api/v1/config/edit-many", post(config::edit_many))
         .route("/api/v1/config/preview", post(config::preview))
         .route("/api/v1/config/apply", post(config::apply))
         // Unknown /api paths get a JSON 404; everything else is the web UI.
@@ -189,6 +192,22 @@ async fn host(AxState(hub): Shared, Path(name): Path<String>) -> ApiResult<serde
         "services": views,
         "origin": host.origin.to_string(),
     })))
+}
+
+/// Host and service groups with their titles; members are in the host and
+/// service views (`groups`).
+async fn groups(AxState(hub): Shared) -> Json<serde_json::Value> {
+    let config = hub.config();
+    let list = |groups: &[watcher_config::Group]| -> Vec<serde_json::Value> {
+        groups
+            .iter()
+            .map(|g| json!({ "name": g.name, "title": g.title }))
+            .collect()
+    };
+    Json(json!({
+        "hostgroups": list(&config.hostgroups),
+        "servicegroups": list(&config.servicegroups),
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -478,7 +497,7 @@ mod tests {
         let mut routes: Vec<String> = source
             .lines()
             .filter_map(|l| l.trim().strip_prefix(".route(\"/api/v1"))
-            .map(|r| r.split('"').next().unwrap().replace("{*path}", "{path}"))
+            .map(|r| r.split('"').next().unwrap().replace("{*", "{"))
             .collect();
         routes.sort();
         let mut paths: Vec<String> = OPENAPI

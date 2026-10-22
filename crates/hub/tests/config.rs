@@ -17,10 +17,12 @@ const HOSTS: &str = r#"# Web servers
 name = "web01"   # primary
 tags = ["web"]
 
-[[check]]
-name = "http"
-apply_to = '"web" in host.tags'
+[check.http]
 command = "check_http -H $host.address$"
+
+[role.web]
+hosts = { tags = ["web"] }
+service.http = {}
 "#;
 
 struct Setup {
@@ -230,7 +232,7 @@ async fn invalid_changes_are_not_written() {
         HOSTS
     );
 
-    // Deleting the host would leave the check without hosts: a warning only.
+    // Deleting the host would leave the role without hosts: a warning only.
     let (_, change) = call(
         &s.hub,
         "POST",
@@ -274,4 +276,46 @@ async fn files_mode_is_read_only() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn clones_in_one_file() {
+    let s = setup("clones", ConfigMode::Hybrid);
+    let clone = |name: &str| json!({ "kind": "host", "path": "hosts.toml", "fields": { "name": name, "tags": ["web"] } });
+    let (status, body) = call(
+        &s.hub,
+        "POST",
+        "/api/v1/config/edit-many",
+        Some(json!({ "edits": [clone("web02"), clone("web03")] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let changes = body["changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0]["path"], "hosts.toml");
+    let (_, preview) = call(
+        &s.hub,
+        "POST",
+        "/api/v1/config/preview",
+        Some(json!({ "changes": changes })),
+    )
+    .await;
+    assert_eq!(
+        preview["changes"]["hosts"]["added"],
+        json!(["web02", "web03"])
+    );
+    assert_eq!(
+        preview["changes"]["services"]["added"],
+        json!(["web02/http", "web03/http"])
+    );
+
+    // A clone with a name that exists: 409.
+    let (status, _) = call(
+        &s.hub,
+        "POST",
+        "/api/v1/config/edit-many",
+        Some(json!({ "edits": [clone("web01")] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
 }

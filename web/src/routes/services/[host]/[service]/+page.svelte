@@ -2,6 +2,8 @@
 	import { page } from '$app/state';
 	import { api, ApiError, HISTORY_DELAY, hostHref, type ServiceDetail, type StateEvent } from '#lib/api.ts';
 	import AlertTable from '#lib/AlertTable.svelte';
+	import { auth } from '#lib/auth.svelte.ts';
+	import ConfigTree from '#lib/ConfigTree.svelte';
 	import Graphs from '#lib/Graphs.svelte';
 	import { datetime, duration, formatThreshold, formatValue, seriesName, since } from '#lib/format.ts';
 	import Status from '#lib/Status.svelte';
@@ -67,6 +69,7 @@
 	{:else}
 		<div class="page-head">
 			<h1>{detail.service} <span class="muted">on <a href={hostHref(host)}>{host}</a></span></h1>
+			{#if auth.admin}<ConfigTree kind="service" name="{host}/{name}" />{/if}
 		</div>
 
 		<section class="panel">
@@ -114,6 +117,20 @@
 						<tr><th>Check Command</th><td class="mono info">{detail.check.command}</td></tr>
 					{:else if detail.check.freshness_s !== null}
 						<tr><th>Freshness Threshold</th><td>{duration(detail.check.freshness_s)}</td></tr>
+					{/if}
+					{#if detail.check.name || detail.check.role}
+						<tr>
+							<th>Check</th>
+							<td>
+								{detail.check.name ?? 'inline command'}{#if detail.check.role}<span class="muted">&nbsp;· role {detail.check.role}</span>{/if}
+							</td>
+						</tr>
+					{/if}
+					{#if detail.groups.length}
+						<tr>
+							<th>Service Groups</th>
+							<td>{#each detail.groups as g, i (g)}{i ? ', ' : ''}<a href="/services?group={encodeURIComponent(g)}">{g}</a>{/each}</td>
+						</tr>
 					{/if}
 					<tr><th>Source</th><td class="mono">{detail.check.origin}</td></tr>
 				</tbody>

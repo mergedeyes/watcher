@@ -12,38 +12,60 @@ use toml_edit::{DocumentMut, Item, TableLike};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
-    Host,
     Check,
-    Template,
+    Role,
+    Host,
+    HostGroup,
+    ServiceGroup,
     Contact,
+    ContactGroup,
+    Notify,
     Sink,
 }
 
 impl Kind {
-    /// The TOML key: `[[host]]`, `[template.x]`, ...
+    pub const ALL: [Kind; 9] = [
+        Kind::Check,
+        Kind::Role,
+        Kind::Host,
+        Kind::HostGroup,
+        Kind::ServiceGroup,
+        Kind::Contact,
+        Kind::ContactGroup,
+        Kind::Notify,
+        Kind::Sink,
+    ];
+
+    /// The TOML key: `[[host]]`, `[role.x]`, ...
     pub fn key(self) -> &'static str {
         match self {
-            Kind::Host => "host",
             Kind::Check => "check",
-            Kind::Template => "template",
+            Kind::Role => "role",
+            Kind::Host => "host",
+            Kind::HostGroup => "hostgroup",
+            Kind::ServiceGroup => "servicegroup",
             Kind::Contact => "contact",
+            Kind::ContactGroup => "contactgroup",
+            Kind::Notify => "notify",
             Kind::Sink => "sink",
         }
     }
 
-    /// Templates and contacts are named by their key (`[contact.oncall]`);
-    /// the others by a `name` field in an array of tables.
+    /// Named by their key (`[role.linux]`); hosts, notify rules and sinks
+    /// by a `name` field in an array of tables.
     fn keyed(self) -> bool {
-        matches!(self, Kind::Template | Kind::Contact)
+        !matches!(self, Kind::Host | Kind::Notify | Kind::Sink)
     }
 
     /// Where objects created in the UI go.
     pub fn ui_file(self) -> &'static str {
         match self {
-            Kind::Host => "ui/hosts.toml",
             Kind::Check => "ui/checks.toml",
-            Kind::Template => "ui/templates.toml",
+            Kind::Role => "ui/roles.toml",
+            Kind::Host => "ui/hosts.toml",
+            Kind::HostGroup | Kind::ServiceGroup | Kind::ContactGroup => "ui/groups.toml",
             Kind::Contact => "ui/contacts.toml",
+            Kind::Notify => "ui/notify.toml",
             Kind::Sink => "ui/sinks.toml",
         }
     }
@@ -51,27 +73,60 @@ impl Kind {
     /// Field order for new objects; other fields follow alphabetically.
     fn field_order(self) -> &'static [&'static str] {
         match self {
-            Kind::Host => &["name", "address", "use", "node", "tags", "vars", "enabled"],
-            Kind::Check | Kind::Template => &[
-                "name",
-                "use",
-                "apply_to",
-                "hosts",
+            Kind::Check => &[
+                "title",
                 "command",
                 "shell",
                 "passive",
                 "format",
+                "vars",
+                "thresholds",
                 "interval",
                 "retry_interval",
                 "max_attempts",
                 "timeout",
                 "freshness",
-                "notify",
-                "thresholds",
+            ],
+            Kind::Role => &[
+                "title",
+                "include",
+                "hosts",
+                "host_check",
+                "graph",
+                "node",
+                "groups",
+                "vars",
+                "interval",
+                "retry_interval",
+                "max_attempts",
+                "timeout",
+                "service",
+            ],
+            Kind::Host => &[
+                "name",
+                "address",
+                "roles",
+                "tags",
+                "groups",
+                "node",
+                "host_check",
+                "graph",
                 "vars",
                 "enabled",
+                "service",
             ],
-            Kind::Contact => &["use", "email", "webhook"],
+            Kind::HostGroup | Kind::ServiceGroup | Kind::ContactGroup => &["title", "members"],
+            Kind::Contact => &["email", "webhook", "groups"],
+            Kind::Notify => &[
+                "name",
+                "contacts",
+                "contact_groups",
+                "hosts",
+                "services",
+                "states",
+                "on",
+                "enabled",
+            ],
             Kind::Sink => &["name", "type", "url", "password_file", "flush", "buffer"],
         }
     }
@@ -129,7 +184,7 @@ pub fn objects(dir: &Path) -> std::io::Result<(Vec<Object>, Vec<Diagnostic>)> {
 
 fn parse(path: &str, text: &str) -> Result<Vec<Object>, (usize, String)> {
     let line = |offset: usize| text[..offset.min(text.len())].matches('\n').count() + 1;
-    let file: RawFile = toml::from_str(text).map_err(|e| {
+    let file: RawFile = crate::load::parse_file(text).map_err(|e| {
         (
             e.span().map_or(0, |s| line(s.start)),
             e.message().to_string(),
@@ -158,23 +213,43 @@ fn parse(path: &str, text: &str) -> Result<Vec<Object>, (usize, String)> {
             fields,
         });
     };
-    for t in file.host {
-        push(Kind::Host, None, t);
+    let keyed = [
+        (Kind::Check, file.check),
+        (Kind::Role, file.role),
+        (Kind::HostGroup, file.hostgroup),
+        (Kind::ServiceGroup, file.servicegroup),
+        (Kind::Contact, file.contact),
+        (Kind::ContactGroup, file.contactgroup),
+    ];
+    for (kind, map) in keyed {
+        for (name, t) in map {
+            push(kind, Some(name), t);
+        }
     }
-    for t in file.check {
-        push(Kind::Check, None, t);
-    }
-    for (name, t) in file.template {
-        push(Kind::Template, Some(name), t);
-    }
-    for (name, t) in file.contact {
-        push(Kind::Contact, Some(name), t);
-    }
-    for t in file.sink {
-        push(Kind::Sink, None, t);
+    for (kind, list) in [
+        (Kind::Host, file.host),
+        (Kind::Notify, file.notify),
+        (Kind::Sink, file.sink),
+    ] {
+        for t in list {
+            push(kind, None, t);
+        }
     }
     objects.sort_by_key(|o| o.line);
     Ok(objects)
+}
+
+/// One object to create (`name` is `None`), update or delete (`fields` is
+/// `None`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Edit {
+    pub kind: Kind,
+    pub name: Option<String>,
+    /// The object's fields as written, including `name`.
+    pub fields: Option<Table>,
+    /// For a new object: the file it goes to, relative to the object
+    /// directory; [`Kind::ui_file`] if not set.
+    pub path: Option<String>,
 }
 
 /// The file change that creates (`name` is `None`), updates or deletes
@@ -187,36 +262,78 @@ pub fn edit(
     name: Option<&str>,
     fields: Option<&Table>,
 ) -> Result<Change, EditError> {
-    let path = match name {
-        None => kind.ui_file().to_string(),
-        Some(name) => {
-            let (objects, _) = objects(dir).map_err(|source| files::Error::Io {
-                path: String::new(),
-                source,
-            })?;
-            objects
-                .into_iter()
-                .find(|o| o.kind == kind && o.name == name)
-                .ok_or_else(|| EditError::NotFound(kind.key(), name.into()))?
-                .path
-        }
+    let edits = [Edit {
+        kind,
+        name: name.map(String::from),
+        fields: fields.cloned(),
+        path: None,
+    }];
+    let mut changes = edit_many(dir, &edits)?;
+    Ok(changes.remove(0))
+}
+
+/// Several edits at once, e.g. clones of an object: applied in order, so
+/// edits of the same file build on each other. One change per file.
+pub fn edit_many(dir: &Path, edits: &[Edit]) -> Result<Vec<Change>, EditError> {
+    let io = |source| files::Error::Io {
+        path: String::new(),
+        source,
     };
-    let current = files::read(dir, &path)?;
-    let text = current.as_ref().map_or("", |f| f.text.as_str());
-    let new = edit_text(text, kind, name, fields).map_err(|err| match err {
-        EditError::Exists(k, n, _) => EditError::Exists(k, n, path.clone()),
-        EditError::Inline(k, n, _) => EditError::Inline(k, n, path.clone()),
-        EditError::Parse { message, .. } => EditError::Parse {
-            path: path.clone(),
-            message,
-        },
-        other => other,
-    })?;
-    Ok(Change {
-        path,
-        base: current.map(|f| f.hash),
-        text: Some(new),
-    })
+    let mut found: Option<Vec<Object>> = None;
+    // Path -> (hash it was read with, current text), in first-use order.
+    let mut texts: Vec<(String, Option<String>, String)> = Vec::new();
+    for e in edits {
+        let path = match (&e.name, &e.path) {
+            (None, Some(path)) => {
+                files::resolve(dir, path)?;
+                path.clone()
+            }
+            (None, None) => e.kind.ui_file().to_string(),
+            (Some(name), _) => {
+                if found.is_none() {
+                    found = Some(objects(dir).map_err(io)?.0);
+                }
+                found
+                    .as_ref()
+                    .and_then(|list| list.iter().find(|o| o.kind == e.kind && o.name == *name))
+                    .ok_or_else(|| EditError::NotFound(e.kind.key(), name.clone()))?
+                    .path
+                    .clone()
+            }
+        };
+        let i = match texts.iter().position(|(p, _, _)| *p == path) {
+            Some(i) => i,
+            None => {
+                let current = files::read(dir, &path)?;
+                let (hash, text) = match current {
+                    Some(f) => (Some(f.hash), f.text),
+                    None => (None, String::new()),
+                };
+                texts.push((path.clone(), hash, text));
+                texts.len() - 1
+            }
+        };
+        let new = edit_text(&texts[i].2, e.kind, e.name.as_deref(), e.fields.as_ref()).map_err(
+            |err| match err {
+                EditError::Exists(k, n, _) => EditError::Exists(k, n, path.clone()),
+                EditError::Inline(k, n, _) => EditError::Inline(k, n, path.clone()),
+                EditError::Parse { message, .. } => EditError::Parse {
+                    path: path.clone(),
+                    message,
+                },
+                other => other,
+            },
+        )?;
+        texts[i].2 = new;
+    }
+    Ok(texts
+        .into_iter()
+        .map(|(path, base, text)| Change {
+            path,
+            base,
+            text: Some(text),
+        })
+        .collect())
 }
 
 /// [`edit`] on the text of one file.
@@ -233,13 +350,19 @@ pub fn edit_text(
                 message: e.message().to_string(),
             })?;
     let key = kind.key();
+    // Notify rules may be unnamed; everything else needs a name.
     let new_name = match fields {
-        Some(f) => Some(
-            f.get("name")
+        Some(f) => {
+            let n = f
+                .get("name")
                 .and_then(Value::as_str)
-                .filter(|n| !n.is_empty())
-                .ok_or(EditError::NoName)?,
-        ),
+                .filter(|n| !n.is_empty());
+            match (n, kind) {
+                (Some(n), _) => Some(n),
+                (None, Kind::Notify) => None,
+                (None, _) => return Err(EditError::NoName),
+            }
+        }
         None => None,
     };
     let not_found = || EditError::NotFound(key, name.unwrap_or_default().into());
@@ -291,6 +414,15 @@ pub fn edit_text(
             }),
             Some(_) => return Err(inline()),
         };
+        // A new name must not be taken by another object in this file.
+        if let (Some(new), Some(Item::ArrayOfTables(list))) = (new_name, doc.get(key))
+            && name != Some(new)
+            && list
+                .iter()
+                .any(|t| t.get("name").and_then(Item::as_str) == Some(new))
+        {
+            return Err(EditError::Exists(key, new.into(), String::new()));
+        }
         match (name, position, fields) {
             (Some(_), None, _) => return Err(not_found()),
             (Some(_), Some(i), None) => {
@@ -326,14 +458,45 @@ fn new_table(kind: Kind, fields: &Table) -> toml_edit::Table {
     keys.sort_by_key(|k| (order.iter().position(|o| o == k).unwrap_or(order.len()), *k));
     let mut table = toml_edit::Table::new();
     for key in keys {
-        table.insert(key, Item::Value(to_edit(&fields[key])));
+        table.insert(key, new_item(&fields[key], false));
     }
     table
+}
+
+/// The item for a new key. A table of tables (`service`, `thresholds`,
+/// `for_each` data) becomes dotted keys with inline tables
+/// (`service.http = { ... }`), or headers if its siblings are headers
+/// (`[host.service.http]`); everything else an inline value.
+fn new_item(value: &Value, headers: bool) -> Item {
+    match value {
+        Value::Table(t) if headers => {
+            let mut table = toml_edit::Table::new();
+            for (k, v) in t {
+                table.insert(k, new_item(v, false));
+            }
+            Item::Table(table)
+        }
+        Value::Table(t) if !t.is_empty() && t.values().all(Value::is_table) => {
+            let mut table = toml_edit::Table::new();
+            table.set_dotted(true);
+            for (k, v) in t {
+                table.insert(k, Item::Value(to_edit(v)));
+            }
+            Item::Table(table)
+        }
+        v => Item::Value(to_edit(v)),
+    }
 }
 
 /// Makes `table` hold exactly `fields`. Unchanged values keep their
 /// formatting and comments, changed ones their comments.
 fn update_table(table: &mut dyn TableLike, fields: &Table) {
+    update_table_in(table, fields, None);
+}
+
+/// [`update_table`]; `header_indent` is used for new keys when no sibling
+/// key shows the indentation.
+fn update_table_in(table: &mut dyn TableLike, fields: &Table, header_indent: Option<String>) {
     let gone: Vec<String> = table
         .iter()
         .map(|(k, _)| k.to_string())
@@ -342,17 +505,48 @@ fn update_table(table: &mut dyn TableLike, fields: &Table) {
     for key in gone {
         table.remove(&key);
     }
+    // New keys look like their siblings: headers among headers, and the
+    // same indentation.
+    let headers = table.iter().any(|(_, item)| item.is_table());
+    let indent = table
+        .iter()
+        .filter(|(_, item)| item.is_value())
+        .find_map(|(k, _)| {
+            table
+                .key(k)?
+                .leaf_decor()
+                .prefix()?
+                .as_str()
+                .map(String::from)
+        })
+        .or(header_indent);
     for (key, value) in fields {
         match table.get_mut(key) {
             Some(item) => update_item(item, value),
             None => {
-                table.insert(key, Item::Value(to_edit(value)));
+                let item = new_item(value, headers && value.is_table());
+                let is_value = item.is_value();
+                table.insert(key, item);
+                if let (true, Some(indent), Some(mut k)) = (is_value, &indent, table.key_mut(key)) {
+                    k.leaf_decor_mut().set_prefix(indent.as_str());
+                }
             }
         }
     }
 }
 
 fn update_item(item: &mut Item, value: &Value) {
+    if let (Item::Table(table), Value::Table(fields)) = (&mut *item, value) {
+        // `  [host.service.x]`: keys go below at the same indentation.
+        let indent = table
+            .decor()
+            .prefix()
+            .and_then(|p| p.as_str())
+            .map(|p| p.rsplit('\n').next().unwrap_or_default().to_string())
+            .filter(|p| !p.is_empty());
+        update_table_in(table, fields, indent);
+        return;
+    }
     if let (Some(table), Value::Table(fields)) = (item.as_table_like_mut(), value) {
         update_table(table, fields);
         return;
@@ -430,7 +624,7 @@ tags = ["linux", "web"]
 [[host]]
 name = "web02"
 
-[template.linux]
+[role.linux]
 interval = "1m"
 max_attempts = 3
 
@@ -471,7 +665,7 @@ address = "10.0.0.9"
 name = "db01""#,
         );
         let out = edit_text(FILE, Kind::Host, None, Some(&new)).unwrap();
-        assert!(out.starts_with(FILE.split("[template").next().unwrap()));
+        assert!(out.starts_with(FILE.split("[role").next().unwrap()));
         let parsed: Table = toml::from_str(&out).unwrap();
         assert_eq!(parsed["host"].as_array().unwrap().len(), 3);
         assert!(
@@ -483,13 +677,13 @@ name = "db01""#,
             Kind::Check,
             None,
             Some(&fields(
-                "name = \"ping\"\ncommand = \"check_ping\"\nhosts = [\"a\"]",
+                "name = \"ping\"\ninterval = \"1m\"\ncommand = \"check_ping\"",
             )),
         )
         .unwrap();
         assert_eq!(
             out,
-            "[[check]]\nname = \"ping\"\nhosts = [\"a\"]\ncommand = \"check_ping\"\n"
+            "[check.ping]\ncommand = \"check_ping\"\ninterval = \"1m\"\n"
         );
     }
 
@@ -498,7 +692,7 @@ name = "db01""#,
         let out = edit_text(FILE, Kind::Host, Some("web02"), None).unwrap();
         assert!(!out.contains("web02"));
         assert!(out.contains("web01"));
-        assert!(out.contains("[template.linux]"));
+        assert!(out.contains("[role.linux]"));
         let out = edit_text(FILE, Kind::Contact, Some("oncall"), None).unwrap();
         assert!(!out.contains("oncall"));
         assert!(matches!(
@@ -510,8 +704,8 @@ name = "db01""#,
     #[test]
     fn keyed_objects_update_and_rename() {
         let new = fields("name = \"linux\"\ninterval = \"5m\"\nmax_attempts = 3");
-        let out = edit_text(FILE, Kind::Template, Some("linux"), Some(&new)).unwrap();
-        assert!(out.contains("[template.linux]\ninterval = \"5m\"\nmax_attempts = 3\n"));
+        let out = edit_text(FILE, Kind::Role, Some("linux"), Some(&new)).unwrap();
+        assert!(out.contains("[role.linux]\ninterval = \"5m\"\nmax_attempts = 3\n"));
 
         let new = fields("name = \"admins\"\nemail = [\"ops@example.com\"]");
         let out = edit_text(FILE, Kind::Contact, Some("oncall"), Some(&new)).unwrap();
@@ -520,7 +714,7 @@ name = "db01""#,
 
         let new = fields("name = \"linux\"");
         assert!(matches!(
-            edit_text(FILE, Kind::Template, None, Some(&new)),
+            edit_text(FILE, Kind::Role, None, Some(&new)),
             Err(EditError::Exists(..))
         ));
         let out = edit_text(
@@ -535,17 +729,73 @@ name = "db01""#,
 
     #[test]
     fn nested_tables_are_merged_in_place() {
-        let file = "[[check]]\nname = \"q\"\nhosts = [\"a\"]\ncommand = \"q.sh\"\nthresholds.depth = { warn = \"> 100\" }\n";
+        let file = "[check.q]\ncommand = \"q.sh\"\nthresholds.depth = { warn = \"> 100\" }\n";
         let new = fields(
-            "name = \"q\"\nhosts = [\"a\"]\ncommand = \"q.sh\"\nthresholds.depth = { warn = \"> 100\", crit = \"> 500\" }",
+            "name = \"q\"\ncommand = \"q.sh\"\nthresholds.depth = { warn = \"> 100\", crit = \"> 500\" }",
         );
         let out = edit_text(file, Kind::Check, Some("q"), Some(&new)).unwrap();
         let parsed: Table = toml::from_str(&out).unwrap();
         assert_eq!(
-            parsed["check"][0]["thresholds"]["depth"]["crit"].as_str(),
+            parsed["check"]["q"]["thresholds"]["depth"]["crit"].as_str(),
             Some("> 500")
         );
-        assert!(out.starts_with("[[check]]\nname = \"q\"\nhosts = [\"a\"]\ncommand = \"q.sh\"\n"));
+        assert!(out.starts_with("[check.q]\ncommand = \"q.sh\"\n"));
+    }
+
+    #[test]
+    fn new_tables_of_tables_use_dotted_keys_or_match_headers() {
+        let new = fields(
+            "name = \"web\"\nservice.http = { check = \"http\" }\nservice.ping = {}\nthresholds.time = { warn = \"> 1s\" }",
+        );
+        let out = edit_text("", Kind::Role, None, Some(&new)).unwrap();
+        assert_eq!(
+            out,
+            "[role.web]\nservice.http = { check = \"http\" }\nservice.ping = {}\nthresholds.time = { warn = \"> 1s\" }\n"
+        );
+
+        let file =
+            "[[host]]\nname = \"h\"\n  [host.service.a]\n  passive = true\n  [host.service.c]\n";
+        let new = fields(
+            "name = \"h\"\nservice.a = { passive = true, freshness = \"1h\" }\nservice.b = { check = \"x\" }\nservice.c = { enabled = false }",
+        );
+        let out = edit_text(file, Kind::Host, Some("h"), Some(&new)).unwrap();
+        assert_eq!(
+            out,
+            "[[host]]\nname = \"h\"\n  [host.service.a]\n  passive = true\n  freshness = \"1h\"\n  [host.service.c]\n  enabled = false\n\n[host.service.b]\ncheck = \"x\"\n"
+        );
+    }
+
+    #[test]
+    fn many_edits_of_one_file_build_on_each_other() {
+        let dir = std::env::temp_dir().join(format!("watcher-edit-many-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("hosts")).unwrap();
+        std::fs::write(dir.join("hosts/web.toml"), "[[host]]\nname = \"web01\"\n").unwrap();
+        let clone = |name: &str| Edit {
+            kind: Kind::Host,
+            name: None,
+            fields: Some(fields(&format!("name = \"{name}\"\nroles = [\"web\"]"))),
+            path: Some("hosts/web.toml".into()),
+        };
+        let changes = edit_many(&dir, &[clone("web02"), clone("web03")]).unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "hosts/web.toml");
+        assert_eq!(
+            changes[0].base,
+            Some(crate::files::hash("[[host]]\nname = \"web01\"\n"))
+        );
+        let text = changes[0].text.as_deref().unwrap();
+        assert!(
+            text.contains("web01") && text.contains("web02") && text.contains("web03"),
+            "{text}"
+        );
+
+        let bad = Edit {
+            path: Some("../etc.toml".into()),
+            ..clone("x")
+        };
+        assert!(matches!(edit_many(&dir, &[bad]), Err(EditError::File(_))));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -569,7 +819,7 @@ name = "db01""#,
             [
                 (Kind::Host, "web01", 2),
                 (Kind::Host, "web02", 8),
-                (Kind::Template, "linux", 11),
+                (Kind::Role, "linux", 11),
                 (Kind::Contact, "oncall", 15)
             ]
         );

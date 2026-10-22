@@ -10,6 +10,11 @@ class Auth {
 		return this.status !== null && (!this.status.required || this.status.user !== null);
 	}
 
+	/** May edit the config and see Config Trees: an admin, or anyone without login. */
+	get admin() {
+		return this.status !== null && (!this.status.required || this.status.user?.admin === true);
+	}
+
 	async refresh() {
 		this.status = await api.authStatus();
 	}

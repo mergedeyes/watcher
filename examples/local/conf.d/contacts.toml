@@ -1,0 +1,8 @@
+[contact.oncall]
+email = "oncall@example.com"
+# webhook = "https://example.com/hooks/watcher"
+
+# Every matching rule notifies.
+[[notify]]
+contacts = ["oncall"]
+hosts = { tags = ["local", "web"] }

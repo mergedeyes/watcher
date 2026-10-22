@@ -101,7 +101,7 @@ fn host(name: &str, node: Option<&str>) -> HostSpec {
         address: format!("{name}.example"),
         node: node.map(Into::into),
         tags: vec!["linux".into(), "web".into()],
-        vars: BTreeMap::from([("port".into(), "8080".into())]),
+        vars: serde_json::json!({ "port": "8080" }),
     }
 }
 

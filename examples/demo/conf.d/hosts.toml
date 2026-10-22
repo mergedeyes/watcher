@@ -1,0 +1,35 @@
+[[host]]
+name = "web01"
+address = "10.0.1.11"
+tags = ["linux", "web"]
+
+[[host]]
+name = "web02"
+address = "10.0.1.12"
+tags = ["linux", "web"]
+  [host.service.flappy]
+  [host.service.tls_expiry]
+
+[[host]]
+name = "db01"
+address = "10.0.2.21"
+tags = ["linux", "db"]
+vars.role = "primary"
+
+[[host]]
+name = "mq-01"
+address = "10.0.3.31"
+tags = ["linux"]
+
+# Results come from the backup job (passive), at least once a day.
+[[host]]
+name = "backup01"
+address = "10.0.4.41"
+  [host.service.backup]
+  passive = true
+  freshness = "26h"
+
+[[host]]
+name = "as400-prod"
+address = "10.0.9.5"
+tags = ["ibmi"]

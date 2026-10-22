@@ -1,6 +1,6 @@
 <!--
 	Preview and apply config changes: errors, or the effective changes
-	(hosts, services, contacts, sinks) with a confirm.
+	(hosts, services, groups, contacts, notify rules, sinks) with a confirm.
 -->
 <script lang="ts">
 	import { api, ApiError, type Change, type Changes, type Conflict, type Preview, type Problem } from './api.ts';
@@ -68,7 +68,9 @@
 	const SECTIONS: { key: keyof Changes; label: string }[] = [
 		{ key: 'hosts', label: 'Hosts' },
 		{ key: 'services', label: 'Services' },
+		{ key: 'groups', label: 'Groups' },
 		{ key: 'contacts', label: 'Contacts' },
+		{ key: 'notify', label: 'Notify Rules' },
 		{ key: 'sinks', label: 'Sinks' }
 	];
 

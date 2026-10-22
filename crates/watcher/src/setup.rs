@@ -218,6 +218,7 @@ async fn notify_test(
         name: "admins".into(),
         email: body.email,
         webhook: body.webhook,
+        groups: Vec::new(),
         origin: Default::default(),
     };
     let results: Vec<_> = notifier

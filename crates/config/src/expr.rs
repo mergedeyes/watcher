@@ -1,4 +1,5 @@
-//! `apply_to` expressions, e.g. `host.tags contains "linux" and not host.name ~ "^test-"`.
+//! Selector expressions (`expr`), e.g.
+//! `host.tags contains "linux" and not host.name ~ "^test-"`.
 //!
 //! ```text
 //! expr    := and ( ("or" | "||") and )*
@@ -7,10 +8,12 @@
 //! compare := operand op operand
 //! op      := "==" | "!=" | "~" | "!~" | "contains" | "in"
 //! operand := path | "string" | 'string' | [ "list", ... ]
-//! path    := host.name | host.address | host.node | host.tags | host.vars.<name>
+//! path    := host.name | host.address | host.node | host.tags | host.roles
+//!          | host.groups | host.vars.<name>
+//!          | service.name | service.check | service.groups
 //! ```
 
-use crate::Host;
+use crate::{Host, Service};
 use regex::Regex;
 use std::fmt;
 
@@ -38,19 +41,31 @@ enum Operand {
     List(Vec<String>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum Path {
     Name,
     Address,
     Node,
     Tags,
+    Roles,
+    Groups,
     Var(String),
+    ServiceName,
+    ServiceCheck,
+    ServiceGroups,
 }
 
-/// A value an operand resolves to for a given host.
+/// What an expression is evaluated against: a host, and for service
+/// selectors one of its services.
+pub struct Subject<'a> {
+    pub host: &'a Host,
+    pub service: Option<&'a Service>,
+}
+
+/// A value an operand resolves to.
 enum Value<'a> {
     Str(&'a str),
-    List(&'a [String]),
+    List(Vec<&'a str>),
     Missing,
 }
 
@@ -83,12 +98,47 @@ impl Expr {
         }
     }
 
-    pub fn matches(&self, host: &Host) -> bool {
-        eval(&self.0, host)
+    pub fn matches(&self, subject: &Subject) -> bool {
+        eval(&self.0, subject)
+    }
+
+    pub(crate) fn uses_service(&self) -> bool {
+        self.uses(&|p| {
+            matches!(
+                p,
+                Path::ServiceName | Path::ServiceCheck | Path::ServiceGroups
+            )
+        })
+    }
+
+    pub(crate) fn uses_roles_or_groups(&self) -> bool {
+        self.uses(&|p| matches!(p, Path::Roles | Path::Groups))
+    }
+
+    pub(crate) fn uses_groups(&self) -> bool {
+        self.uses(&|p| matches!(p, Path::Groups))
+    }
+
+    pub(crate) fn uses_service_groups(&self) -> bool {
+        self.uses(&|p| matches!(p, Path::ServiceGroups))
+    }
+
+    fn uses(&self, f: &impl Fn(&Path) -> bool) -> bool {
+        fn walk(node: &Node, f: &impl Fn(&Path) -> bool) -> bool {
+            let op = |o: &Operand| matches!(o, Operand::Path(p) if f(p));
+            match node {
+                Node::Const(_) => false,
+                Node::Not(n) => walk(n, f),
+                Node::And(a, b) | Node::Or(a, b) => walk(a, f) || walk(b, f),
+                Node::Eq(a, b) | Node::Ne(a, b) | Node::Contains(a, b) => op(a) || op(b),
+                Node::Match(a, _) | Node::NotMatch(a, _) => op(a),
+            }
+        }
+        walk(&self.0, f)
     }
 }
 
-fn eval(node: &Node, host: &Host) -> bool {
+fn eval(node: &Node, host: &Subject) -> bool {
     match node {
         Node::Const(b) => *b,
         Node::Not(n) => !eval(n, host),
@@ -99,25 +149,38 @@ fn eval(node: &Node, host: &Host) -> bool {
         Node::Match(a, re) => matches(&resolve(a, host), re),
         Node::NotMatch(a, re) => !matches(&resolve(a, host), re),
         Node::Contains(a, b) => match (resolve(a, host), resolve(b, host)) {
-            (Value::List(list), Value::Str(s)) => list.iter().any(|x| x == s),
+            (Value::List(list), Value::Str(s)) => list.contains(&s),
             (Value::Str(hay), Value::Str(needle)) => hay.contains(needle),
             _ => false,
         },
     }
 }
 
-fn resolve<'a>(op: &'a Operand, host: &'a Host) -> Value<'a> {
+fn resolve<'a>(op: &'a Operand, subject: &'a Subject) -> Value<'a> {
+    let host = subject.host;
+    let service = subject.service;
+    let list = |items: Vec<&'a str>| Value::List(items);
     match op {
         Operand::Str(s) => Value::Str(s),
-        Operand::List(l) => Value::List(l),
+        Operand::List(l) => list(l.iter().map(String::as_str).collect()),
         Operand::Path(Path::Name) => Value::Str(&host.name),
         Operand::Path(Path::Address) => Value::Str(&host.address),
         Operand::Path(Path::Node) => host.node.as_deref().map_or(Value::Missing, Value::Str),
-        Operand::Path(Path::Tags) => Value::List(&host.tags),
+        Operand::Path(Path::Tags) => list(host.tags.iter().map(String::as_str).collect()),
+        Operand::Path(Path::Roles) => list(host.roles.iter().map(|r| r.name.as_str()).collect()),
+        Operand::Path(Path::Groups) => list(host.groups.iter().map(|g| g.name.as_str()).collect()),
         Operand::Path(Path::Var(name)) => host
             .vars
             .get(name)
-            .map_or(Value::Missing, |v| Value::Str(v)),
+            .and_then(|v| v.as_text())
+            .map_or(Value::Missing, Value::Str),
+        Operand::Path(Path::ServiceName) => service.map_or(Value::Missing, |s| Value::Str(&s.name)),
+        Operand::Path(Path::ServiceCheck) => service
+            .and_then(|s| s.check.as_deref())
+            .map_or(Value::Missing, Value::Str),
+        Operand::Path(Path::ServiceGroups) => service.map_or(Value::Missing, |s| {
+            list(s.groups.iter().map(|g| g.name.as_str()).collect())
+        }),
     }
 }
 
@@ -413,12 +476,17 @@ impl Parser {
                     ["host", "address"] => Path::Address,
                     ["host", "node"] => Path::Node,
                     ["host", "tags"] => Path::Tags,
+                    ["host", "roles"] => Path::Roles,
+                    ["host", "groups"] => Path::Groups,
                     ["host", "vars", var] => Path::Var(var.to_string()),
+                    ["service", "name"] => Path::ServiceName,
+                    ["service", "check"] => Path::ServiceCheck,
+                    ["service", "groups"] => Path::ServiceGroups,
                     _ => {
                         return Err(self.error_at(
                             pos,
                             format!(
-                                "unknown field {:?} (expected host.name, host.address, host.node, host.tags or host.vars.<name>)",
+                                "unknown field {:?} (expected host.name, host.address, host.node, host.tags, host.roles, host.groups, host.vars.<name>, service.name, service.check or service.groups)",
                                 parts.join(".")
                             ),
                         ));
@@ -435,6 +503,7 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Var;
     use std::collections::BTreeMap;
 
     fn host(name: &str, tags: &[&str]) -> Host {
@@ -442,19 +511,25 @@ mod tests {
             name: name.into(),
             address: format!("{name}.example"),
             node: None,
-            check: None,
-            graph: None,
+            roles: Vec::new(),
             tags: tags.iter().map(|t| t.to_string()).collect(),
-            vars: BTreeMap::from([("os".to_string(), "debian".to_string())]),
+            groups: Vec::new(),
+            vars: BTreeMap::from([("os".to_string(), Var::Text("debian".to_string()))]),
+            host_check: None,
+            graph: None,
             enabled: true,
             origin: Default::default(),
+            sources: Default::default(),
         }
     }
 
     fn check(src: &str, h: &Host) -> bool {
         Expr::parse(src)
             .unwrap_or_else(|e| panic!("{src}: {e}"))
-            .matches(h)
+            .matches(&Subject {
+                host: h,
+                service: None,
+            })
     }
 
     #[test]

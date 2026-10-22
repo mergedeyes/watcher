@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
-use watcher_config::{Config, Contact, Smtp};
+use watcher_config::{Alert, Config, Contact, Smtp, state_name};
 use watcher_core::{HostState, State, StateType};
 use watcher_exec::scheduler::Event;
 
@@ -174,13 +174,19 @@ pub fn decide<'a>(
         (None, false) => event.change.and_then(|c| c.from).map(|(s, _)| s),
     };
 
-    let check = config.check(service);
     let host = config.host(service);
-    let contacts: Vec<&Contact> = check
-        .notify
-        .iter()
-        .filter_map(|name| config.contacts.iter().find(|c| c.name == *name))
-        .collect();
+    // Rules take recoveries by the problem state they end.
+    let (alert, rule_state) = match kind {
+        Kind::Problem => (Alert::Problem, to),
+        Kind::Recovery => (Alert::Recovery, before.unwrap_or(to)),
+        Kind::FlappingStart | Kind::FlappingStop | Kind::Test => (Alert::Flapping, to),
+    };
+    let contacts = config.recipients(
+        service,
+        host_check,
+        alert,
+        state_name(rule_state, host_check),
+    );
     if contacts.is_empty() {
         return None;
     }
@@ -190,14 +196,14 @@ pub fn decide<'a>(
             "{}/services/{}/{}",
             base.trim_end_matches('/'),
             url_segment(&host.name),
-            url_segment(&check.name)
+            url_segment(&service.name)
         )
     });
     let notification = Notification {
         kind,
         host: host.name.clone(),
         address: host.address.clone(),
-        service: check.name.clone(),
+        service: service.name.clone(),
         host_check,
         state: to,
         previous_state: previous.filter(|p| *p != to),
@@ -380,30 +386,27 @@ mod tests {
 [contact.ops]
 email = "ops@example.com"
 
+[[notify]]
+contacts = ["ops"]
+services = { exclude = ["quiet"] }
+
+[[notify]]
+contacts = ["ops"]
+hosts = ["router"]
+
 [[host]]
 name = "web 01"
 address = "10.0.0.5"
-
-[[check]]
-name = "disk"
-hosts = ["web 01"]
-command = "true"
-notify = ["ops"]
-
-[[check]]
-name = "quiet"
-hosts = ["web 01"]
-command = "true"
+  [host.service.disk]
+  command = "true"
+  [host.service.quiet]
+  command = "true"
 
 [[host]]
 name = "router"
-check = "ping"
-
-[[check]]
-name = "ping"
-hosts = ["router"]
-command = "true"
-notify = ["ops"]
+host_check = "ping"
+  [host.service.ping]
+  command = "true"
 "#,
         )
         .unwrap();

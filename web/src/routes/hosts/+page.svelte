@@ -11,6 +11,8 @@
 	let query = $state('');
 
 	let filter = $derived(page.url.searchParams.get('state'));
+	/** Only hosts of this host group. */
+	let group = $derived(page.url.searchParams.get('group'));
 
 	function matches(h: HostView) {
 		switch (filter) {
@@ -30,6 +32,7 @@
 		const rows = live.hosts.filter(
 			(h) =>
 				matches(h) &&
+				(!group || h.groups.includes(group)) &&
 				(!q || [h.name, h.address, ...h.tags].some((v) => v.toLowerCase().includes(q)))
 		);
 		const text = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
@@ -53,7 +56,7 @@
 
 <div class="content">
 	<div class="page-head">
-		<h1>Hosts{filter ? ` · ${filter.toUpperCase()}` : ''}</h1>
+		<h1>Hosts{group ? ` · ${group}` : ''}{filter ? ` · ${filter.toUpperCase()}` : ''}</h1>
 		<input type="search" placeholder="Search name, address, tag" bind:value={query} aria-label="Search" />
 	</div>
 
