@@ -1,0 +1,25 @@
+# Sinks: copy all results to another destination. Put [[sink]] in conf.d/.
+# Data is buffered on disk (data_dir/sinks/<name>/) until delivered, so an
+# unreachable destination loses nothing (up to buffer.max_size).
+
+# Central PostgreSQL, flushed every minute.
+[[sink]]
+name = "central"
+type = "postgres"                       # postgres
+url = "postgres://watcher@central.example.com/watcher"
+password_file = "/etc/watcher/central.pass"   # relative: to this file
+
+[sink.flush]
+mode = "interval"                       # interval | realtime
+interval = "1m"                         # default 1m
+
+[sink.buffer]
+max_size = "1GB"                        # default 1GB
+on_full = "drop_oldest"                 # drop_oldest
+
+# Same, sent as soon as results arrive.
+[[sink]]
+name = "reporting"
+type = "postgres"
+url = "postgres://watcher@reporting.example.com/watcher"
+flush.mode = "realtime"

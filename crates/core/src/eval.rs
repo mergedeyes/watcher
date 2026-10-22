@@ -47,24 +47,24 @@ pub struct ThresholdSpec {
     pub crit: Option<ConfigThreshold>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MetricResult {
     #[serde(flatten)]
     pub metric: Metric,
     /// `None` when the metric has no thresholds to evaluate.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<State>,
 }
 
 /// The evaluated outcome of one check run.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CheckResult {
     /// Final state: the worst of the plugin state and all metric states.
     pub state: State,
     /// State reported by the plugin (exit code, or JSON `state`).
     pub plugin_state: State,
     pub message: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub long_output: String,
     /// The detected output format; `None` if the output was not parsed.
     pub format: Option<Format>,

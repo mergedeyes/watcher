@@ -1,6 +1,6 @@
 use crate::threshold::Threshold;
 use crate::unit::Unit;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
@@ -9,25 +9,25 @@ use std::fmt::Write;
 /// `value` is always stored in the normalized unit (seconds, bytes, ...), so
 /// that `warn`/`crit` and the stored series stay consistent regardless of the
 /// unit the plugin printed.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Metric {
     pub name: String,
     pub value: f64,
-    #[serde(skip_serializing_if = "Unit::is_none")]
+    #[serde(default, skip_serializing_if = "Unit::is_none")]
     pub unit: Unit,
     /// Label set (Prometheus-style), e.g. `{sensor="cpu0"}`. Ordered for
     /// stable series identity.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
     /// Thresholds embedded in the output (perfdata or JSON), normalized like
     /// `value`. After evaluation these are the thresholds that were applied.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warn: Option<Threshold>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crit: Option<Threshold>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max: Option<f64>,
 }
 

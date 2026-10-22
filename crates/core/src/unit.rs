@@ -1,4 +1,4 @@
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Unit of a metric after normalization.
 ///
@@ -57,6 +57,14 @@ impl Unit {
             Unit::Counter => "c",
             Unit::Other(s) => s,
         }
+    }
+}
+
+/// Reads the symbol written by `Serialize` (`s`, `B`, `%`, ...).
+impl<'de> Deserialize<'de> for Unit {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let symbol = String::deserialize(deserializer)?;
+        Ok(Unit::parse(&symbol).0)
     }
 }
 

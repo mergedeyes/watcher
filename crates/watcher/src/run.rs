@@ -1,4 +1,5 @@
 use crate::config_cmd;
+use crate::sinks::Sinks;
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -56,6 +57,8 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         bail!("configuration has errors");
     };
     let config = Arc::new(config);
+    let data_dir = bootstrap.as_ref().map(|b| b.data_dir.clone());
+    let mut sinks = Sinks::start(data_dir.as_deref(), &config).await?;
 
     let listen = match (args.listen, &bootstrap) {
         (Some(addr), _) => addr,
@@ -136,8 +139,16 @@ pub async fn run(args: Args) -> Result<ExitCode> {
                 if event.change.is_some_and(|c| c.hard) && notify_tx.try_send(event.clone()).is_err() {
                     warn!("notification queue is full; dropped the notification for {}", event.id);
                 }
+                let record = Record {
+                    service: event.id,
+                    result: event.result,
+                    state: event.state,
+                    change: event.change,
+                    duration: event.duration,
+                };
+                sinks.record(&record);
                 if let Some(storage) = &mut storage {
-                    storage.record(event);
+                    storage.record(record);
                 }
             }
             _ = hangup.recv() => {
@@ -157,6 +168,9 @@ pub async fn run(args: Args) -> Result<ExitCode> {
                     warn!("{warning}");
                 }
                 let config = Arc::new(config);
+                if let Err(err) = sinks.reload(&config).await {
+                    error!("{err:#}");
+                }
                 config_tx.send_replace(config.clone());
                 hub.set_config(config);
             }
@@ -170,6 +184,7 @@ pub async fn run(args: Args) -> Result<ExitCode> {
     if let Some(storage) = storage {
         storage.shutdown().await;
     }
+    sinks.shutdown().await;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -256,14 +271,7 @@ impl Storage {
 
     /// Queues a result. Drops it rather than stalling the checks when the
     /// database falls far behind.
-    fn record(&mut self, event: Event) {
-        let record = Record {
-            service: event.id,
-            result: event.result,
-            state: event.state,
-            change: event.change,
-            duration: event.duration,
-        };
+    fn record(&mut self, record: Record) {
         if self.records.try_send(record).is_err() {
             self.dropped += 1;
             if self.dropped.is_power_of_two() {

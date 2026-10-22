@@ -116,6 +116,41 @@ pub struct Contact {
     pub origin: Origin,
 }
 
+/// A destination that receives a copy of all results, through a durable
+/// local buffer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sink {
+    pub name: String,
+    pub kind: SinkKind,
+    pub flush: Flush,
+    /// Size of the local buffer in bytes; the oldest data is dropped beyond it.
+    pub max_buffer: u64,
+    pub origin: Origin,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SinkKind {
+    /// Another PostgreSQL with the Watcher schema (created on connect).
+    Postgres {
+        url: String,
+        /// Password kept out of the URL, read when connecting.
+        password_file: Option<PathBuf>,
+    },
+}
+
+/// When a sink sends buffered data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flush {
+    /// As soon as results arrive (batched over about a second).
+    Realtime,
+    Interval(Duration),
+}
+
+impl Sink {
+    pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(60);
+    pub const DEFAULT_MAX_BUFFER: u64 = 1 << 30;
+}
+
 /// A check applied to a host.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Service {
@@ -140,6 +175,7 @@ pub struct Config {
     pub checks: Vec<Check>,
     pub contacts: Vec<Contact>,
     pub services: Vec<Service>,
+    pub sinks: Vec<Sink>,
 }
 
 impl Config {

@@ -1,4 +1,5 @@
-use crate::Store;
+use crate::{SeriesCache, Store};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,8 +17,8 @@ const MAX_BATCH: usize = 5_000;
 const MAX_PENDING: usize = 100_000;
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
 
-/// A check result to store.
-#[derive(Debug, Clone)]
+/// A check result to store. Serializable, so sinks can spool it on disk.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Record {
     /// `host/service`.
     pub service: String,
@@ -37,7 +38,7 @@ pub async fn ingest(
     ids: watch::Receiver<Arc<HashMap<String, i32>>>,
     mut records: mpsc::Receiver<Record>,
 ) {
-    let mut series = HashMap::new();
+    let mut series = SeriesCache::default();
     let mut pending: Vec<Record> = Vec::new();
     let mut retry_delay = Duration::from_secs(1);
     let mut closed = false;

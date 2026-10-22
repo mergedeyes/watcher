@@ -12,7 +12,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 use tokio::sync::{mpsc, watch};
 use watcher_core::{Format, RawOutput, ServiceState, State, StateType, Termination, evaluate};
-use watcher_store::{Backend, EventFilter, HostSpec, Record, ServiceSpec, Store, ingest};
+use watcher_store::{
+    Backend, EventFilter, HostSpec, Record, SeriesCache, ServiceSpec, Store, SyncMode, ingest,
+};
 
 /// A database created for one test.
 struct TestDb {
@@ -270,6 +272,88 @@ async fn sync_ingest_and_restore() {
                 1
             );
         }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn sink_batches_apply_exactly_once() {
+    each_server(|store, _, _| async move {
+        let ids = store
+            .sync(&[host("web01", None)], &[service("web01", "disk", "h1")])
+            .await
+            .unwrap();
+        let first = record("web01/disk", 0, "OK | used=10%", None);
+        let records: Vec<Record> = (1..=3)
+            .map(|i| {
+                record(
+                    "web01/disk",
+                    0,
+                    &format!("OK | used={}%", 10 + i),
+                    Some(&first.state),
+                )
+            })
+            .collect();
+        // What a sink reads back from its spool must equal what it wrote.
+        let json = serde_json::to_string(&records[0]).unwrap();
+        assert_eq!(serde_json::from_str::<Record>(&json).unwrap(), records[0]);
+
+        let batch = |seqs: &[u64]| -> Vec<(u64, Record)> {
+            seqs.iter()
+                .map(|&s| (s, records[s as usize - 1].clone()))
+                .collect()
+        };
+        let mut series = SeriesCache::default();
+        store
+            .write_sink("i1/central", &batch(&[1, 2]), &ids, &mut series)
+            .await
+            .unwrap();
+        assert_eq!(count(&store, "SELECT count(*) FROM samples").await, 2);
+        // Retried after a lost acknowledgement: nothing new.
+        store
+            .write_sink("i1/central", &batch(&[1, 2]), &ids, &mut series)
+            .await
+            .unwrap();
+        assert_eq!(count(&store, "SELECT count(*) FROM samples").await, 2);
+        // Overlapping batch: only record 3 is new.
+        store
+            .write_sink("i1/central", &batch(&[2, 3]), &ids, &mut series)
+            .await
+            .unwrap();
+        assert_eq!(count(&store, "SELECT count(*) FROM samples").await, 3);
+        assert_eq!(
+            count(
+                &store,
+                "SELECT seq FROM sink_progress WHERE source = 'i1/central'"
+            )
+            .await,
+            3
+        );
+        // Another source counts separately.
+        store
+            .write_sink("i2/central", &batch(&[1]), &ids, &mut series)
+            .await
+            .unwrap();
+        assert_eq!(count(&store, "SELECT count(*) FROM samples").await, 4);
+
+        // A second instance syncing additively leaves the first one's hosts alone.
+        store
+            .sync_with(
+                &[host("db02", None)],
+                &[service("db02", "disk", "h1")],
+                SyncMode::Additive,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            count(
+                &store,
+                "SELECT count(*) FROM hosts WHERE removed_at IS NOT NULL"
+            )
+            .await,
+            0
+        );
+        assert_eq!(count(&store, "SELECT count(*) FROM hosts").await, 2);
     })
     .await;
 }

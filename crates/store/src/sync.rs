@@ -2,6 +2,15 @@ use crate::{Result, Store, from_epoch};
 use std::collections::{BTreeMap, HashMap};
 use watcher_core::{ServiceState, State, StateType};
 
+/// How [`Store::sync_with`] treats objects that are not in the given lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncMode {
+    /// This instance owns the database: mark the rest removed.
+    Full,
+    /// Other instances write here too: only add and update.
+    Additive,
+}
+
 /// A host as the config defines it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HostSpec {
@@ -37,6 +46,17 @@ impl Store {
         &self,
         hosts: &[HostSpec],
         services: &[ServiceSpec],
+    ) -> Result<HashMap<String, i32>> {
+        self.sync_with(hosts, services, SyncMode::Full).await
+    }
+
+    /// Like [`Store::sync`]; with [`SyncMode::Additive`] nothing is marked
+    /// removed, for databases that several instances write to.
+    pub async fn sync_with(
+        &self,
+        hosts: &[HostSpec],
+        services: &[ServiceSpec],
+        mode: SyncMode,
     ) -> Result<HashMap<String, i32>> {
         let mut tx = self.pool.begin().await?;
 
@@ -78,13 +98,15 @@ impl Store {
         .bind(&vars)
         .execute(&mut *tx)
         .await?;
-        sqlx::query(
-            "UPDATE hosts SET removed_at = now()
-             WHERE removed_at IS NULL AND NOT (name = ANY($1))",
-        )
-        .bind(&names)
-        .execute(&mut *tx)
-        .await?;
+        if mode == SyncMode::Full {
+            sqlx::query(
+                "UPDATE hosts SET removed_at = now()
+                 WHERE removed_at IS NULL AND NOT (name = ANY($1))",
+            )
+            .bind(&names)
+            .execute(&mut *tx)
+            .await?;
+        }
 
         let svc_hosts: Vec<&str> = services.iter().map(|s| s.host.as_str()).collect();
         let svc_names: Vec<&str> = services.iter().map(|s| s.name.as_str()).collect();
@@ -107,15 +129,17 @@ impl Store {
             .iter()
             .map(|s| format!("{}/{}", s.host, s.name))
             .collect();
-        sqlx::query(
-            "UPDATE services s SET removed_at = now()
-             FROM hosts h
-             WHERE h.id = s.host_id AND s.removed_at IS NULL
-               AND NOT (h.name || '/' || s.name = ANY($1))",
-        )
-        .bind(&keys)
-        .execute(&mut *tx)
-        .await?;
+        if mode == SyncMode::Full {
+            sqlx::query(
+                "UPDATE services s SET removed_at = now()
+                 FROM hosts h
+                 WHERE h.id = s.host_id AND s.removed_at IS NULL
+                   AND NOT (h.name || '/' || s.name = ANY($1))",
+            )
+            .bind(&keys)
+            .execute(&mut *tx)
+            .await?;
+        }
 
         let rows: Vec<(i32, String)> = sqlx::query_as(
             "SELECT s.id, h.name || '/' || s.name

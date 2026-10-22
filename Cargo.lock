@@ -2554,6 +2554,7 @@ dependencies = [
  "anyhow",
  "axum",
  "clap",
+ "getrandom 0.4.3",
  "humantime",
  "rpassword",
  "serde",

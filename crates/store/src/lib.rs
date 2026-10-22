@@ -7,16 +7,19 @@
 mod auth;
 mod ingest;
 mod query;
+mod spool;
 mod sync;
 mod write;
 
 pub use auth::{ApiToken, TokenRef, User};
 pub use ingest::{Record, ingest};
 pub use query::{EventFilter, Points, Series, StateEvent};
-pub use sync::{HostSpec, ServiceSpec, StoredState};
+pub use spool::Spool;
+pub use sync::{HostSpec, ServiceSpec, StoredState, SyncMode};
+pub use write::SeriesCache;
 
 use sqlx::PgPool;
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use std::fmt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -64,10 +67,19 @@ pub struct Store {
 impl Store {
     /// Connects, applies migrations and sets up TimescaleDB if possible.
     pub async fn connect(url: &str) -> Result<Self> {
+        Self::connect_with(url, None).await
+    }
+
+    /// Like [`Store::connect`], with a password kept out of the URL.
+    pub async fn connect_with(url: &str, password: Option<&str>) -> Result<Self> {
+        let mut options: PgConnectOptions = url.parse()?;
+        if let Some(password) = password {
+            options = options.password(password);
+        }
         let pool = PgPoolOptions::new()
             .max_connections(8)
             .acquire_timeout(Duration::from_secs(10))
-            .connect(url)
+            .connect_with(options)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
         let backend = setup_timescale(&pool).await?;
