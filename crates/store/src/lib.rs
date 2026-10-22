@@ -4,11 +4,13 @@
 //! turns `samples` into a hypertable with compression if the `timescaledb`
 //! extension can be used, and otherwise keeps working on the plain table.
 
+mod auth;
 mod ingest;
 mod query;
 mod sync;
 mod write;
 
+pub use auth::{ApiToken, TokenRef, User};
 pub use ingest::{Record, ingest};
 pub use query::{EventFilter, Points, Series, StateEvent};
 pub use sync::{HostSpec, ServiceSpec, StoredState};
@@ -24,6 +26,9 @@ pub enum Error {
     Db(#[from] sqlx::Error),
     #[error("migration failed: {0}")]
     Migrate(#[from] sqlx::migrate::MigrateError),
+    /// A unique constraint was violated, e.g. the user already exists.
+    #[error("{0}")]
+    Conflict(String),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

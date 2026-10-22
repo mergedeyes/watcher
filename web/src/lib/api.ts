@@ -88,6 +88,30 @@ export interface StateEvent {
 	output: string;
 }
 
+export interface User {
+	id: number;
+	username: string;
+	admin: boolean;
+	disabled: boolean;
+	created: string;
+	last_login: string | null;
+}
+
+export interface AuthStatus {
+	/** Whether this server requires a login at all. */
+	required: boolean;
+	user: User | null;
+	/** False until the first account is created on the server. */
+	users_exist: boolean;
+}
+
+export interface ApiToken {
+	id: number;
+	name: string;
+	created: string;
+	last_used: string | null;
+}
+
 export class ApiError extends Error {
 	constructor(
 		public status: number,
@@ -101,9 +125,16 @@ export class ApiError extends Error {
 	}
 }
 
+/** Called on any 401: the session is missing or expired. */
+let onUnauthorized: () => void = () => {};
+export function setUnauthorizedHandler(handler: () => void) {
+	onUnauthorized = handler;
+}
+
 async function get<T>(path: string, init?: RequestInit): Promise<T> {
 	const res = await fetch(`/api/v1${path}`, init);
 	if (!res.ok) {
+		if (res.status === 401 && !path.startsWith('/auth/')) onUnauthorized();
 		let message = `${res.status} ${res.statusText}`;
 		try {
 			message = (await res.json()).error ?? message;
@@ -112,7 +143,16 @@ async function get<T>(path: string, init?: RequestInit): Promise<T> {
 		}
 		throw new ApiError(res.status, message);
 	}
+	if (res.status === 204) return undefined as T;
 	return res.json();
+}
+
+function send<T>(method: string, path: string, body?: unknown): Promise<T> {
+	return get<T>(path, {
+		method,
+		headers: body === undefined ? {} : { 'content-type': 'application/json' },
+		body: body === undefined ? undefined : JSON.stringify(body)
+	});
 }
 
 const seg = encodeURIComponent;
@@ -129,7 +169,15 @@ export const api = {
 	points: (id: number, from: string, points: number, signal?: AbortSignal) =>
 		get<Points>(`/series/${id}/points?from=${seg(from)}&points=${points}`, { signal }),
 	events: (host: string, service: string, limit = 20) =>
-		get<StateEvent[]>(`/events?host=${seg(host)}&service=${seg(service)}&limit=${limit}`)
+		get<StateEvent[]>(`/events?host=${seg(host)}&service=${seg(service)}&limit=${limit}`),
+
+	authStatus: () => get<AuthStatus>('/auth/status'),
+	login: (username: string, password: string) =>
+		send<{ user: User }>('POST', '/auth/login', { username, password }),
+	logout: () => send<void>('POST', '/auth/logout'),
+	tokens: () => get<ApiToken[]>('/tokens'),
+	createToken: (name: string) => send<{ token: string; info: ApiToken }>('POST', '/tokens', { name }),
+	deleteToken: (id: number) => send<void>('DELETE', `/tokens/${id}`)
 };
 
 export function serviceHref(host: string, service: string) {

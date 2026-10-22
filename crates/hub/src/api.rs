@@ -1,13 +1,15 @@
 //! HTTP API, version 1. All responses are JSON; errors are
 //! `{"error": "..."}` with a matching status code.
 
+use crate::auth;
 use crate::view::{Counts, HostView, ServiceDetail, ServiceView};
 use crate::{Hub, Update};
 use axum::extract::{Path, Query, State as AxState};
 use axum::http::StatusCode;
+use axum::middleware;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
@@ -36,8 +38,14 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/series/{id}/points", get(points))
         .route("/api/v1/events", get(events))
         .route("/api/v1/stream", get(stream))
+        .route("/api/v1/auth/status", get(auth::status))
+        .route("/api/v1/auth/login", post(auth::login))
+        .route("/api/v1/auth/logout", post(auth::logout))
+        .route("/api/v1/tokens", get(auth::tokens).post(auth::create_token))
+        .route("/api/v1/tokens/{id}", delete(auth::delete_token))
         // Unknown /api paths get a JSON 404; everything else is the web UI.
         .fallback(crate::ui::serve)
+        .layer(middleware::from_fn_with_state(hub.clone(), auth::require))
         .with_state(hub)
 }
 
@@ -45,6 +53,11 @@ pub fn router(hub: Arc<Hub>) -> Router {
 pub enum ApiError {
     NotFound(String),
     BadRequest(String),
+    /// Not logged in, or wrong credentials.
+    Unauthorized,
+    Forbidden(String),
+    Conflict(String),
+    TooManyRequests(String),
     NoDatabase,
     Unavailable(String),
     Internal(String),
@@ -55,6 +68,13 @@ impl IntoResponse for ApiError {
         let (status, msg) = match self {
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, m),
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
+            ApiError::Unauthorized => (
+                StatusCode::UNAUTHORIZED,
+                "log in, or send an API token as `Authorization: Bearer <token>`".into(),
+            ),
+            ApiError::Forbidden(m) => (StatusCode::FORBIDDEN, m),
+            ApiError::Conflict(m) => (StatusCode::CONFLICT, m),
+            ApiError::TooManyRequests(m) => (StatusCode::TOO_MANY_REQUESTS, m),
             ApiError::NoDatabase => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "no database configured; history is not available".into(),
@@ -68,6 +88,9 @@ impl IntoResponse for ApiError {
 
 impl From<watcher_store::Error> for ApiError {
     fn from(err: watcher_store::Error) -> Self {
+        if let watcher_store::Error::Conflict(msg) = err {
+            return ApiError::Conflict(msg);
+        }
         tracing::warn!("database query failed: {err}");
         ApiError::Internal("database query failed".into())
     }

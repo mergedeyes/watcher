@@ -21,8 +21,11 @@ watcher-notify = { path = "crates/notify" }
 watcher-store = { path = "crates/store" }
 
 anyhow = "1"
+argon2 = "0.6"
 axum = "0.8"
+base64 = "0.23"
 clap = { version = "4", features = ["derive", "env"] }
+getrandom = "0.4"
 http-body-util = "0.1"
 humantime = "2"
 # TLS uses rustls with the ring provider throughout (as sqlx does); the
@@ -31,10 +34,12 @@ lettre = { version = "0.11", default-features = false, features = ["builder", "s
 nix = { version = "0.31", features = ["signal", "process"] }
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "http2"] }
+rpassword = "7"
 rust-embed = { version = "8", features = ["mime-guess"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.11"
 shell-words = "1"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "macros", "json"] }
 thiserror = "2"

@@ -1,0 +1,254 @@
+//! Authentication against a real database; runs when
+//! `WATCHER_TEST_POSTGRES_URL` is set (see compose.yaml).
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode, header};
+use http_body_util::BodyExt;
+use serde_json::{Value, json};
+use sqlx::{AssertSqlSafe, Connection, PgConnection};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+use tower::ServiceExt;
+use watcher_config::Config;
+use watcher_hub::auth::hash_password;
+use watcher_hub::{AuthSettings, Hub};
+use watcher_store::Store;
+
+/// Creates a database for this test; returns its URL and the admin URL.
+async fn database() -> Option<(String, String)> {
+    let admin = std::env::var("WATCHER_TEST_POSTGRES_URL").ok()?;
+    let name = format!("watcher_hub_auth_{}", std::process::id());
+    let mut conn = PgConnection::connect(&admin).await.unwrap();
+    sqlx::query(AssertSqlSafe(format!(
+        "DROP DATABASE IF EXISTS {name} WITH (FORCE)"
+    )))
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    sqlx::query(AssertSqlSafe(format!("CREATE DATABASE {name}")))
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    let base = &admin[..admin.rfind('/').unwrap()];
+    Some((format!("{base}/{name}"), admin))
+}
+
+struct Client {
+    hub: Arc<Hub>,
+    cookie: Option<String>,
+}
+
+impl Client {
+    async fn call(
+        &mut self,
+        method: &str,
+        uri: &str,
+        body: Option<Value>,
+        extra: &[(&str, &str)],
+    ) -> (StatusCode, Value) {
+        let mut req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::HOST, "watcher.test");
+        if let Some(cookie) = &self.cookie {
+            req = req.header(header::COOKIE, format!("watcher_session={cookie}"));
+        }
+        for (k, v) in extra {
+            req = req.header(*k, *v);
+        }
+        let body = match body {
+            Some(json) => {
+                req = req.header(header::CONTENT_TYPE, "application/json");
+                Body::from(json.to_string())
+            }
+            None => Body::empty(),
+        };
+        let resp = self
+            .hub
+            .clone()
+            .router()
+            .oneshot(req.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = resp.status();
+        if let Some(set) = resp.headers().get(header::SET_COOKIE) {
+            let value = set.to_str().unwrap();
+            let token = value
+                .split(';')
+                .next()
+                .unwrap()
+                .trim_start_matches("watcher_session=");
+            self.cookie = (!token.is_empty()).then(|| token.to_string());
+            assert!(
+                value.contains("HttpOnly") && value.contains("SameSite=Strict"),
+                "{value}"
+            );
+        }
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+}
+
+#[tokio::test]
+async fn login_sessions_and_tokens() {
+    let Some((url, admin)) = database().await else {
+        eprintln!("skipped: set WATCHER_TEST_POSTGRES_URL");
+        return;
+    };
+    let store = Arc::new(Store::connect(&url).await.unwrap());
+    store
+        .create_user(
+            "Alice",
+            &hash_password("correct horse battery").unwrap(),
+            true,
+        )
+        .await
+        .unwrap();
+
+    let (control, _rx) = mpsc::channel(1);
+    let auth = AuthSettings {
+        required: true,
+        secure_cookies: false,
+    };
+    let hub = Hub::new(
+        Arc::new(Config::default()),
+        HashMap::new(),
+        control,
+        Some(store.clone()),
+        auth,
+    );
+    let mut c = Client { hub, cookie: None };
+
+    // Public: health, auth status, the UI. Everything else needs a login.
+    assert_eq!(
+        c.call("GET", "/api/v1/health", None, &[]).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(c.call("GET", "/", None, &[]).await.0, StatusCode::OK);
+    let (status, err) = c.call("GET", "/api/v1/services", None, &[]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(err["error"].as_str().unwrap().contains("Bearer"));
+    let (_, st) = c.call("GET", "/api/v1/auth/status", None, &[]).await;
+    assert_eq!(
+        (
+            st["required"].clone(),
+            st["user"].clone(),
+            st["users_exist"].clone()
+        ),
+        (json!(true), Value::Null, json!(true))
+    );
+
+    // Wrong password, then right (usernames ignore case).
+    let wrong = json!({"username": "alice", "password": "nope"});
+    assert_eq!(
+        c.call("POST", "/api/v1/auth/login", Some(wrong.clone()), &[])
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, body) = c
+        .call(
+            "POST",
+            "/api/v1/auth/login",
+            Some(json!({"username": "alice", "password": "correct horse battery"})),
+            &[],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["user"]["username"], "Alice");
+    assert!(body["user"].get("password_hash").is_none());
+    assert!(c.cookie.is_some());
+
+    assert_eq!(
+        c.call("GET", "/api/v1/services", None, &[]).await.0,
+        StatusCode::OK
+    );
+    let (_, st) = c.call("GET", "/api/v1/auth/status", None, &[]).await;
+    assert_eq!(st["user"]["username"], "Alice");
+
+    // Tokens: created with the session, refused cross-site.
+    let (status, _) = c
+        .call(
+            "POST",
+            "/api/v1/tokens",
+            Some(json!({"name": "cron"})),
+            &[("origin", "https://evil.example")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, created) = c
+        .call(
+            "POST",
+            "/api/v1/tokens",
+            Some(json!({"name": "cron"})),
+            &[("origin", "http://watcher.test")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let token = created["token"].as_str().unwrap().to_string();
+    assert!(token.starts_with("wt_"));
+    let (status, _) = c
+        .call("POST", "/api/v1/tokens", Some(json!({"name": "cron"})), &[])
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    // Logout ends the session; the token keeps working on its own.
+    let session = c.cookie.clone();
+    assert_eq!(
+        c.call("POST", "/api/v1/auth/logout", None, &[]).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert!(c.cookie.is_none());
+    c.cookie = session;
+    assert_eq!(
+        c.call("GET", "/api/v1/services", None, &[]).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    c.cookie = None;
+    let bearer = format!("Bearer {token}");
+    let (status, list) = c
+        .call("GET", "/api/v1/tokens", None, &[("authorization", &bearer)])
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list[0]["name"], "cron");
+    let id = list[0]["id"].as_i64().unwrap();
+    let uri = format!("/api/v1/tokens/{id}");
+    assert_eq!(
+        c.call("DELETE", &uri, None, &[("authorization", &bearer)])
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        c.call("GET", "/api/v1/tokens", None, &[("authorization", &bearer)])
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+
+    // Five wrong passwords lock the name for a minute, even the right one.
+    for _ in 0..5 {
+        c.call("POST", "/api/v1/auth/login", Some(wrong.clone()), &[])
+            .await;
+    }
+    let right = json!({"username": "ALICE", "password": "correct horse battery"});
+    assert_eq!(
+        c.call("POST", "/api/v1/auth/login", Some(right), &[])
+            .await
+            .0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+
+    drop(c);
+    drop(store);
+    let mut conn = PgConnection::connect(&admin).await.unwrap();
+    let name = &url[url.rfind('/').unwrap() + 1..];
+    sqlx::query(AssertSqlSafe(format!("DROP DATABASE {name} WITH (FORCE)")))
+        .execute(&mut conn)
+        .await
+        .unwrap();
+}
