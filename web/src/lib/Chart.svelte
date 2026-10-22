@@ -7,7 +7,7 @@
 	import 'uplot/dist/uPlot.min.css';
 	import { onDestroy } from 'svelte';
 	import { api, type Series } from './api.ts';
-	import { formatValue, seriesName } from './format.ts';
+	import { formatTicks, formatValue, seriesName, tickSteps } from './format.ts';
 
 	interface Props {
 		series: Series;
@@ -38,6 +38,18 @@
 	let pending: { data: uPlot.AlignedData; from: number; to: number } | null = null;
 
 	const HEIGHT = 170;
+	const FONT = '11px ui-monospace, Menlo, Consolas, monospace';
+
+	let measurer: CanvasRenderingContext2D | null = null;
+
+	/** Width of the y-axis: the widest label plus ticks and gap. */
+	function axisSize(labels: string[] | null) {
+		measurer ??= document.createElement('canvas').getContext('2d');
+		if (!measurer) return 70;
+		measurer.font = FONT;
+		const widest = Math.max(0, ...(labels ?? []).map((l) => measurer!.measureText(l).width));
+		return Math.ceil(widest) + 16;
+	}
 
 	function css(name: string) {
 		return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -86,7 +98,7 @@
 		const ink2 = css('--muted');
 		const rule = css('--line');
 		const unit = series.unit;
-		const axis = { stroke: ink2, grid: { stroke: rule, width: 1 }, ticks: { stroke: rule, width: 1 }, font: '11px ui-monospace, Menlo, Consolas, monospace' };
+		const axis = { stroke: ink2, grid: { stroke: rule, width: 1 }, ticks: { stroke: rule, width: 1 }, font: FONT };
 		const opts: uPlot.Options = {
 			width: box.clientWidth,
 			height: HEIGHT,
@@ -113,7 +125,7 @@
 						});
 					}
 				},
-				{ ...axis, size: 70, values: (_u, vals) => vals.map((v) => formatValue(v, unit)) }
+				{ ...axis, incrs: tickSteps(unit), size: (_u, labels) => axisSize(labels), values: (_u, vals) => formatTicks(vals, unit) }
 			],
 			series: [
 				{},
