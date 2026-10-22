@@ -10,8 +10,10 @@ pub mod scheduler;
 
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
+use std::ffi::OsStr;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{ExitStatus, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
@@ -94,6 +96,9 @@ pub struct ExecOptions {
     pub timeout: Duration,
     /// Maximum number of bytes kept from stdout and from stderr.
     pub output_limit: usize,
+    /// `PATH` for the check, which is also where its program is looked up;
+    /// `None` keeps the server's.
+    pub path: Option<Arc<OsStr>>,
 }
 
 impl Default for ExecOptions {
@@ -101,6 +106,7 @@ impl Default for ExecOptions {
         ExecOptions {
             timeout: DEFAULT_TIMEOUT,
             output_limit: DEFAULT_OUTPUT_LIMIT,
+            path: None,
         }
     }
 }
@@ -133,6 +139,9 @@ pub async fn run(command: &CommandLine, opts: &ExecOptions) -> Execution {
     let Some(mut cmd) = command.to_command() else {
         return failed("empty command".into());
     };
+    if let Some(path) = &opts.path {
+        cmd.env("PATH", path);
+    }
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

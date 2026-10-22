@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tower::ServiceExt;
-use watcher_config::{Config, ConfigMode};
+use watcher_config::{CheckDirs, Config, ConfigMode};
 use watcher_hub::auth::{hash_password, new_api_token};
 use watcher_hub::{AuthSettings, ConfigFiles, Hub};
 use watcher_store::Store;
@@ -204,6 +204,7 @@ async fn login_sessions_and_tokens() {
         dir,
         mode: ConfigMode::Hybrid,
         reload,
+        check_dirs: CheckDirs::default(),
     });
     assert_eq!(
         c.call("GET", "/api/v1/config", None, &[]).await.0,

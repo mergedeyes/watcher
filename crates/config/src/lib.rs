@@ -7,6 +7,7 @@
 //! [`Service`] with its command macros expanded.
 
 mod bootstrap;
+pub mod check_dirs;
 pub mod diff;
 pub mod edit;
 mod expr;
@@ -15,6 +16,7 @@ mod load;
 mod macros;
 
 pub use bootstrap::{Bootstrap, BootstrapError, ConfigMode, Database, Role, Smtp, SmtpTls, Tls};
+pub use check_dirs::CheckDirs;
 pub use expr::{Expr, ExprError};
 pub use load::{load_dir, load_dir_with};
 

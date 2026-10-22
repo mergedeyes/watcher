@@ -20,7 +20,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::info;
 use watcher_config::edit::{self, EditError, Kind};
 use watcher_config::files::{self, Change};
-use watcher_config::{ConfigMode, Diagnostic, Severity, diff};
+use watcher_config::{CheckDirs, ConfigMode, Diagnostic, Loaded, Severity, diff};
 
 /// Where the object files are and who may edit them.
 pub struct ConfigFiles {
@@ -28,6 +28,8 @@ pub struct ConfigFiles {
     pub mode: ConfigMode,
     /// Asks the run loop to reload after a change was written.
     pub reload: mpsc::Sender<Reload>,
+    /// Where check commands are looked up: for warnings and the script list.
+    pub check_dirs: CheckDirs,
 }
 
 /// A request to reload the object files, answered with the result.
@@ -50,6 +52,13 @@ fn admin(hub: &Hub, user: &User) -> Result<String, ApiError> {
         Some(Extension(CurrentUser(u))) if u.admin => Ok(u.username.clone()),
         _ => Err(ApiError::Forbidden("admin rights required".into())),
     }
+}
+
+/// Adds warnings for commands that aren't found in the check directories.
+fn with_missing_commands(mut loaded: Loaded, check_dirs: &CheckDirs) -> Loaded {
+    let missing = check_dirs.missing_commands(&loaded.config);
+    loaded.warnings.extend(missing);
+    loaded
 }
 
 fn files(hub: &Hub) -> Result<&ConfigFiles, ApiError> {
@@ -132,9 +141,11 @@ pub async fn overview(State(hub): Shared, user: User) -> Result<Response, ApiErr
     admin(&hub, &user)?;
     let files = files(&hub)?;
     let dir = files.dir.clone();
+    let check_dirs = files.check_dirs.clone();
     let (list, loaded) = blocking(move || {
         let list = files::list(&dir);
-        (list, watcher_config::load_dir(&dir))
+        let loaded = watcher_config::load_dir(&dir).map(|l| with_missing_commands(l, &check_dirs));
+        (list, loaded)
     })
     .await?;
     let list =
@@ -155,6 +166,16 @@ pub async fn overview(State(hub): Shared, user: User) -> Result<Response, ApiErr
         "diagnostics": problems(files, &diagnostics),
     }))
     .into_response())
+}
+
+/// The check directories and the executables in them, for command
+/// suggestions.
+pub async fn scripts(State(hub): Shared, user: User) -> Result<Response, ApiError> {
+    admin(&hub, &user)?;
+    let check_dirs = files(&hub)?.check_dirs.clone();
+    let scripts = blocking(move || check_dirs.scripts()).await?;
+    let dirs = files(&hub)?.check_dirs.dirs();
+    Ok(Json(json!({ "dirs": dirs, "scripts": scripts })).into_response())
 }
 
 pub async fn file(
@@ -242,10 +263,11 @@ pub async fn preview(
     admin(&hub, &user)?;
     let files = files(&hub)?;
     let dir = files.dir.clone();
+    let check_dirs = files.check_dirs.clone();
     let changes = body.changes;
     let result = blocking(move || {
         files::check_base(&dir, &changes)?;
-        files::preview(&dir, &changes)
+        files::preview(&dir, &changes).map(|l| with_missing_commands(l, &check_dirs))
     })
     .await?;
     let loaded = match result {
@@ -282,7 +304,11 @@ pub async fn apply(
     let dir = files.dir.clone();
     let changes = body.changes;
     let paths: Vec<String> = changes.iter().map(|c| c.path.clone()).collect();
-    let loaded = match blocking(move || files::apply(&dir, &changes)).await? {
+    let check_dirs = files.check_dirs.clone();
+    let applied = blocking(move || {
+        files::apply(&dir, &changes).map(|l| with_missing_commands(l, &check_dirs))
+    });
+    let loaded = match applied.await? {
         Ok(loaded) => loaded,
         Err(err) => return Ok(file_error(files, err)),
     };

@@ -47,6 +47,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/config", get(config::overview))
         .route("/api/v1/config/files/{*path}", get(config::file))
         .route("/api/v1/config/objects", get(config::objects))
+        .route("/api/v1/config/scripts", get(config::scripts))
         .route("/api/v1/config/edit", post(config::edit))
         .route("/api/v1/config/preview", post(config::preview))
         .route("/api/v1/config/apply", post(config::apply))

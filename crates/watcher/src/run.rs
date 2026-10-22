@@ -11,7 +11,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
-use watcher_config::{Config, ConfigMode, Severity, files, load_dir};
+use watcher_config::{CheckDirs, Config, ConfigMode, Severity, files, load_dir};
 use watcher_core::StateType;
 use watcher_exec::scheduler::{Control, Event, schedule};
 use watcher_hub::{AuthSettings, ConfigFiles, Hub, jobs, specs};
@@ -82,7 +82,8 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
         args.listen = None;
     }
     let (bootstrap, conf_dir) = config_cmd::locate(args.path.as_deref())?;
-    let Some(config) = load(&conf_dir) else {
+    let check_dirs = config_cmd::check_dirs(bootstrap.as_ref(), &conf_dir);
+    let Some(config) = load(&conf_dir, &check_dirs) else {
         bail!("configuration has errors");
     };
     let config = Arc::new(config);
@@ -158,7 +159,7 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
     let (control, control_rx) = mpsc::channel(64);
     let (events_tx, mut events) = mpsc::channel(256);
     let scheduler = tokio::spawn(schedule(
-        jobs(&config),
+        jobs(&config, &check_dirs),
         initial,
         args.max_concurrent,
         control_rx,
@@ -176,6 +177,7 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
         dir: conf_dir.clone(),
         mode,
         reload: reload_tx,
+        check_dirs: check_dirs.clone(),
     });
     let (changed_tx, mut changed) = mpsc::channel(1);
     // Kept alive until the end of `run`.
@@ -199,6 +201,12 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
         config.services.len(),
         conf_dir.display()
     );
+    let dirs: Vec<String> = check_dirs
+        .dirs()
+        .iter()
+        .map(|d| d.display().to_string())
+        .collect();
+    info!("check directories: {}", dirs.join(", "));
 
     let mut running = Running {
         storage,
@@ -208,6 +216,7 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
         notify_tx: &notify_tx,
         config_tx: &config_tx,
         hub: &hub,
+        check_dirs: &check_dirs,
     };
     let mut hangup = signal(SignalKind::hangup())?;
     let mut terminate = signal(SignalKind::terminate())?;
@@ -256,6 +265,7 @@ struct Running<'a> {
     notify_tx: &'a mpsc::Sender<Event>,
     config_tx: &'a watch::Sender<Arc<Config>>,
     hub: &'a Hub,
+    check_dirs: &'a CheckDirs,
 }
 
 impl Running<'_> {
@@ -289,7 +299,7 @@ impl Running<'_> {
     /// configuration stays.
     async fn reload(&mut self, conf_dir: &Path, by: &str) -> Result<(), String> {
         info!("reloading ({by})");
-        let Some(config) = load(conf_dir) else {
+        let Some(config) = load(conf_dir, self.check_dirs) else {
             warn!("reload failed; keeping the running configuration");
             return Err("the configuration has errors".into());
         };
@@ -303,7 +313,7 @@ impl Running<'_> {
         info!("reloaded: {} services", config.services.len());
         if self
             .control
-            .send(Control::Reload(jobs(&config)))
+            .send(Control::Reload(jobs(&config, self.check_dirs)))
             .await
             .is_err()
         {
@@ -460,10 +470,15 @@ impl Storage {
     }
 }
 
-/// Loads the config, logging diagnostics. `None` if it has errors.
-fn load(conf_dir: &Path) -> Option<Config> {
+/// Loads the config, logging diagnostics (including commands not found in
+/// `check_dirs`). `None` if it has errors.
+fn load(conf_dir: &Path, check_dirs: &CheckDirs) -> Option<Config> {
     let (config, diagnostics) = match load_dir(conf_dir) {
-        Ok(loaded) => (Some(loaded.config), loaded.warnings),
+        Ok(mut loaded) => {
+            let missing = check_dirs.missing_commands(&loaded.config);
+            loaded.warnings.extend(missing);
+            (Some(loaded.config), loaded.warnings)
+        }
         Err(diagnostics) => (None, diagnostics),
     };
     for d in &diagnostics {

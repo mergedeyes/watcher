@@ -85,3 +85,24 @@ async fn signals_are_reported() {
     let exec = run(&sh("kill -TERM $$"), &opts(5000)).await;
     assert_eq!(exec.output.termination, Termination::Signaled(15));
 }
+
+#[tokio::test]
+async fn programs_are_found_in_path_option() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("watcher-exec-path-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("check_here");
+    std::fs::write(&script, "#!/bin/sh\necho \"OK $1\"\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths([dir.clone(), "/usr/bin".into(), "/bin".into()]).unwrap();
+    let opts = ExecOptions {
+        path: Some(path.as_os_str().into()),
+        ..opts(5000)
+    };
+
+    let direct = CommandLine::parse("check_here a", false).unwrap();
+    assert_eq!(run(&direct, &opts).await.output.stdout, "OK a\n");
+    let shell = sh("check_here b | tr O o");
+    assert_eq!(run(&shell, &opts).await.output.stdout, "oK b\n");
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -1,8 +1,10 @@
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
+use watcher_config::CheckDirs;
 use watcher_core::{
     CheckResult, ConfigThreshold, Format, Termination, Threshold, ThresholdSpec, Unit, evaluate,
     format_value,
@@ -56,9 +58,15 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         many => CommandLine::Argv(many.to_vec()),
     };
     let thresholds = thresholds(&args.warn, &args.crit)?;
+    // Look commands up like `watcher run` would here.
+    let check_dirs = match crate::config_cmd::locate(None) {
+        Ok((bootstrap, conf_dir)) => crate::config_cmd::check_dirs(bootstrap.as_ref(), &conf_dir),
+        Err(_) => CheckDirs::default_for(Path::new(".")),
+    };
     let opts = ExecOptions {
         timeout: args.timeout,
         output_limit: args.output_limit,
+        path: Some(check_dirs.search_path().as_os_str().into()),
     };
 
     let exec = watcher_exec::run(&command, &opts).await;

@@ -326,6 +326,26 @@ paths:
                   objects: { type: array, items: { $ref: "#/components/schemas/ConfigObject" } }
                   diagnostics: { type: array, items: { $ref: "#/components/schemas/Problem" } }
 
+  /config/scripts:
+    get:
+      summary: Check directories and the executables in them (admins)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dirs: { type: array, items: { type: string } }
+                  scripts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        dir: { type: string }
+
   /config/edit:
     post:
       summary: The file change for creating, updating or deleting an object (admins)

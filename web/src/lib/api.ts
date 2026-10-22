@@ -283,6 +283,8 @@ export const api = {
 	config: () => get<ConfigOverview>('/config'),
 	configFile: (path: string) => get<ConfigFile>(`/config/files/${path.split('/').map(seg).join('/')}`),
 	configObjects: () => get<{ objects: ConfigObject[]; diagnostics: Problem[] }>('/config/objects'),
+	/** Executables in the check directories, where bare command names are looked up. */
+	configScripts: () => get<{ dirs: string[]; scripts: { name: string; dir: string }[] }>('/config/scripts'),
 	/** The file change for creating (no name), updating or deleting (no fields) an object. */
 	editObject: (kind: Kind, name: string | null, fields: Record<string, unknown> | null) =>
 		send<Change>('POST', '/config/edit', { kind, name, fields }),

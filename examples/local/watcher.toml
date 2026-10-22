@@ -4,6 +4,9 @@ role = "standalone"
 conf_dir = "conf.d"
 # Who edits conf.d: hybrid (web UI + files, default), files (UI read-only), ui.
 # config_mode = "hybrid"
+# Bare command names are looked up here first, then in PATH.
+# Default: checks/, then the monitoring-plugins directories.
+# check_dirs = ["checks", "/usr/lib/nagios/plugins"]
 # Used for links in notifications.
 public_url = "http://localhost:8080"
 
