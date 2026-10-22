@@ -6,7 +6,10 @@
 	import ApplyDialog from '#lib/ApplyDialog.svelte';
 	import { config, fileHref } from '#lib/config.svelte.ts';
 	import ConfigHead from '#lib/ConfigHead.svelte';
+	import Combobox from '#lib/Combobox.svelte';
 	import ConfigTree from '#lib/ConfigTree.svelte';
+	import { live } from '#lib/live.svelte.ts';
+	import { Suggest } from '#lib/suggest.ts';
 	import { KINDS, SCHEMAS, SELECTOR_FIELDS, expandNames, fromForm, otherKeys, toForm, type Field, type FormValues, type ServiceRow } from '#lib/schema.ts';
 
 	let kind = $derived(KINDS.find((k) => k.path === page.params.kind));
@@ -57,6 +60,10 @@
 	});
 
 	let others = $derived(kind ? otherKeys(kind.kind, raw) : []);
+
+	let suggest = $derived(
+		new Suggest(config.objects, [...new Set(live.services.map((s) => s.service))], scripts?.scripts ?? [])
+	);
 
 	/** Services of the host's roles (as written), by name: role. Host services with these names override them. */
 	let roleServices = $derived.by(() => {
@@ -124,21 +131,11 @@
 		if (applied && kind) goto(`/config/${kind.path}`);
 	}
 
-	function names(k: Kind) {
-		return config.of(k).map((o) => o.name);
-	}
-
 	function items(text: string) {
 		return text
 			.split(',')
 			.map((s) => s.trim())
 			.filter(Boolean);
-	}
-
-	function add(f: Field, item: string) {
-		if (!values) return;
-		const current = items(String(values[f.key] ?? ''));
-		if (!current.includes(item)) values[f.key] = [...current, item].join(', ');
 	}
 
 	/** In clone mode, the name field takes several names. */
@@ -201,8 +198,8 @@
 											<div class="rows">
 												{#each rows<[string, string]>(f.key) as row, i (i)}
 													<div class="row two">
-														<input class="mono" placeholder="name" bind:value={row[0]} aria-label="Variable name" />
-														<input class="mono" placeholder="value" bind:value={row[1]} aria-label="Variable value" />
+														<Combobox mono placeholder="name" bind:value={row[0]} label="Variable name" options={suggest.varNames()} />
+														<Combobox mono placeholder="value" bind:value={row[1]} label="Variable value" options={suggest.varValues(row[0])} />
 														<button type="button" class="btn" aria-label="Remove"
 															onclick={() => (values![f.key] = rows<[string, string]>(f.key).filter((_, j) => j !== i))}>×</button>
 													</div>
@@ -214,9 +211,9 @@
 											<div class="rows">
 												{#each rows<[string, string, string]>(f.key) as row, i (i)}
 													<div class="row three">
-														<input class="mono" placeholder="metric" bind:value={row[0]} aria-label="Metric" />
-														<input class="mono" placeholder="warn, e.g. > 100" bind:value={row[1]} aria-label="Warning" />
-														<input class="mono" placeholder="crit, e.g. > 500" bind:value={row[2]} aria-label="Critical" />
+														<Combobox mono placeholder="metric" bind:value={row[0]} label="Metric" options={suggest.metrics()} />
+														<Combobox mono placeholder="warn, e.g. > 100" bind:value={row[1]} label="Warning" options={suggest.thresholds()} />
+														<Combobox mono placeholder="crit, e.g. > 500" bind:value={row[2]} label="Critical" options={suggest.thresholds()} />
 														<button type="button" class="btn" aria-label="Remove"
 															onclick={() => (values![f.key] = rows<[string, string, string]>(f.key).filter((_, j) => j !== i))}>×</button>
 													</div>
@@ -229,13 +226,14 @@
 											<div class="selector">
 												{#if sel.list}
 													<label class="sub" for="{id}-list">List</label>
-													<input id="{id}-list" class="mono" bind:value={sel.list} />
+													<Combobox id="{id}-list" mono multi bind:value={sel.list} options={suggest.selector(f.selects ?? 'host', 'name')} />
 												{:else}
 													<label class="all"><input type="checkbox" checked={sel.all === 'true'}
 														onchange={(e) => (sel.all = e.currentTarget.checked ? 'true' : '')} /> All {f.selects === 'service' ? 'services' : 'hosts'}</label>
 													{#each SELECTOR_FIELDS[f.selects ?? 'host'] as [key, label, placeholder] (key)}
 														<label class="sub" for="{id}-{key}">{label}</label>
-														<input id="{id}-{key}" class:mono={key === 'expr'} {placeholder} bind:value={sel[key]} />
+														<Combobox id="{id}-{key}" mono={key === 'expr'} multi={key !== 'expr'} {placeholder} bind:value={sel[key]!}
+															options={suggest.selector(f.selects ?? 'host', key)} />
 													{/each}
 												{/if}
 											</div>
@@ -246,10 +244,10 @@
 												{/if}
 												{#each rows<ServiceRow>(f.key) as row, i (i)}
 													<div class="row svc">
-														<input class="mono" placeholder="name" bind:value={row[0]} aria-label="Service" />
-														<input class="mono" placeholder={row[0] || 'check'} bind:value={row[1]} aria-label="Check" list="checks-list" />
-														<input class="mono" placeholder="host var" bind:value={row[2]} aria-label="For each" />
-														<input placeholder="groups" bind:value={row[3]} aria-label="Service groups" />
+														<Combobox mono placeholder="name" bind:value={row[0]} label="Service" options={suggest.serviceNames()} />
+														<Combobox mono placeholder={row[0] || 'check'} bind:value={row[1]} label="Check" options={suggest.names('check')} />
+														<Combobox mono placeholder="host var" bind:value={row[2]} label="For each" options={suggest.varNames(true)} />
+														<Combobox multi placeholder="groups" bind:value={row[3]} label="Service groups" options={suggest.names('servicegroup')} />
 														<select bind:value={row[4]} aria-label="Enabled">
 															<option value="">—</option>
 															<option value="yes">yes</option>
@@ -264,50 +262,22 @@
 												{/each}
 												<button type="button" class="btn small"
 													onclick={() => (values![f.key] = [...rows<ServiceRow>(f.key), ['', '', '', '', '', '']])}>Add service</button>
-												<datalist id="checks-list">{#each names('check') as c (c)}<option value={c}></option>{/each}</datalist>
 											</div>
 										{:else}
-											<input
+											<Combobox
 												{id}
-												type="text"
-												class:mono={f.type !== 'text'}
+												mono={f.type !== 'text'}
+												multi={f.type === 'list'}
 												inputmode={f.type === 'int' ? 'numeric' : undefined}
 												placeholder={f.placeholder}
 												required={f.required}
-												list={f.scripts && scripts ? `${id}-scripts` : undefined}
-												bind:value={values[f.key]}
+												options={suggest.field(kind.kind, f)}
+												bind:value={() => String(values![f.key] ?? ''), (v) => (values![f.key] = v)}
 											/>
-											{#if f.scripts && scripts}
-												<datalist id="{id}-scripts">
-													{#each scripts.scripts as s (s.name)}<option value={s.name}>{s.dir}</option>{/each}
-												</datalist>
-											{/if}
 										{/if}
 										{#if f.help}<div class="help">{f.help}</div>{/if}
 										{#if f.scripts && scripts}
 											<div class="help">Check dirs: <span class="mono">{scripts.dirs.join(', ')}</span> ({scripts.scripts.length} scripts)</div>
-										{/if}
-										{#if f.suggestOne}
-											{@const current = String(values[f.key] ?? '').trim()}
-											{@const free = names(f.suggestOne).filter((n) => n !== current)}
-											{#if free.length > 0}
-												<div class="suggest">
-													{#each free.slice(0, 20) as n (n)}
-														<button type="button" class="tag" onclick={() => (values![f.key] = n)}>{n}</button>
-													{/each}
-												</div>
-											{/if}
-										{/if}
-										{#if f.suggest}
-											{@const chosen = items(String(values[f.key] ?? ''))}
-											{@const free = names(f.suggest).filter((n) => !chosen.includes(n))}
-											{#if free.length > 0}
-												<div class="suggest">
-													{#each free.slice(0, 20) as n (n)}
-														<button type="button" class="tag" onclick={() => add(f, n)}>+ {n}</button>
-													{/each}
-												</div>
-											{/if}
 										{/if}
 									</div>
 								{/each}
@@ -375,7 +345,7 @@
 		color: var(--muted);
 	}
 
-	.input > input[type='text'],
+	.input > :global(.combo),
 	.input > select {
 		width: 100%;
 		max-width: 640px;
@@ -451,24 +421,6 @@
 		grid-column: 1 / -1;
 		font-size: 11px;
 		color: var(--muted);
-	}
-
-	.suggest {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 4px;
-		margin-top: 4px;
-	}
-
-	.suggest .tag {
-		cursor: pointer;
-		font: inherit;
-		font-size: 11px;
-	}
-
-	.suggest .tag:hover {
-		color: var(--text);
-		border-color: var(--muted);
 	}
 
 	.rows {

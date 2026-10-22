@@ -1,0 +1,168 @@
+// Suggestions for config form fields: names of objects a field refers to,
+// and values already used for the same field elsewhere in the config.
+
+import type { ConfigObject, Kind } from './api.ts';
+import type { Field } from './schema.ts';
+
+export interface Option {
+	value: string;
+	/** Shown muted next to the value, e.g. where it comes from. */
+	hint?: string;
+}
+
+const DURATIONS = ['10s', '30s', '1m', '2m', '5m', '10m', '15m', '30m', '1h', '6h', '12h', '26h'];
+const STATES = ['warning', 'critical', 'unknown', 'down'];
+const ON = ['problem', 'recovery', 'flapping'];
+
+function isTable(v: unknown): v is Record<string, unknown> {
+	return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** Scalars of `v`: the value itself, or the items of a list. */
+function scalars(v: unknown): string[] {
+	if (v === undefined || v === null || isTable(v)) return [];
+	return (Array.isArray(v) ? v : [v]).filter((x) => !isTable(x) && !Array.isArray(x)).map(String);
+}
+
+function uniq(values: string[]): string[] {
+	return [...new Set(values.filter((v) => v.trim() !== ''))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+
+/** Suggestions for one config form, built from all objects. */
+export class Suggest {
+	constructor(
+		private objects: ConfigObject[],
+		/** Names of the services that exist (from the live view). */
+		private services: string[],
+		private scripts: { name: string; dir: string }[]
+	) {}
+
+	private of(kind: Kind) {
+		return this.objects.filter((o) => o.kind === kind);
+	}
+
+	names(kind: Kind): Option[] {
+		return this.of(kind).map((o) => {
+			const title = o.fields.title;
+			return { value: o.name, hint: typeof title === 'string' ? title : undefined };
+		});
+	}
+
+	/** Values written for `key` in objects of `kind` (lists: their items). */
+	used(kind: Kind, key: string): string[] {
+		return uniq(this.of(kind).flatMap((o) => scalars(o.fields[key])));
+	}
+
+	tags(): string[] {
+		return this.used('host', 'tags');
+	}
+
+	nodes(): string[] {
+		return uniq([...this.used('host', 'node'), ...this.used('role', 'node')]);
+	}
+
+	/** Service names: checks, role and host service entries, live services. */
+	serviceNames(): Option[] {
+		const out = new Map<string, string>();
+		for (const s of this.services) out.set(s, 'service');
+		for (const o of [...this.of('role'), ...this.of('host')]) {
+			if (isTable(o.fields.service)) for (const s of Object.keys(o.fields.service)) out.set(s, `${o.kind} ${o.name}`);
+		}
+		for (const c of this.of('check')) if (!out.has(c.name)) out.set(c.name, 'check');
+		return [...out].sort(([a], [b]) => a.localeCompare(b)).map(([value, hint]) => ({ value, hint }));
+	}
+
+	/** Var names (all kinds), or only those holding tables (`for_each` data). */
+	varNames(tables = false): string[] {
+		return uniq(
+			this.objects.flatMap((o) =>
+				isTable(o.fields.vars) ? Object.entries(o.fields.vars).filter(([, v]) => isTable(v) === tables).map(([k]) => k) : []
+			)
+		);
+	}
+
+	/** Values written for var `name` anywhere. */
+	varValues(name: string): string[] {
+		return uniq(this.objects.flatMap((o) => (isTable(o.fields.vars) ? scalars(o.fields.vars[name]) : [])));
+	}
+
+	metrics(): string[] {
+		return uniq(this.objects.flatMap((o) => (isTable(o.fields.thresholds) ? Object.keys(o.fields.thresholds) : [])));
+	}
+
+	thresholds(): string[] {
+		return uniq(
+			this.objects.flatMap((o) =>
+				isTable(o.fields.thresholds)
+					? Object.values(o.fields.thresholds).flatMap((t) => (isTable(t) ? scalars(t.warn).concat(scalars(t.crit)) : []))
+					: []
+			)
+		);
+	}
+
+	commands(kind: Kind): Option[] {
+		return [
+			...this.used(kind, 'command').map((value) => ({ value, hint: 'used' })),
+			...this.scripts.map((s) => ({ value: s.name, hint: s.dir }))
+		];
+	}
+
+	/** Options for a form field of `kind`. */
+	field(kind: Kind, f: Field): Option[] {
+		if (f.suggest) return this.names(f.suggest);
+		if (f.suggestOne) return this.names(f.suggestOne);
+		const used = this.used(kind, f.key);
+		switch (f.key) {
+			case 'name':
+				return [];
+			case 'command':
+				return this.commands(kind);
+			case 'tags':
+				return this.tags().map((value) => ({ value }));
+			case 'node':
+				return this.nodes().map((value) => ({ value }));
+			case 'host_check':
+			case 'graph':
+				return this.serviceNames();
+			case 'states':
+				return STATES.map((value) => ({ value }));
+			case 'on':
+				return ON.map((value) => ({ value }));
+			case 'interval':
+			case 'retry_interval':
+			case 'timeout':
+			case 'freshness':
+				return uniq([...used, ...DURATIONS]).map((value) => ({ value }));
+			case 'email':
+				return this.used('contact', 'email').map((value) => ({ value }));
+			default:
+				return used.map((value) => ({ value }));
+		}
+	}
+
+	/** Options for a selector input, by its key (`hosts.tags`, ...). */
+	selector(selects: 'host' | 'service', key: string): Option[] {
+		const hosts = () => this.names('host');
+		switch (key) {
+			case 'name':
+				return selects === 'host' ? hosts() : this.serviceNames();
+			case 'address':
+				return this.used('host', 'address').map((value) => ({ value }));
+			case 'tags':
+			case 'hosts.tags':
+				return this.tags().map((value) => ({ value }));
+			case 'node':
+				return this.nodes().map((value) => ({ value }));
+			case 'roles':
+				return this.names('role');
+			case 'groups':
+				return this.names(selects === 'host' ? 'hostgroup' : 'servicegroup');
+			case 'checks':
+				return this.names('check');
+			case 'hosts.name':
+				return hosts();
+			default:
+				return [];
+		}
+	}
+}
