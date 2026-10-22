@@ -3,6 +3,7 @@ mod init_cmd;
 mod notify_cmd;
 mod run;
 mod run_check;
+mod sinks;
 mod user_cmd;
 
 use clap::{Parser, Subcommand};

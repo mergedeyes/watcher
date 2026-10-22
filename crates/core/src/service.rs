@@ -14,7 +14,7 @@ pub enum StateType {
 }
 
 /// The tracked state of a service.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceState {
     pub state: State,
     pub state_type: StateType,
@@ -28,7 +28,7 @@ pub struct ServiceState {
 }
 
 /// A state change caused by a check result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StateChange {
     /// `None` for the first result of a service.
     pub from: Option<(State, StateType)>,

@@ -113,6 +113,8 @@ struct RawFile {
     check: Vec<Spanned<Table>>,
     #[serde(default)]
     contact: BTreeMap<String, Spanned<Table>>,
+    #[serde(default)]
+    sink: Vec<Spanned<Table>>,
 }
 
 struct RawObject {
@@ -126,6 +128,7 @@ struct RawObjects {
     hosts: Vec<RawObject>,
     checks: Vec<RawObject>,
     contacts: Vec<(String, RawObject)>,
+    sinks: Vec<RawObject>,
 }
 
 impl RawObjects {
@@ -168,6 +171,7 @@ impl RawObjects {
         self.checks.extend(file.check.into_iter().map(object));
         self.contacts
             .extend(file.contact.into_iter().map(|(name, t)| (name, object(t))));
+        self.sinks.extend(file.sink.into_iter().map(object));
     }
 
     fn compile(&self, sink: &mut Sink) -> Config {
@@ -214,6 +218,18 @@ impl RawObjects {
         }
 
         config.services = services(&config, sink);
+
+        for raw in &self.sinks {
+            let Some(s) = self.sink(raw, sink) else {
+                continue;
+            };
+            if let Some(prev) = config.sinks.iter().find(|p| p.name == s.name) {
+                let msg = format!("sink {:?} is already defined at {}", s.name, prev.origin);
+                sink.error(Some(&raw.origin), msg);
+                continue;
+            }
+            config.sinks.push(s);
+        }
         config
     }
 
@@ -409,6 +425,90 @@ impl RawObjects {
         })
     }
 
+    fn sink(&self, raw: &RawObject, sink: &mut Sink) -> Option<crate::Sink> {
+        let def: SinkDef = self.typed(raw, sink)?;
+        let origin = &raw.origin;
+        let what = format!("sink {:?}", def.name);
+        let errors_before = sink.diagnostics.len();
+        let mut error = |msg: String| sink.error(Some(origin), format!("{what}: {msg}"));
+
+        if let Err(msg) = valid_name(&def.name) {
+            error(msg.into());
+        }
+        let kind = match def.kind.as_str() {
+            "postgres" => match def.url {
+                Some(url) if url.starts_with("postgres://") || url.starts_with("postgresql://") => {
+                    // Relative to the file the sink is defined in.
+                    let password_file = def
+                        .password_file
+                        .map(|p| origin.file.parent().map_or(p.clone(), |dir| dir.join(&p)));
+                    Some(crate::SinkKind::Postgres { url, password_file })
+                }
+                Some(_) => {
+                    error("url must start with postgres://".into());
+                    None
+                }
+                None => {
+                    error("needs url".into());
+                    None
+                }
+            },
+            "hub" => {
+                error("type hub: not available yet".into());
+                None
+            }
+            other => {
+                error(format!("unknown type {other:?} (expected postgres)"));
+                None
+            }
+        };
+        let interval = def.flush.interval.unwrap_or(crate::Sink::DEFAULT_INTERVAL);
+        if interval.is_zero() {
+            error("flush.interval must be greater than 0".into());
+        }
+        let flush = match def.flush.mode.as_deref().unwrap_or("interval") {
+            "interval" => crate::Flush::Interval(interval),
+            "realtime" => crate::Flush::Realtime,
+            mode @ ("adaptive" | "schedule") => {
+                error(format!("flush.mode {mode}: not available yet"));
+                crate::Flush::Interval(interval)
+            }
+            other => {
+                error(format!(
+                    "unknown flush.mode {other:?} (expected interval or realtime)"
+                ));
+                crate::Flush::Interval(interval)
+            }
+        };
+        let max_buffer = match def.buffer.max_size.as_deref() {
+            None => crate::Sink::DEFAULT_MAX_BUFFER,
+            Some(text) => parse_size(text).unwrap_or_else(|| {
+                error(format!("invalid buffer.max_size {text:?}"));
+                0
+            }),
+        };
+        match def.buffer.on_full.as_deref() {
+            None | Some("drop_oldest") => {}
+            Some(mode @ ("downsample" | "block")) => {
+                error(format!("buffer.on_full {mode}: not available yet"))
+            }
+            Some(other) => error(format!(
+                "unknown buffer.on_full {other:?} (expected drop_oldest)"
+            )),
+        }
+
+        if sink.diagnostics.len() > errors_before {
+            return None;
+        }
+        Some(crate::Sink {
+            name: def.name,
+            kind: kind?,
+            flush,
+            max_buffer,
+            origin: origin.clone(),
+        })
+    }
+
     fn contact(&self, name: &str, raw: &RawObject, sink: &mut Sink) -> Option<Contact> {
         let def: ContactDef = self.typed(raw, sink)?;
         let origin = &raw.origin;
@@ -583,6 +683,51 @@ struct CheckDef {
     vars: BTreeMap<String, String>,
     #[serde(default = "yes")]
     enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SinkDef {
+    name: String,
+    #[serde(rename = "type")]
+    kind: String,
+    url: Option<String>,
+    password_file: Option<PathBuf>,
+    #[serde(default)]
+    flush: FlushDef,
+    #[serde(default)]
+    buffer: BufferDef,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FlushDef {
+    mode: Option<String>,
+    #[serde(default, deserialize_with = "duration")]
+    interval: Option<Duration>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BufferDef {
+    max_size: Option<String>,
+    on_full: Option<String>,
+}
+
+/// A size like `512MB` or `2GB` (×1024), or plain bytes.
+fn parse_size(text: &str) -> Option<u64> {
+    let text = text.trim();
+    let split = text
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(text.len());
+    let (number, unit) = text.split_at(split);
+    let number: f64 = number.parse().ok()?;
+    let factor = match watcher_core::Unit::parse(unit.trim()) {
+        (watcher_core::Unit::None | watcher_core::Unit::Bytes, f) => f,
+        _ => return None,
+    };
+    let bytes = number * factor;
+    (bytes.is_finite() && bytes >= 1.0).then_some(bytes as u64)
 }
 
 #[derive(Deserialize)]
@@ -811,7 +956,7 @@ max_attempts = 0
                 "c.toml:1: error: check \"z\": max_attempts must be at least 1",
                 "c.toml:1: error: check \"z\": unknown contact \"nobody\"",
                 "c.toml:1: error: check \"z\": unknown host \"nope\"",
-                "d.toml:1: error: unknown field `hosts`, expected one of `template`, `host`, `check`, `contact`",
+                "d.toml:1: error: unknown field `hosts`, expected one of `template`, `host`, `check`, `contact`, `sink`",
             ]
         );
     }
@@ -919,6 +1064,73 @@ hosts = ["a"]
         assert_eq!(backup.max_attempts, 1);
         assert_eq!(config.services[0].command, None);
         assert_eq!(config.services[0].check_hash.len(), 16);
+    }
+
+    #[test]
+    fn sinks() {
+        let (config, diags) = compile(&[(
+            "conf.d/sinks.toml",
+            r#"
+[[sink]]
+name = "central"
+type = "postgres"
+url = "postgres://watcher@central/watcher"
+password_file = "central.pass"
+
+[sink.flush]
+mode = "interval"
+interval = "5m"
+
+[sink.buffer]
+max_size = "2GB"
+
+[[sink]]
+name = "live"
+type = "postgres"
+url = "postgres://x/y"
+flush.mode = "realtime"
+
+[[sink]]
+name = "bad"
+type = "postgres"
+url = "mysql://x"
+flush.mode = "adaptive"
+buffer.max_size = "lots"
+buffer.on_full = "block"
+"#,
+        )]);
+        assert_eq!(
+            messages(&diags),
+            [
+                "conf.d/sinks.toml:21: error: sink \"bad\": buffer.on_full block: not available yet",
+                "conf.d/sinks.toml:21: error: sink \"bad\": flush.mode adaptive: not available yet",
+                "conf.d/sinks.toml:21: error: sink \"bad\": invalid buffer.max_size \"lots\"",
+                "conf.d/sinks.toml:21: error: sink \"bad\": url must start with postgres://",
+            ]
+        );
+        let central = &config.sinks[0];
+        assert_eq!(
+            central.flush,
+            crate::Flush::Interval(Duration::from_secs(300))
+        );
+        assert_eq!(central.max_buffer, 2 << 30);
+        assert_eq!(
+            central.kind,
+            crate::SinkKind::Postgres {
+                url: "postgres://watcher@central/watcher".into(),
+                password_file: Some(PathBuf::from("conf.d/central.pass")),
+            }
+        );
+        assert_eq!(config.sinks[1].flush, crate::Flush::Realtime);
+        assert_eq!(config.sinks[1].max_buffer, crate::Sink::DEFAULT_MAX_BUFFER);
+    }
+
+    #[test]
+    fn example_sinks_file_is_valid() {
+        let text = include_str!("../../../examples/sinks.toml");
+        let (config, diags) = compile(&[("examples/sinks.toml", text)]);
+        assert_eq!(messages(&diags), Vec::<String>::new());
+        assert_eq!(config.sinks.len(), 2);
     }
 
     #[test]

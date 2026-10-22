@@ -6,17 +6,19 @@ use watcher_core::State;
 /// Identity of a series: service id, metric name, labels as JSON.
 pub(crate) type SeriesKey = (i32, String, String);
 
+/// Series ids resolved so far, kept across writes. Only extended after a
+/// transaction commits.
+#[derive(Debug, Default)]
+pub struct SeriesCache(HashMap<SeriesKey, i32>);
+
 impl Store {
     /// Writes `records` in one transaction. Records of services without an
     /// id in `ids` (removed by a reload) are skipped.
-    ///
-    /// `series` caches series ids across calls; it is only extended after
-    /// the transaction commits.
     pub(crate) async fn write(
         &self,
         records: &[Record],
         ids: &HashMap<String, i32>,
-        series: &mut HashMap<SeriesKey, i32>,
+        series: &mut SeriesCache,
     ) -> Result<()> {
         let records: Vec<(i32, &Record)> = records
             .iter()
@@ -26,126 +28,183 @@ impl Store {
             return Ok(());
         }
         let mut tx = self.pool.begin().await?;
-
-        // Samples, resolving series ids not in the cache first.
-        let mut samples = Vec::new();
-        let mut missing: HashMap<SeriesKey, &str> = HashMap::new();
-        for &(service_id, record) in &records {
-            let ts = epoch(record.state.last_check);
-            for m in &record.result.metrics {
-                let m = &m.metric;
-                if !m.value.is_finite() {
-                    continue;
-                }
-                let labels = serde_json::to_string(&m.labels).unwrap_or_else(|_| "{}".into());
-                let key = (service_id, clean(&m.name), clean(&labels));
-                if !series.contains_key(&key) {
-                    missing.insert(key.clone(), m.unit.symbol());
-                }
-                samples.push((key, ts, m.value));
-            }
-        }
-        let resolved = resolve_series(&mut tx, missing).await?;
-        let lookup = |key: &SeriesKey| series.get(key).or_else(|| resolved.get(key)).copied();
-        let (mut sample_ids, mut sample_ts, mut sample_values) =
-            (Vec::new(), Vec::new(), Vec::new());
-        for (key, ts, value) in &samples {
-            if let Some(id) = lookup(key) {
-                sample_ids.push(id);
-                sample_ts.push(*ts);
-                sample_values.push(*value);
-            }
-        }
-        sqlx::query(
-            "INSERT INTO samples (series_id, ts, value)
-             SELECT s, to_timestamp(t), v FROM UNNEST($1::int[], $2::float8[], $3::float8[]) AS u(s, t, v)",
-        )
-        .bind(&sample_ids)
-        .bind(&sample_ts)
-        .bind(&sample_values)
-        .execute(&mut *tx)
-        .await?;
-
-        // Current state: only the latest record per service, since one
-        // upsert statement cannot touch a row twice.
-        let mut latest: HashMap<i32, &Record> = HashMap::new();
-        for &(id, record) in &records {
-            latest.insert(id, record);
-        }
-        let mut st = StateRows::default();
-        for (&id, record) in &latest {
-            st.push(id, record);
-        }
-        sqlx::query(
-            "INSERT INTO service_state (service_id, state, state_type, attempt, last_check,
-                                        last_change, last_hard_change, output, long_output, duration)
-             SELECT u.id, u.state, u.state_type, u.attempt, to_timestamp(u.last_check),
-                    to_timestamp(u.last_change), to_timestamp(u.last_hard_change),
-                    u.output, u.long_output, u.duration
-             FROM UNNEST($1::int[], $2::text[], $3::text[], $4::int[], $5::float8[],
-                         $6::float8[], $7::float8[], $8::text[], $9::text[], $10::float8[])
-                  AS u(id, state, state_type, attempt, last_check, last_change,
-                       last_hard_change, output, long_output, duration)
-             ON CONFLICT (service_id) DO UPDATE SET
-                 state = EXCLUDED.state, state_type = EXCLUDED.state_type,
-                 attempt = EXCLUDED.attempt, last_check = EXCLUDED.last_check,
-                 last_change = EXCLUDED.last_change, last_hard_change = EXCLUDED.last_hard_change,
-                 output = EXCLUDED.output, long_output = EXCLUDED.long_output,
-                 duration = EXCLUDED.duration",
-        )
-        .bind(&st.ids)
-        .bind(&st.states)
-        .bind(&st.types)
-        .bind(&st.attempts)
-        .bind(&st.last_check)
-        .bind(&st.last_change)
-        .bind(&st.last_hard_change)
-        .bind(&st.output)
-        .bind(&st.long_output)
-        .bind(&st.duration)
-        .execute(&mut *tx)
-        .await?;
-
-        // State changes, in order.
-        let changes: Vec<_> = records
-            .iter()
-            .filter_map(|&(id, r)| r.change.map(|c| (id, r, c)))
-            .collect();
-        if !changes.is_empty() {
-            let ids: Vec<i32> = changes.iter().map(|c| c.0).collect();
-            let ts: Vec<f64> = changes
-                .iter()
-                .map(|c| epoch(c.1.state.last_check))
-                .collect();
-            let from: Vec<Option<&str>> = changes
-                .iter()
-                .map(|c| c.2.from.map(|f| state_str(f.0)))
-                .collect();
-            let to: Vec<&str> = changes.iter().map(|c| state_str(c.2.to.0)).collect();
-            let types: Vec<&str> = changes.iter().map(|c| state_type_str(c.2.to.1)).collect();
-            let hard: Vec<bool> = changes.iter().map(|c| c.2.hard).collect();
-            let output: Vec<String> = changes.iter().map(|c| clean(&c.1.result.message)).collect();
-            sqlx::query(
-                "INSERT INTO state_events (service_id, ts, from_state, to_state, state_type, hard, output)
-                 SELECT u.id, to_timestamp(u.ts), u.from_state, u.to_state, u.state_type, u.hard, u.output
-                 FROM UNNEST($1::int[], $2::float8[], $3::text[], $4::text[], $5::text[], $6::bool[], $7::text[])
-                      AS u(id, ts, from_state, to_state, state_type, hard, output)",
-            )
-            .bind(&ids)
-            .bind(&ts)
-            .bind(&from)
-            .bind(&to)
-            .bind(&types)
-            .bind(&hard)
-            .bind(&output)
-            .execute(&mut *tx)
-            .await?;
-        }
-
+        let resolved = write_tx(&mut tx, &records, &series.0).await?;
         tx.commit().await?;
-        series.extend(resolved);
+        series.0.extend(resolved);
         Ok(())
     }
+
+    /// Writes a batch from a sink exactly once: `source` identifies the
+    /// sending instance and sink, and records with a sequence number at or
+    /// below the last one applied for it are skipped. Progress is stored in
+    /// the same transaction, so a retried batch never duplicates data.
+    pub async fn write_sink(
+        &self,
+        source: &str,
+        batch: &[(u64, Record)],
+        ids: &HashMap<String, i32>,
+        series: &mut SeriesCache,
+    ) -> Result<()> {
+        let Some(last) = batch.iter().map(|(seq, _)| *seq).max() else {
+            return Ok(());
+        };
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO sink_progress (source, seq) VALUES ($1, 0) ON CONFLICT DO NOTHING",
+        )
+        .bind(source)
+        .execute(&mut *tx)
+        .await?;
+        let done: i64 =
+            sqlx::query_scalar("SELECT seq FROM sink_progress WHERE source = $1 FOR UPDATE")
+                .bind(source)
+                .fetch_one(&mut *tx)
+                .await?;
+        let fresh: Vec<(i32, &Record)> = batch
+            .iter()
+            .filter(|(seq, _)| *seq as i64 > done)
+            .filter_map(|(_, r)| ids.get(&r.service).map(|&id| (id, r)))
+            .collect();
+        let resolved = if fresh.is_empty() {
+            HashMap::new()
+        } else {
+            write_tx(&mut tx, &fresh, &series.0).await?
+        };
+        sqlx::query(
+            "UPDATE sink_progress SET seq = GREATEST(seq, $2), updated = now() WHERE source = $1",
+        )
+        .bind(source)
+        .bind(last as i64)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        series.0.extend(resolved);
+        Ok(())
+    }
+}
+
+/// Writes samples, current state and state changes of `records`. Returns
+/// the series ids it had to create.
+async fn write_tx(
+    conn: &mut sqlx::PgConnection,
+    records: &[(i32, &Record)],
+    series: &HashMap<SeriesKey, i32>,
+) -> Result<HashMap<SeriesKey, i32>> {
+    // Samples, resolving series ids not in the cache first.
+    let mut samples = Vec::new();
+    let mut missing: HashMap<SeriesKey, &str> = HashMap::new();
+    for &(service_id, record) in records {
+        let ts = epoch(record.state.last_check);
+        for m in &record.result.metrics {
+            let m = &m.metric;
+            if !m.value.is_finite() {
+                continue;
+            }
+            let labels = serde_json::to_string(&m.labels).unwrap_or_else(|_| "{}".into());
+            let key = (service_id, clean(&m.name), clean(&labels));
+            if !series.contains_key(&key) {
+                missing.insert(key.clone(), m.unit.symbol());
+            }
+            samples.push((key, ts, m.value));
+        }
+    }
+    let resolved = resolve_series(&mut *conn, missing).await?;
+    let lookup = |key: &SeriesKey| series.get(key).or_else(|| resolved.get(key)).copied();
+    let (mut sample_ids, mut sample_ts, mut sample_values) = (Vec::new(), Vec::new(), Vec::new());
+    for (key, ts, value) in &samples {
+        if let Some(id) = lookup(key) {
+            sample_ids.push(id);
+            sample_ts.push(*ts);
+            sample_values.push(*value);
+        }
+    }
+    sqlx::query(
+        "INSERT INTO samples (series_id, ts, value)
+         SELECT s, to_timestamp(t), v FROM UNNEST($1::int[], $2::float8[], $3::float8[]) AS u(s, t, v)",
+    )
+    .bind(&sample_ids)
+    .bind(&sample_ts)
+    .bind(&sample_values)
+    .execute(&mut *conn)
+    .await?;
+
+    // Current state: only the latest record per service, since one
+    // upsert statement cannot touch a row twice.
+    let mut latest: HashMap<i32, &Record> = HashMap::new();
+    for &(id, record) in records {
+        latest.insert(id, record);
+    }
+    let mut st = StateRows::default();
+    for (&id, record) in &latest {
+        st.push(id, record);
+    }
+    sqlx::query(
+        "INSERT INTO service_state (service_id, state, state_type, attempt, last_check,
+                                    last_change, last_hard_change, output, long_output, duration)
+         SELECT u.id, u.state, u.state_type, u.attempt, to_timestamp(u.last_check),
+                to_timestamp(u.last_change), to_timestamp(u.last_hard_change),
+                u.output, u.long_output, u.duration
+         FROM UNNEST($1::int[], $2::text[], $3::text[], $4::int[], $5::float8[],
+                     $6::float8[], $7::float8[], $8::text[], $9::text[], $10::float8[])
+              AS u(id, state, state_type, attempt, last_check, last_change,
+                   last_hard_change, output, long_output, duration)
+         ON CONFLICT (service_id) DO UPDATE SET
+             state = EXCLUDED.state, state_type = EXCLUDED.state_type,
+             attempt = EXCLUDED.attempt, last_check = EXCLUDED.last_check,
+             last_change = EXCLUDED.last_change, last_hard_change = EXCLUDED.last_hard_change,
+             output = EXCLUDED.output, long_output = EXCLUDED.long_output,
+             duration = EXCLUDED.duration",
+    )
+    .bind(&st.ids)
+    .bind(&st.states)
+    .bind(&st.types)
+    .bind(&st.attempts)
+    .bind(&st.last_check)
+    .bind(&st.last_change)
+    .bind(&st.last_hard_change)
+    .bind(&st.output)
+    .bind(&st.long_output)
+    .bind(&st.duration)
+    .execute(&mut *conn)
+    .await?;
+
+    // State changes, in order.
+    let changes: Vec<_> = records
+        .iter()
+        .filter_map(|&(id, r)| r.change.map(|c| (id, r, c)))
+        .collect();
+    if !changes.is_empty() {
+        let ids: Vec<i32> = changes.iter().map(|c| c.0).collect();
+        let ts: Vec<f64> = changes
+            .iter()
+            .map(|c| epoch(c.1.state.last_check))
+            .collect();
+        let from: Vec<Option<&str>> = changes
+            .iter()
+            .map(|c| c.2.from.map(|f| state_str(f.0)))
+            .collect();
+        let to: Vec<&str> = changes.iter().map(|c| state_str(c.2.to.0)).collect();
+        let types: Vec<&str> = changes.iter().map(|c| state_type_str(c.2.to.1)).collect();
+        let hard: Vec<bool> = changes.iter().map(|c| c.2.hard).collect();
+        let output: Vec<String> = changes.iter().map(|c| clean(&c.1.result.message)).collect();
+        sqlx::query(
+            "INSERT INTO state_events (service_id, ts, from_state, to_state, state_type, hard, output)
+             SELECT u.id, to_timestamp(u.ts), u.from_state, u.to_state, u.state_type, u.hard, u.output
+             FROM UNNEST($1::int[], $2::float8[], $3::text[], $4::text[], $5::text[], $6::bool[], $7::text[])
+                  AS u(id, ts, from_state, to_state, state_type, hard, output)",
+        )
+        .bind(&ids)
+        .bind(&ts)
+        .bind(&from)
+        .bind(&to)
+        .bind(&types)
+        .bind(&hard)
+        .bind(&output)
+        .execute(&mut *conn)
+        .await?;
+    }
+
+    Ok(resolved)
 }
 
 /// Inserts series that don't exist yet and returns the ids of all `missing`.
