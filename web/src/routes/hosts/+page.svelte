@@ -23,8 +23,8 @@
 		const total = c.ok + c.warning + c.critical + c.unknown + c.pending;
 		const bad = c.critical + c.warning + c.unknown;
 		if (!h.enabled) return 'disabled';
-		if (total === 0) return 'no services';
-		if (bad > 0) return `${bad} of ${total} tripped`;
+		if (total === 0) return '0 services';
+		if (bad > 0) return `${bad}/${total} problems`;
 		return total === 1 ? '1 service' : `${total} services`;
 	}
 </script>
@@ -32,15 +32,15 @@
 <main class="page">
 	<div class="head">
 		<h1 class="legend">Hosts</h1>
-		<input type="search" placeholder="Filter by name, address or tag" bind:value={query} aria-label="Filter hosts" />
+		<input type="search" placeholder="Filter (name, address, tag)" bind:value={query} aria-label="Filter hosts" />
 	</div>
 
 	{#if !live.loaded}
 		<p class="notice">Loading…</p>
 	{:else if live.hosts.length === 0}
-		<p class="notice">No hosts are configured yet. Add <code>[[host]]</code> entries to your configuration.</p>
+		<p class="notice">No hosts configured.</p>
 	{:else if shown.length === 0}
-		<p class="notice">No host matches “{query}”.</p>
+		<p class="notice">No matches.</p>
 	{:else}
 		<div class="panel">
 			{#each shown as h (h.name)}

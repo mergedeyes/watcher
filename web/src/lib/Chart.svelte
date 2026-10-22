@@ -160,9 +160,9 @@
 	</figcaption>
 	<div class="canvas" bind:this={box}>
 		{#if failed}
-			<p class="note">Couldn't load the data: {failed}</p>
+			<p class="note">Error: {failed}</p>
 		{:else if empty}
-			<p class="note">No data in this time range.</p>
+			<p class="note">No data.</p>
 		{/if}
 	</div>
 </figure>

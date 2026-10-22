@@ -70,14 +70,14 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
             ApiError::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
-                "log in, or send an API token as `Authorization: Bearer <token>`".into(),
+                "unauthorized: session or Bearer token required".into(),
             ),
             ApiError::Forbidden(m) => (StatusCode::FORBIDDEN, m),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m),
             ApiError::TooManyRequests(m) => (StatusCode::TOO_MANY_REQUESTS, m),
             ApiError::NoDatabase => (
                 StatusCode::SERVICE_UNAVAILABLE,
-                "no database configured; history is not available".into(),
+                "no database configured".into(),
             ),
             ApiError::Unavailable(m) => (StatusCode::SERVICE_UNAVAILABLE, m),
             ApiError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),

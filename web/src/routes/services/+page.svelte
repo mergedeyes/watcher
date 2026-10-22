@@ -28,7 +28,7 @@
 <main class="page">
 	<div class="head">
 		<h1 class="legend">Services</h1>
-		<input type="search" placeholder="Filter by name or output" bind:value={query} aria-label="Filter services" />
+		<input type="search" placeholder="Filter (name, output)" bind:value={query} aria-label="Filter services" />
 	</div>
 
 	<nav class="chips" aria-label="Filter by state">
@@ -46,9 +46,9 @@
 	{:else if shown.length === 0}
 		<p class="notice">
 			{#if live.services.length === 0}
-				No services are configured yet.
+				No services configured.
 			{:else}
-				No service matches this filter. <a href="/services">Show all services</a>
+				No matches. <a href="/services">Show all</a>
 			{/if}
 		</p>
 	{:else}
@@ -58,7 +58,7 @@
 					<th>State</th>
 					<th>Host</th>
 					<th>Service</th>
-					<th class="hide-narrow">Since</th>
+					<th class="hide-narrow">Duration</th>
 					<th>Output</th>
 				</tr>
 			</thead>
@@ -74,7 +74,7 @@
 				{/each}
 			</tbody>
 		</table>
-		<p class="muted count">{shown.length} of {live.services.length} services</p>
+		<p class="muted count data">{shown.length}/{live.services.length}</p>
 	{/if}
 </main>
 

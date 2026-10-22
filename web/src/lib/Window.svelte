@@ -30,7 +30,7 @@
 		lit && lastChange !== null && now - Date.parse(lastChange) < RECENT_MS
 	);
 	let label = $derived(
-		[title, caption, stateName(state), stateType === 'soft' ? 'unconfirmed' : null]
+		[title, caption, stateName(state), stateType === 'soft' ? 'SOFT' : null]
 			.filter(Boolean)
 			.join(', ')
 	);

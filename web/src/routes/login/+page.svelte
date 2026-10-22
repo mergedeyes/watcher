@@ -30,7 +30,7 @@
 		} catch (e) {
 			error =
 				e instanceof ApiError && e.status === 401
-					? 'Wrong username or password.'
+					? 'Invalid credentials.'
 					: e instanceof Error
 						? e.message
 						: String(e);
@@ -47,7 +47,7 @@
 
 		{#if auth.status && !auth.status.users_exist}
 			<p class="notice">
-				No accounts exist yet. Create the first one on the server:<br />
+				No users. Create one:<br />
 				<code>watcher user add &lt;name&gt; --admin</code>
 			</p>
 		{/if}

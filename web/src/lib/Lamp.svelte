@@ -13,7 +13,7 @@
 	let { state, stateType = null, label = true }: Props = $props();
 </script>
 
-<span class="lamp-wrap" title={stateType === 'soft' ? `${stateName(state)}, unconfirmed` : stateName(state)}>
+<span class="lamp-wrap" title={stateType === 'soft' ? `${stateName(state)} (SOFT)` : stateName(state)}>
 	<span class="lamp" data-state={state ?? 'pending'} class:soft={stateType === 'soft'}></span>
 	{#if label}<span class="legend name">{stateName(state)}</span>{/if}
 </span>

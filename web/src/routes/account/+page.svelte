@@ -33,7 +33,7 @@
 	}
 
 	async function revoke(token: ApiToken) {
-		if (!confirm(`Revoke the token “${token.name}”? Scripts using it stop working.`)) return;
+		if (!confirm(`Revoke token "${token.name}"?`)) return;
 		await api.deleteToken(token.id);
 		if (created?.name === token.name) created = null;
 		await load();
@@ -50,19 +50,15 @@
 	<h1 class="legend">Account</h1>
 
 	{#if !auth.status?.required}
-		<p class="notice">This server runs without logins, so there are no accounts or API tokens.</p>
+		<p class="notice">Authentication disabled.</p>
 	{:else}
-		<p class="muted">Signed in as <strong>{auth.status.user?.username}</strong>.</p>
+		<p class="muted">User: <strong>{auth.status.user?.username}</strong></p>
 
 		<h2 class="section-label legend">API tokens</h2>
-		<p class="muted intro">
-			Scripts and cron jobs use a token to call the API, for example to push passive check results. A
-			token is shown only once, right after you create it.
-		</p>
 
 		{#if created}
 			<div class="plate created">
-				<p>New token “{created.name}”. Copy it now; it can't be shown again.</p>
+				<p>Token "{created.name}" (shown once):</p>
 				<div class="secret">
 					<code class="data">{created.token}</code>
 					<button type="button" class="legend" onclick={copy}>{copied ? 'Copied' : 'Copy'}</button>
@@ -75,7 +71,7 @@
 		{/if}
 
 		<form class="new" onsubmit={create}>
-			<input placeholder="What is it for, e.g. backup cron job" bind:value={name} required maxlength="100" aria-label="Token name" />
+			<input placeholder="Name, e.g. backup-cron" bind:value={name} required maxlength="100" aria-label="Token name" />
 			<button type="submit" class="legend">Create token</button>
 		</form>
 		{#if error}<p class="error" role="alert">{error}</p>{/if}
@@ -111,11 +107,6 @@
 		margin-bottom: 8px;
 	}
 
-	.intro {
-		margin: 0 0 16px;
-		max-width: 60ch;
-		font-size: 14px;
-	}
 
 	.created {
 		padding: 16px;

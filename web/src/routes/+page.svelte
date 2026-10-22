@@ -34,7 +34,7 @@
 
 	function detail(s: ServiceView) {
 		const since = age(s.last_change, live.now);
-		return s.state_type === 'soft' ? `${since} · try ${s.attempt}/${s.max_attempts}` : since;
+		return s.state_type === 'soft' ? `${since} · SOFT ${s.attempt}/${s.max_attempts}` : since;
 	}
 </script>
 
@@ -58,20 +58,16 @@
 	{#if !live.loaded}
 		<p class="notice">Loading…</p>
 	{:else if live.services.length === 0}
-		<p class="notice">
-			No services are configured yet. Add hosts and checks to your <code>conf.d</code> directory, then
-			reload Watcher.
-		</p>
+		<p class="notice">No services configured.</p>
 	{:else if problems.length === 0}
 		<div class="all-clear plate">
-			<span class="legend">All clear</span>
-			<p>
-				{counts.ok} of {live.services.length} services are OK{#if counts.pending > 0}; {counts.pending}
-					are waiting for their first result{/if}.
+			<span class="legend">All OK</span>
+			<p class="data">
+				{counts.ok}/{live.services.length} OK{#if counts.pending > 0} · {counts.pending} pending{/if}
 			</p>
 		</div>
 	{:else}
-		<h2 class="section-label legend">Tripped</h2>
+		<h2 class="section-label legend">Problems</h2>
 		<div class="panel">
 			{#each problems as s (`${s.host}/${s.service}`)}
 				<Window
@@ -87,13 +83,13 @@
 			{/each}
 		</div>
 
-		<h2 class="section-label legend">What the checks report</h2>
+		<h2 class="section-label legend">Alerts</h2>
 		<table class="list">
 			<thead>
 				<tr>
 					<th>State</th>
 					<th>Service</th>
-					<th class="hide-narrow">Since</th>
+					<th class="hide-narrow">Duration</th>
 					<th>Output</th>
 				</tr>
 			</thead>

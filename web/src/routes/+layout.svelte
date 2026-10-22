@@ -95,10 +95,7 @@
 
 {#if unreachable || (live.error && !live.loaded && auth.allowed)}
 	<div class="page">
-		<p class="notice">
-			Can't reach the Watcher API: {unreachable ?? live.error}. Check that <code>watcher run</code> is
-			running, then reload this page.
-		</p>
+		<p class="notice">API unreachable: {unreachable ?? live.error}</p>
 	</div>
 {:else if auth.status && (auth.allowed || page.url.pathname === '/login')}
 	{@render children()}

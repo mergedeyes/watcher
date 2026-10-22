@@ -2,13 +2,13 @@ import type { State } from './api.ts';
 
 const STATE_NAMES: Record<State, string> = {
 	ok: 'OK',
-	warning: 'Warning',
-	critical: 'Critical',
-	unknown: 'Unknown'
+	warning: 'WARNING',
+	critical: 'CRITICAL',
+	unknown: 'UNKNOWN'
 };
 
 export function stateName(state: State | null): string {
-	return state ? STATE_NAMES[state] : 'Pending';
+	return state ? STATE_NAMES[state] : 'PENDING';
 }
 
 /** Severity for sorting: CRITICAL first, as in the hub (OK < WARNING < UNKNOWN < CRITICAL). */
