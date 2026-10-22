@@ -69,6 +69,9 @@ export interface Series {
 	metric: string;
 	labels: Record<string, string>;
 	unit: string;
+	/** Oldest and newest sample; null without samples. */
+	first: string | null;
+	last: string | null;
 }
 
 export interface Points {
