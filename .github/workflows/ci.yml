@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    # Database tests run against both backends; see compose.yaml.
+    services:
+      timescale:
+        image: timescale/timescaledb:latest-pg18
+        env:
+          POSTGRES_USER: watcher
+          POSTGRES_PASSWORD: watcher
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U watcher"
+          --health-interval 2s --health-timeout 5s --health-retries 15
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: watcher
+          POSTGRES_PASSWORD: watcher
+        ports: ["55433:5432"]
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U watcher"
+          --health-interval 2s --health-timeout 5s --health-retries 15
+    env:
+      WATCHER_TEST_TIMESCALE_URL: postgres://watcher:watcher@localhost:55432/postgres
+      WATCHER_TEST_POSTGRES_URL: postgres://watcher:watcher@localhost:55433/postgres
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --locked
+
+  msrv:
+    name: Minimum Rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read rust-version from Cargo.toml
+        id: msrv
+        run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets --locked
+
+  deny:
+    name: Dependencies (${{ matrix.checks }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        checks: [advisories, bans licenses sources]
+    # New advisories appear without any change here; don't block PRs on them.
+    continue-on-error: ${{ matrix.checks == 'advisories' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check ${{ matrix.checks }}

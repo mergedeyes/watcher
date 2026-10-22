@@ -95,10 +95,10 @@ pub fn parse_output(stdout: &str, format: Format) -> Result<ParsedOutput, ParseE
             if trimmed.starts_with('{') && trimmed.ends_with('}') {
                 return json::parse(trimmed);
             }
-            if !trimmed.is_empty() {
-                if let Ok(metrics) = kv::parse(trimmed) {
-                    return Ok(key_value_output(metrics));
-                }
+            if !trimmed.is_empty()
+                && let Ok(metrics) = kv::parse(trimmed)
+            {
+                return Ok(key_value_output(metrics));
             }
             nagios::parse(&text)
         }
