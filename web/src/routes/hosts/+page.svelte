@@ -1,91 +1,126 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import { hostHref, type HostView } from '#lib/api.ts';
+	import { severity } from '#lib/format.ts';
 	import { live } from '#lib/live.svelte.ts';
-	import Window from '#lib/Window.svelte';
+	import { Sorter } from '#lib/sort.svelte.ts';
+	import Status from '#lib/Status.svelte';
 
+	type Key = 'host' | 'status' | 'address';
+	const sorter = new Sorter<Key>('host');
 	let query = $state('');
 
-	// Windows keep their place (config order), like on a real panel, so a
-	// lit window is recognised by where it is.
+	let filter = $derived(page.url.searchParams.get('state'));
+
+	function matches(h: HostView) {
+		switch (filter) {
+			case 'ok':
+				return h.state === 'ok';
+			case 'problems':
+				return h.state !== null && h.state !== 'ok';
+			case 'pending':
+				return h.state === null;
+			default:
+				return true;
+		}
+	}
+
 	let shown = $derived.by(() => {
 		const q = query.trim().toLowerCase();
-		if (!q) return live.hosts;
-		return live.hosts.filter(
+		const rows = live.hosts.filter(
 			(h) =>
-				h.name.toLowerCase().includes(q) ||
-				h.address.toLowerCase().includes(q) ||
-				h.tags.some((t) => t.toLowerCase().includes(q))
+				matches(h) &&
+				(!q || [h.name, h.address, ...h.tags].some((v) => v.toLowerCase().includes(q)))
 		);
+		const text = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
+		return sorter.apply(rows, {
+			host: (a, b) => text(a.name, b.name),
+			status: (a, b) => severity(a.state) - severity(b.state),
+			address: (a, b) => text(a.address, b.address)
+		});
 	});
 
-	function detail(h: HostView) {
-		const c = h.services;
-		const total = c.ok + c.warning + c.critical + c.unknown + c.pending;
-		const bad = c.critical + c.warning + c.unknown;
-		if (!h.enabled) return 'disabled';
-		if (total === 0) return '0 services';
-		if (bad > 0) return `${bad}/${total} problems`;
-		return total === 1 ? '1 service' : `${total} services`;
-	}
+	const COUNTS = [
+		['ok', 'OK'],
+		['warning', 'W'],
+		['critical', 'C'],
+		['unknown', 'U'],
+		['pending', 'P']
+	] as const;
 </script>
 
-<main class="page">
-	<div class="head">
-		<h1 class="legend">Hosts</h1>
-		<input type="search" placeholder="Filter (name, address, tag)" bind:value={query} aria-label="Filter hosts" />
+<div class="content">
+	<div class="page-head">
+		<h1>Hosts{filter ? ` · ${filter.toUpperCase()}` : ''}</h1>
+		<input type="search" placeholder="Search name, address, tag" bind:value={query} aria-label="Search" />
 	</div>
 
 	{#if !live.loaded}
 		<p class="notice">Loading…</p>
-	{:else if live.hosts.length === 0}
-		<p class="notice">No hosts configured.</p>
-	{:else if shown.length === 0}
-		<p class="notice">No matches.</p>
 	{:else}
-		<div class="panel">
-			{#each shown as h (h.name)}
-				<Window
-					href={hostHref(h.name)}
-					title={h.name}
-					caption={h.address !== h.name ? h.address : undefined}
-					state={h.state}
-					now={live.now}
-					detail={detail(h)}
-				/>
-			{/each}
-		</div>
+		<section class="panel">
+			<div class="panel-title">Host Status Details <span class="muted">{shown.length}/{live.hosts.length}</span></div>
+			{#if shown.length === 0}
+				<div class="empty">{live.hosts.length === 0 ? 'No hosts configured.' : 'No matches.'}</div>
+			{:else}
+				<table class="grid">
+					<thead>
+						<tr>
+							<th><button type="button" onclick={() => sorter.toggle('host')}>Host{sorter.mark('host')}</button></th>
+							<th><button type="button" onclick={() => sorter.toggle('status')}>Status{sorter.mark('status')}</button></th>
+							<th class="hide-narrow"><button type="button" onclick={() => sorter.toggle('address')}>Address{sorter.mark('address')}</button></th>
+							<th>Services</th>
+							<th class="hide-narrow">Tags</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each shown as h (h.name)}
+							<tr data-state={h.state}>
+								<td class="nowrap">
+									<a href={hostHref(h.name)}>{h.name}</a>
+									{#if !h.enabled}<span class="tag">disabled</span>{/if}
+								</td>
+								<td><Status state={h.state} /></td>
+								<td class="nowrap hide-narrow mono">{h.address}</td>
+								<td class="nowrap">
+									{#each COUNTS as [key, label] (key)}
+										{#if h.services[key] > 0}<span class="count" data-state={key}>{h.services[key]} {label}</span>{/if}
+									{/each}
+								</td>
+								<td class="hide-narrow">{#each h.tags as t (t)}<span class="tag">{t}</span> {/each}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			{/if}
+		</section>
 	{/if}
-</main>
+</div>
 
 <style>
-	.head {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 16px;
-		flex-wrap: wrap;
-		margin-bottom: 20px;
+	.count {
+		display: inline-block;
+		margin-right: 4px;
+		padding: 0 5px;
+		border-radius: 3px;
+		font-size: 11px;
+		font-weight: 600;
+		color: #fff;
 	}
-
-	h1 {
-		font-size: 20px;
+	.count[data-state='ok'] {
+		background: var(--ok);
 	}
-
-	.panel {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-		gap: 14px;
-		padding: 18px;
-		background: var(--plate-sunk);
-		border: 1px solid var(--rule);
-		border-radius: var(--radius);
-		box-shadow: inset 0 2px 6px rgb(0 0 0 / 0.08);
+	.count[data-state='warning'] {
+		background: var(--warn);
+		color: var(--on-warn);
 	}
-
-	@media (max-width: 640px) {
-		.panel {
-			grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-			padding: 12px;
-		}
+	.count[data-state='critical'] {
+		background: var(--crit);
+	}
+	.count[data-state='unknown'] {
+		background: var(--unknown);
+	}
+	.count[data-state='pending'] {
+		background: var(--pending);
 	}
 </style>

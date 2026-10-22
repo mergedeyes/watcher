@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { api, ApiError, serviceHref } from '#lib/api.ts';
-	import { age } from '#lib/format.ts';
+	import { api, ApiError } from '#lib/api.ts';
 	import { live } from '#lib/live.svelte.ts';
-	import Lamp from '#lib/Lamp.svelte';
+	import ServiceTable from '#lib/ServiceTable.svelte';
+	import Status from '#lib/Status.svelte';
 
 	let name = $derived(page.params.host ?? '');
 	let host = $derived(live.hosts.find((h) => h.name === name));
@@ -24,117 +24,45 @@
 	});
 </script>
 
-<main class="page">
+<div class="content">
 	{#if missing}
 		<p class="notice">Host not found: {name}</p>
 	{:else if !host}
 		<p class="notice">Loading…</p>
 	{:else}
-		<p class="crumbs legend"><a href="/hosts">Hosts</a></p>
-		<header class="plate head">
-			<div>
-				<h1>{host.name}</h1>
-				<p class="data muted">{host.address}{host.node ? ` · node ${host.node}` : ''}</p>
-			</div>
-			<Lamp state={host.state} />
-		</header>
+		<div class="page-head">
+			<h1>{host.name}</h1>
+			<Status state={host.state} />
+		</div>
 
-		<dl class="facts">
-			{#if host.tags.length > 0}
-				<dt class="legend">Tags</dt>
-				<dd>{#each host.tags as tag (tag)}<span class="tag data">{tag}</span>{/each}</dd>
-			{/if}
-			{#each Object.entries(host.vars) as [key, value] (key)}
-				<dt class="legend">{key}</dt>
-				<dd class="data">{value}</dd>
-			{/each}
-			{#if origin}
-				<dt class="legend">Source</dt>
-				<dd class="data">{origin}</dd>
-			{/if}
-		</dl>
-
-		<h2 class="section-label legend">Services</h2>
-		{#if services.length === 0}
-			<p class="notice">No services.</p>
-		{:else}
-			<table class="list">
-				<thead>
-					<tr>
-						<th>State</th>
-						<th>Service</th>
-						<th class="hide-narrow">Duration</th>
-						<th class="hide-narrow">Last check</th>
-						<th>Output</th>
-					</tr>
-				</thead>
+		<section class="panel">
+			<div class="panel-title">Host Information</div>
+			<table class="grid kv">
 				<tbody>
-					{#each services as s (s.service)}
-						<tr>
-							<td><Lamp state={s.state} stateType={s.state_type} /></td>
-							<td><a href={serviceHref(s.host, s.service)}>{s.service}</a></td>
-							<td class="hide-narrow data">{age(s.last_change, live.now)}</td>
-							<td class="hide-narrow data">{s.passive ? 'passive' : age(s.last_check, live.now)}</td>
-							<td class="output">{s.output}</td>
-						</tr>
+					<tr><th>Address</th><td class="mono">{host.address}</td></tr>
+					{#if host.node}<tr><th>Node</th><td>{host.node}</td></tr>{/if}
+					<tr><th>Tags</th><td>{#each host.tags as t (t)}<span class="tag">{t}</span> {/each}</td></tr>
+					{#each Object.entries(host.vars) as [k, v] (k)}
+						<tr><th>vars.{k}</th><td class="mono">{v}</td></tr>
 					{/each}
+					{#if !host.enabled}<tr><th>Enabled</th><td>no</td></tr>{/if}
+					{#if origin}<tr><th>Source</th><td class="mono">{origin}</td></tr>{/if}
 				</tbody>
 			</table>
-		{/if}
+		</section>
+
+		<section class="panel">
+			<div class="panel-title">Services <span class="muted">{services.length}</span></div>
+			<ServiceTable rows={services} showHost={false} sort="service" />
+		</section>
 	{/if}
-</main>
+</div>
 
 <style>
-	.crumbs {
-		margin: 0 0 10px;
-		font-size: 12px;
-		color: var(--ink-2);
-	}
-
-	.head {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		gap: 16px;
-		padding: 18px 20px;
-	}
-
-	h1 {
-		font-size: 26px;
-		overflow-wrap: anywhere;
-	}
-
-	.head p {
-		margin: 4px 0 0;
-		font-size: 13px;
-	}
-
-	.facts {
-		display: grid;
-		grid-template-columns: max-content 1fr;
-		gap: 6px 18px;
-		margin: 16px 0 0;
-		font-size: 14px;
-	}
-
-	dt {
-		color: var(--ink-2);
-		font-size: 12px;
-		padding-top: 2px;
-	}
-
-	dd {
-		margin: 0;
-		overflow-wrap: anywhere;
-	}
-
-	.tag {
-		display: inline-block;
-		margin: 0 6px 4px 0;
-		padding: 0 7px;
-		font-size: 12px;
-		border: 1px solid var(--rule);
-		border-radius: 2px;
-		background: var(--plate);
+	.kv th {
+		width: 160px;
+		background: var(--panel-alt);
+		vertical-align: top;
+		border-bottom: 1px solid var(--line);
 	}
 </style>

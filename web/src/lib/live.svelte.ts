@@ -39,8 +39,11 @@ class Live {
 	}
 
 	find(host: string, service: string): ServiceView | undefined {
+		// Read the reactive list first: callers must depend on it even while
+		// it is still empty, or they never see it load.
+		const services = this.services;
 		const i = this.#index.get(`${host}/${service}`);
-		return i === undefined ? undefined : this.services[i];
+		return i === undefined ? undefined : services[i];
 	}
 
 	async reload() {

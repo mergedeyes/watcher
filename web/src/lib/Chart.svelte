@@ -32,6 +32,10 @@
 	/** The whole range of the current drawing, for resetting the zoom. */
 	let full = { from: 0, to: 0 };
 	let drawnRange = '';
+	/** The mouse button is down in the graph: a selection is being dragged. */
+	let dragging = false;
+	/** Data that arrived during a drag, drawn when the drag ends. */
+	let pending: { data: uPlot.AlignedData; from: number; to: number } | null = null;
 
 	const HEIGHT = 170;
 
@@ -63,14 +67,26 @@
 		return [xs, avg, min, max] as uPlot.AlignedData;
 	}
 
-	/** Draws `data` on a time axis from `from` to `to` (unix seconds). */
+	/**
+	 * Draws `data` on a time axis from `from` to `to` (unix seconds). An
+	 * existing graph only gets new data, so a zoom stays; during a drag the
+	 * update waits, or the selection would be lost.
+	 */
 	function draw(data: uPlot.AlignedData, from: number, to: number) {
-		plot?.destroy();
-		const ink = css('--ink');
-		const ink2 = css('--ink-2');
-		const rule = css('--rule');
+		if (dragging) {
+			pending = { data, from, to };
+			return;
+		}
+		full = { from, to };
+		if (plot) {
+			plot.setData(data);
+			return;
+		}
+		const ink = css('--link');
+		const ink2 = css('--muted');
+		const rule = css('--line');
 		const unit = series.unit;
-		const axis = { stroke: ink2, grid: { stroke: rule, width: 1 }, ticks: { stroke: rule, width: 1 }, font: '11px "IBM Plex Mono", monospace' };
+		const axis = { stroke: ink2, grid: { stroke: rule, width: 1 }, ticks: { stroke: rule, width: 1 }, font: '11px ui-monospace, Menlo, Consolas, monospace' };
 		const opts: uPlot.Options = {
 			width: box.clientWidth,
 			height: HEIGHT,
@@ -81,7 +97,7 @@
 				// Double-click resets the zoom, like the button.
 				bind: { dblclick: () => () => (resetZoom(), null) }
 			},
-			scales: { x: { time: true, range: () => (zoom ? [zoom.min, zoom.max] : [from, to]) } },
+			scales: { x: { time: true, range: () => (zoom ? [zoom.min, zoom.max] : [full.from, full.to]) } },
 			axes: [
 				{
 					...axis,
@@ -105,8 +121,9 @@
 				{ stroke: 'transparent', points: { show: false } },
 				{ stroke: 'transparent', points: { show: false } }
 			],
-			bands: [{ series: [3, 2], fill: `color-mix(in srgb, ${ink} 14%, transparent)` }],
+			bands: [{ series: [3, 2], fill: `color-mix(in srgb, ${ink} 18%, transparent)` }],
 			hooks: {
+				init: [(u) => u.over.addEventListener('mousedown', () => (dragging = true))],
 				// Dragging selects a section; uPlot then sets the scale to it.
 				setSelect: [
 					(u) => {
@@ -134,9 +151,26 @@
 				]
 			}
 		};
-		full = { from, to };
 		plot = new uPlot(opts, data, box);
 	}
+
+	// A drag ends anywhere on the page. Draw held-back data after uPlot has
+	// handled the release (and applied the selection).
+	$effect(() => {
+		const release = () => {
+			if (!dragging) return;
+			dragging = false;
+			setTimeout(() => {
+				if (pending && !dragging) {
+					const { data, from, to } = pending;
+					pending = null;
+					draw(data, from, to);
+				}
+			});
+		};
+		window.addEventListener('mouseup', release);
+		return () => window.removeEventListener('mouseup', release);
+	});
 
 	function resetZoom() {
 		zoom = null;
@@ -163,6 +197,7 @@
 				else {
 					plot?.destroy();
 					plot = null;
+					pending = null;
 				}
 			},
 			(e) => {
@@ -181,10 +216,10 @@
 	onDestroy(() => plot?.destroy());
 </script>
 
-<figure class="plate chart">
+<figure class="panel chart">
 	<figcaption>
-		<span class="data name">{seriesName(series.metric, series.labels)}</span>
-		<span class="data value">
+		<span class="mono name">{seriesName(series.metric, series.labels)}</span>
+		<span class="mono value">
 			{#if readout}
 				{readout.time} · {formatValue(readout.avg, series.unit)}
 				{#if readout.min !== readout.max}
@@ -194,7 +229,7 @@
 				{formatValue(latest, series.unit)}
 			{/if}
 			{#if zoom}
-				<button type="button" class="reset legend" onclick={resetZoom}>Reset zoom</button>
+				<button type="button" class="reset btn" onclick={resetZoom}>Reset zoom</button>
 			{/if}
 		</span>
 	</figcaption>
@@ -230,15 +265,15 @@
 		margin-left: 10px;
 		font-size: 11px;
 		padding: 2px 8px;
-		color: var(--ink);
-		background: var(--plate);
-		border: 1px solid var(--rule);
+		color: var(--text);
+		background: var(--panel);
+		border: 1px solid var(--line);
 		border-radius: 2px;
 		cursor: pointer;
 	}
 
 	.value {
-		color: var(--ink-2);
+		color: var(--muted);
 	}
 
 	.canvas {
@@ -252,7 +287,7 @@
 		display: grid;
 		place-items: center;
 		margin: 0;
-		color: var(--ink-3);
+		color: var(--muted);
 		font-size: 13px;
 	}
 

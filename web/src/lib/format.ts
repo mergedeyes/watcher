@@ -105,3 +105,23 @@ export function seriesName(metric: string, labels: Record<string, string> | unde
 	if (entries.length === 0) return metric;
 	return `${metric}{${entries.map(([k, v]) => `${k}="${v}"`).join(',')}}`;
 }
+
+/** Nagios-style duration since `iso`: `0d 2h 13m 5s`. */
+export function since(iso: string | null, now: number): string {
+	if (!iso) return '';
+	let secs = Math.max(0, Math.floor((now - Date.parse(iso)) / 1000));
+	const d = Math.floor(secs / 86400);
+	secs %= 86400;
+	const h = Math.floor(secs / 3600);
+	secs %= 3600;
+	const m = Math.floor(secs / 60);
+	return `${d}d ${h}h ${m}m ${secs % 60}s`;
+}
+
+/** `2026-10-22 09:31:47`, local time. */
+export function datetime(iso: string | null): string {
+	if (!iso) return '';
+	const t = new Date(iso);
+	const p = (n: number) => String(n).padStart(2, '0');
+	return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())} ${p(t.getHours())}:${p(t.getMinutes())}:${p(t.getSeconds())}`;
+}
