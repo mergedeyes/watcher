@@ -106,7 +106,7 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         .with_context(|| format!("cannot listen on {listen}"))?;
     let server = tokio::spawn(axum::serve(listener, hub.clone().router()).into_future());
     info!(
-        "started with {} services from {}; API on http://{listen}/api/v1 (reload with SIGHUP)",
+        "started with {} services from {}; web UI on http://{listen} (reload with SIGHUP)",
         config.services.len(),
         conf_dir.display()
     );

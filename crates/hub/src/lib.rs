@@ -4,6 +4,7 @@
 //! points) comes from the database when one is configured.
 
 mod api;
+mod ui;
 mod view;
 
 use std::collections::HashMap;

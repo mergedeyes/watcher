@@ -1,0 +1,233 @@
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-sans-condensed/500.css';
+@import '@fontsource/ibm-plex-sans-condensed/600.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+
+/*
+ * Annunciator panel: an instrument enclosure with engraved legends and
+ * backlit windows that light up when a condition trips.
+ */
+:root {
+	--enclosure: #dcddd6;
+	--plate: #f4f4ef;
+	--plate-sunk: #e9eae4;
+	--ink: #1e2326;
+	--ink-2: #5a615f;
+	--ink-3: #858b88;
+	--rule: #bdbfb7;
+	--focus: #2f6fd0;
+
+	/* Lamps */
+	--crit: #d6261c;
+	--warn: #e8a200;
+	--unknown: #2f6fd0;
+	--ok: #2e8b57;
+	--pending: #8c918d;
+	--on-crit: #fff6f2;
+	--on-warn: #2b1f00;
+	--on-unknown: #f2f6ff;
+	/* An unlit window: dark smoked glass. */
+	--glass: #c4c6bf;
+	--glass-ink: #4c524f;
+
+	--font-legend: 'IBM Plex Sans Condensed', 'Arial Narrow', sans-serif;
+	--font-text: 'IBM Plex Sans', system-ui, sans-serif;
+	--font-data: 'IBM Plex Mono', ui-monospace, monospace;
+
+	--radius: 3px;
+	--gutter: 24px;
+	--max: 1280px;
+
+	color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--enclosure: #141615;
+		--plate: #1d201f;
+		--plate-sunk: #181a19;
+		--ink: #e7e6df;
+		--ink-2: #a3a9a5;
+		--ink-3: #6f7672;
+		--rule: #313633;
+		--focus: #6ea2ff;
+		--glass: #262a28;
+		--glass-ink: #8b928e;
+		color-scheme: dark;
+	}
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html {
+	background: var(--enclosure);
+	color: var(--ink);
+	font: 400 15px/1.5 var(--font-text);
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
+}
+
+body {
+	margin: 0;
+	min-height: 100vh;
+	background: var(--enclosure);
+}
+
+a {
+	color: inherit;
+}
+
+:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
+}
+
+h1,
+h2,
+h3 {
+	margin: 0;
+	font-weight: 500;
+	line-height: 1.2;
+}
+
+/* Engraved legend: the voice of labels, navigation and window captions. */
+.legend {
+	font-family: var(--font-legend);
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.07em;
+}
+
+.data {
+	font-family: var(--font-data);
+	font-variant-numeric: tabular-nums;
+}
+
+.muted {
+	color: var(--ink-2);
+}
+
+.page {
+	max-width: var(--max);
+	margin: 0 auto;
+	padding: 28px var(--gutter) 64px;
+}
+
+.section-label {
+	display: flex;
+	align-items: baseline;
+	gap: 12px;
+	margin: 36px 0 12px;
+	color: var(--ink-2);
+	font-size: 12px;
+}
+
+.section-label::after {
+	content: '';
+	flex: 1;
+	border-top: 1px solid var(--rule);
+	transform: translateY(-3px);
+}
+
+.plate {
+	background: var(--plate);
+	border: 1px solid var(--rule);
+	border-radius: var(--radius);
+}
+
+table.list {
+	width: 100%;
+	border-collapse: collapse;
+	background: var(--plate);
+	border: 1px solid var(--rule);
+	border-radius: var(--radius);
+	font-size: 14px;
+}
+
+table.list th {
+	text-align: left;
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--rule);
+	color: var(--ink-2);
+	font: 600 11px/1.2 var(--font-legend);
+	text-transform: uppercase;
+	letter-spacing: 0.07em;
+	white-space: nowrap;
+}
+
+table.list td {
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--rule);
+	vertical-align: top;
+}
+
+table.list tr:last-child td {
+	border-bottom: 0;
+}
+
+table.list td.output {
+	font-family: var(--font-data);
+	font-size: 13px;
+	color: var(--ink-2);
+	overflow-wrap: anywhere;
+}
+
+.notice {
+	padding: 14px 16px;
+	border: 1px dashed var(--rule);
+	border-radius: var(--radius);
+	color: var(--ink-2);
+	font-size: 14px;
+}
+
+input[type='search'] {
+	font: inherit;
+	font-size: 14px;
+	color: var(--ink);
+	background: var(--plate);
+	border: 1px solid var(--rule);
+	border-radius: var(--radius);
+	padding: 6px 10px;
+	min-width: 0;
+	width: 260px;
+	max-width: 100%;
+}
+
+@media (max-width: 640px) {
+	:root {
+		--gutter: 16px;
+	}
+	.hide-narrow {
+		display: none;
+	}
+	/* Tables become stacked rows: one block per row, cells on their own lines. */
+	table.list thead {
+		display: none;
+	}
+	table.list,
+	table.list tbody,
+	table.list tr,
+	table.list td {
+		display: block;
+	}
+	table.list tr {
+		padding: 10px 12px;
+		border-bottom: 1px solid var(--rule);
+	}
+	table.list tr:last-child {
+		border-bottom: 0;
+	}
+	table.list td {
+		padding: 2px 0;
+		border: 0;
+	}
+	table.list td.hide-narrow {
+		display: none;
+	}
+}
