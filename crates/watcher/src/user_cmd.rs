@@ -210,3 +210,53 @@ fn read_password(from_stdin: bool) -> Result<String> {
     }
     Ok(password)
 }
+
+#[derive(clap::Subcommand)]
+pub enum DbCommand {
+    /// Create a read-only login for Grafana, BI tools or SQL, or set its
+    /// password. It sees hosts, services, states, events and metrics
+    /// (v_metrics, v_service_state, ...), not accounts. Run it again after
+    /// upgrades. Needs a database user with CREATEROLE.
+    Reader {
+        /// Role name, e.g. grafana.
+        name: String,
+        /// Read the password from the first line of stdin; otherwise one is
+        /// generated and printed.
+        #[arg(long)]
+        password_stdin: bool,
+    },
+}
+
+pub async fn database(command: DbCommand, db: DbArgs) -> Result<ExitCode> {
+    let store = db.store().await?;
+    match command {
+        DbCommand::Reader {
+            name,
+            password_stdin,
+        } => {
+            let generated = !password_stdin;
+            let password = if password_stdin {
+                read_password(true)?
+            } else {
+                let (secret, _) = new_api_token();
+                secret.trim_start_matches("wt_").to_string()
+            };
+            store
+                .grant_reader(&name, &password)
+                .await
+                .with_context(|| {
+                    format!("cannot create role {name:?} (the database user needs CREATEROLE)")
+                })?;
+            eprintln!(
+                "Read-only role {name:?}: {}",
+                watcher_store::READABLE.join(", ")
+            );
+            if generated {
+                // The password alone on stdout, so scripts can capture it.
+                eprintln!("Password (shown only now):");
+                println!("{password}");
+            }
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}

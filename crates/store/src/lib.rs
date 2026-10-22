@@ -7,6 +7,7 @@
 mod auth;
 mod ingest;
 mod query;
+mod reader;
 mod spool;
 mod sync;
 mod write;
@@ -14,6 +15,7 @@ mod write;
 pub use auth::{ApiToken, TokenRef, User};
 pub use ingest::{Record, ingest};
 pub use query::{EventFilter, Points, Series, StateEvent};
+pub use reader::READABLE;
 pub use spool::Spool;
 pub use sync::{HostSpec, ServiceSpec, StoredState, SyncMode};
 pub use write::SeriesCache;

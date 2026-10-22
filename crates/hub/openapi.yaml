@@ -1,0 +1,601 @@
+openapi: 3.1.0
+info:
+  title: Watcher API
+  version: "1"
+  description: |
+    JSON API of the Watcher hub; the web UI uses only this API.
+    Errors are `{"error": "..."}` with a matching status code.
+    With a database, login is required: a session cookie (`POST /auth/login`)
+    or an API token (`Authorization: Bearer wt_...`). Requests with the
+    cookie that change something must come from the same origin.
+  license:
+    name: AGPL-3.0-only
+servers:
+  - url: /api/v1
+security:
+  - session: []
+  - token: []
+
+paths:
+  /health:
+    get:
+      summary: Status and version
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  version: { type: string }
+                  uptime_s: { type: integer }
+                  services: { type: integer }
+                  database: { type: [string, "null"], example: TimescaleDB }
+                  instance: { type: [string, "null"] }
+
+  /openapi.yaml:
+    get:
+      summary: This document
+      security: []
+      responses:
+        "200": { description: OpenAPI 3.1 in YAML }
+
+  /hosts:
+    get:
+      summary: All hosts with their state
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/HostView" } }
+
+  /hosts/{host}:
+    get:
+      summary: One host with its services
+      parameters: [{ $ref: "#/components/parameters/host" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  host: { $ref: "#/components/schemas/HostView" }
+                  services: { type: array, items: { $ref: "#/components/schemas/ServiceView" } }
+                  origin: { type: string, description: "file:line" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /services:
+    get:
+      summary: Services, filtered
+      parameters:
+        - { name: host, in: query, schema: { type: string } }
+        - name: state
+          in: query
+          description: Comma-separated
+          schema: { type: string, example: "warning,critical" }
+        - { name: problems, in: query, description: Not OK and not pending, schema: { type: boolean } }
+        - { name: hard, in: query, description: Only hard states, schema: { type: boolean } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  counts: { $ref: "#/components/schemas/Counts" }
+                  services: { type: array, items: { $ref: "#/components/schemas/ServiceView" } }
+        "400": { $ref: "#/components/responses/Error" }
+
+  /services/{host}/{service}:
+    get:
+      summary: One service with its last result
+      parameters: [{ $ref: "#/components/parameters/host" }, { $ref: "#/components/parameters/service" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceDetail" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /services/{host}/{service}/result:
+    post:
+      summary: Submit a passive result
+      description: Give `exit_code` (Nagios semantics) or `state`. `output` is parsed like plugin stdout.
+      parameters: [{ $ref: "#/components/parameters/host" }, { $ref: "#/components/parameters/service" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                exit_code: { type: integer, example: 0 }
+                state: { $ref: "#/components/schemas/State" }
+                output: { type: string, example: "BACKUP OK - 12 GB | size=12GB" }
+      responses:
+        "200":
+          description: The service after the result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceDetail" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /services/{host}/{service}/series:
+    get:
+      summary: Metric series of a service
+      parameters: [{ $ref: "#/components/parameters/host" }, { $ref: "#/components/parameters/service" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Series" } }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /series/{id}/points:
+    get:
+      summary: Points of a series, bucketed
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: from, in: query, description: "RFC 3339, unix seconds or a duration back from now (6h); default 1h", schema: { type: string } }
+        - { name: to, in: query, description: Like from; default now, schema: { type: string } }
+        - { name: points, in: query, description: Max. buckets (1-10000, default 600), schema: { type: integer } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Points" }
+        "400": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /events:
+    get:
+      summary: State changes, newest first
+      parameters:
+        - { name: host, in: query, schema: { type: string } }
+        - { name: service, in: query, schema: { type: string } }
+        - { name: before, in: query, description: For paging, like `from` of points, schema: { type: string } }
+        - { name: hard, in: query, schema: { type: boolean } }
+        - { name: limit, in: query, schema: { type: integer, default: 100 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/StateEvent" } }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /stream:
+    get:
+      summary: Live updates (Server-Sent Events)
+      description: |
+        Events: `result` (a ServiceView after every check), `reload` (the config
+        was reloaded; fetch lists again), `lagged` (updates were dropped; fetch again).
+      responses:
+        "200":
+          description: Event stream
+          content:
+            text/event-stream: {}
+
+  /auth/status:
+    get:
+      summary: Whether login is needed, and who is logged in
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  required: { type: boolean }
+                  user: { oneOf: [{ $ref: "#/components/schemas/User" }, { type: "null" }] }
+                  users_exist: { type: boolean }
+
+  /auth/login:
+    post:
+      summary: Log in; sets the session cookie
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+
+  /auth/logout:
+    post:
+      summary: End the session
+      responses:
+        "204": { description: Logged out }
+
+  /tokens:
+    get:
+      summary: The current user's API tokens
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ApiToken" } }
+    post:
+      summary: Create an API token (shown only in this response)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, example: backup cron job }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string, example: wt_... }
+                  info: { $ref: "#/components/schemas/ApiToken" }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /tokens/{id}:
+    delete:
+      summary: Revoke an API token
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "204": { description: Revoked }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /config:
+    get:
+      summary: Config mode, object files and problems on disk (admins)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mode: { type: string, enum: [hybrid, files, ui] }
+                  writable: { type: boolean }
+                  dir: { type: string }
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        path: { type: string }
+                        hash: { type: string }
+                        size: { type: integer }
+                  diagnostics: { type: array, items: { $ref: "#/components/schemas/Problem" } }
+        "403": { $ref: "#/components/responses/Error" }
+
+  /config/files/{path}:
+    get:
+      summary: One object file (admins)
+      parameters: [{ name: path, in: path, required: true, description: "Relative, e.g. ui/hosts.toml", schema: { type: string } }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigFile" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /config/objects:
+    get:
+      summary: All objects as written, before templates (admins)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  objects: { type: array, items: { $ref: "#/components/schemas/ConfigObject" } }
+                  diagnostics: { type: array, items: { $ref: "#/components/schemas/Problem" } }
+
+  /config/edit:
+    post:
+      summary: The file change for creating, updating or deleting an object (admins)
+      description: Writes nothing; pass the result to preview or apply. No `name` creates; no `fields` deletes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind]
+              properties:
+                kind: { type: string, enum: [host, check, template, contact, sink] }
+                name: { type: [string, "null"] }
+                fields: { type: [object, "null"], example: { name: web01, address: 10.0.0.5, tags: [linux] } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Change" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /config/preview:
+    post:
+      summary: Validate changes and show their effect (admins)
+      requestBody: { $ref: "#/components/requestBodies/Changes" }
+      responses:
+        "200":
+          description: Valid or not, with diagnostics and effective changes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid: { type: boolean }
+                  changes: { $ref: "#/components/schemas/Changes" }
+                  diagnostics: { type: array, items: { $ref: "#/components/schemas/Problem" } }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /config/apply:
+    post:
+      summary: Write changes and reload (admins)
+      requestBody: { $ref: "#/components/requestBodies/Changes" }
+      responses:
+        "200":
+          description: Written and reloaded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  changes: { $ref: "#/components/schemas/Changes" }
+                  diagnostics: { type: array, items: { $ref: "#/components/schemas/Problem" } }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422":
+          description: The config would have errors; nothing written
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  diagnostics: { type: array, items: { $ref: "#/components/schemas/Problem" } }
+
+components:
+  securitySchemes:
+    session: { type: apiKey, in: cookie, name: watcher_session }
+    token: { type: http, scheme: bearer, description: "API token, wt_..." }
+
+  parameters:
+    host: { name: host, in: path, required: true, schema: { type: string } }
+    service: { name: service, in: path, required: true, schema: { type: string } }
+
+  requestBodies:
+    Changes:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              changes: { type: array, items: { $ref: "#/components/schemas/Change" } }
+
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: A file changed since it was read
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: { type: string }
+              path: { type: string }
+              current: { oneOf: [{ $ref: "#/components/schemas/ConfigFile" }, { type: "null" }] }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+    State: { type: string, enum: [ok, warning, critical, unknown] }
+    HostState: { type: string, enum: [up, down] }
+    StateType: { type: string, enum: [soft, hard] }
+    Time: { type: string, format: date-time }
+    Counts:
+      type: object
+      properties:
+        ok: { type: integer }
+        warning: { type: integer }
+        critical: { type: integer }
+        unknown: { type: integer }
+        pending: { type: integer }
+    ServiceView:
+      type: object
+      properties:
+        host: { type: string }
+        service: { type: string }
+        state: { oneOf: [{ $ref: "#/components/schemas/State" }, { type: "null" }], description: null while pending }
+        state_type: { oneOf: [{ $ref: "#/components/schemas/StateType" }, { type: "null" }] }
+        attempt: { type: [integer, "null"] }
+        max_attempts: { type: integer }
+        last_check: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+        last_change: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+        output: { type: string }
+        passive: { type: boolean }
+        flapping: { type: boolean }
+    ServiceDetail:
+      allOf:
+        - $ref: "#/components/schemas/ServiceView"
+        - type: object
+          properties:
+            last_hard_change: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+            long_output: { type: string }
+            duration_ms: { type: [number, "null"] }
+            metrics: { type: array, items: { $ref: "#/components/schemas/Metric" } }
+            percent_change: { type: [number, "null"], description: Weighted state changes in the last 21 results, 0-100 }
+            host_check: { type: boolean }
+            check:
+              type: object
+              properties:
+                command: { type: [string, "null"] }
+                interval_s: { type: number }
+                retry_interval_s: { type: number }
+                timeout_s: { type: number }
+                freshness_s: { type: [number, "null"] }
+                flap_low: { type: [number, "null"] }
+                flap_high: { type: [number, "null"] }
+                origin: { type: string, description: "file:line" }
+    Metric:
+      type: object
+      properties:
+        name: { type: string }
+        value: { type: number }
+        unit: { type: string }
+        labels: { type: object, additionalProperties: { type: string } }
+        warn: { type: string }
+        crit: { type: string }
+        min: { type: number }
+        max: { type: number }
+        state: { $ref: "#/components/schemas/State" }
+    HostView:
+      type: object
+      properties:
+        name: { type: string }
+        address: { type: string }
+        node: { type: [string, "null"] }
+        tags: { type: array, items: { type: string } }
+        vars: { type: object, additionalProperties: { type: string } }
+        enabled: { type: boolean }
+        state: { oneOf: [{ $ref: "#/components/schemas/HostState" }, { type: "null" }], description: "From the host check; up without one; null while pending" }
+        state_type: { oneOf: [{ $ref: "#/components/schemas/StateType" }, { type: "null" }] }
+        attempt: { type: [integer, "null"] }
+        max_attempts: { type: [integer, "null"] }
+        last_check: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+        last_change: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+        output: { type: string }
+        flapping: { type: boolean }
+        check: { type: [string, "null"], description: Host check name }
+        worst: { oneOf: [{ $ref: "#/components/schemas/State" }, { type: "null" }], description: Worst service state }
+        services: { $ref: "#/components/schemas/Counts" }
+    Series:
+      type: object
+      properties:
+        id: { type: integer }
+        metric: { type: string }
+        labels: { type: object, additionalProperties: { type: string } }
+        unit: { type: string }
+        first: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+        last: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+    Points:
+      type: object
+      properties:
+        bucket: { type: number, description: Bucket width in seconds }
+        points:
+          type: array
+          description: "[unix ms, avg, min, max, count]"
+          items: { type: array, items: { type: number }, minItems: 5, maxItems: 5 }
+    StateEvent:
+      type: object
+      properties:
+        host: { type: string }
+        service: { type: string }
+        ts: { $ref: "#/components/schemas/Time" }
+        from_state: { oneOf: [{ $ref: "#/components/schemas/State" }, { type: "null" }] }
+        to_state: { $ref: "#/components/schemas/State" }
+        state_type: { $ref: "#/components/schemas/StateType" }
+        hard: { type: boolean }
+        output: { type: string }
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        admin: { type: boolean }
+        disabled: { type: boolean }
+        created: { $ref: "#/components/schemas/Time" }
+        last_login: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+    ApiToken:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        created: { $ref: "#/components/schemas/Time" }
+        last_used: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+    Problem:
+      type: object
+      properties:
+        path: { type: [string, "null"] }
+        line: { type: integer }
+        severity: { type: string, enum: [error, warning] }
+        message: { type: string }
+    ConfigFile:
+      type: object
+      properties:
+        path: { type: string }
+        hash: { type: string, description: SHA-256 }
+        text: { type: string }
+    ConfigObject:
+      type: object
+      properties:
+        kind: { type: string, enum: [host, check, template, contact, sink] }
+        name: { type: string }
+        path: { type: string }
+        line: { type: integer }
+        fields: { type: object }
+    Change:
+      type: object
+      required: [path]
+      properties:
+        path: { type: string }
+        base: { type: [string, "null"], description: Hash the change was made on; null creates the file }
+        text: { type: [string, "null"], description: New text; null deletes the file }
+    Delta:
+      type: object
+      properties:
+        added: { type: array, items: { type: string } }
+        removed: { type: array, items: { type: string } }
+        changed: { type: array, items: { type: string } }
+    Changes:
+      type: object
+      properties:
+        hosts: { $ref: "#/components/schemas/Delta" }
+        services: { $ref: "#/components/schemas/Delta" }
+        contacts: { $ref: "#/components/schemas/Delta" }
+        sinks: { $ref: "#/components/schemas/Delta" }

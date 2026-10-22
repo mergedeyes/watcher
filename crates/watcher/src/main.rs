@@ -70,6 +70,14 @@ enum Cmd {
     /// Work with the configuration.
     #[command(subcommand)]
     Config(config_cmd::Command),
+
+    /// Database tools.
+    Db {
+        #[command(subcommand)]
+        command: user_cmd::DbCommand,
+        #[command(flatten)]
+        db: user_cmd::DbArgs,
+    },
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -93,6 +101,7 @@ async fn main() -> ExitCode {
         Cmd::Notify(command) => (notify_cmd::run(command).await, ExitCode::FAILURE),
         Cmd::User { command, db } => (user_cmd::user(command, db).await, ExitCode::FAILURE),
         Cmd::Token { command, db } => (user_cmd::token(command, db).await, ExitCode::FAILURE),
+        Cmd::Db { command, db } => (user_cmd::database(command, db).await, ExitCode::FAILURE),
     };
     result.unwrap_or_else(|err| {
         eprintln!("error: {err:#}");
