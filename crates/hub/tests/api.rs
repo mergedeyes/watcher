@@ -241,3 +241,23 @@ async fn stream_sends_results() {
     assert!(text.starts_with("event: result\ndata: {"), "{text}");
     assert!(text.contains(r#""output":"HTTP OK""#), "{text}");
 }
+
+#[tokio::test]
+async fn serves_the_web_ui_for_app_routes() {
+    let hub = hub();
+    for uri in ["/", "/hosts", "/services/web01/http"] {
+        let resp = hub
+            .clone()
+            .router()
+            .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{uri}");
+        let ct = resp.headers()["content-type"].to_str().unwrap().to_string();
+        assert!(ct.starts_with("text/html"), "{uri}: {ct}");
+    }
+    // API paths never fall back to the UI.
+    let (status, err) = call(&hub, "GET", "/api/v1/nope", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(err["error"], "no such endpoint");
+}

@@ -1,0 +1,6 @@
+# A demo that shows every state without any plugins installed: plain shell
+# checks that report fixed problems and changing metrics.
+#   watcher run examples/demo/watcher.toml --database postgres://watcher:watcher@localhost:55432/watcher_demo
+# then open http://127.0.0.1:8080
+role = "standalone"
+conf_dir = "conf.d"

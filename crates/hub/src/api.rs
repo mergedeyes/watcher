@@ -36,7 +36,8 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/series/{id}/points", get(points))
         .route("/api/v1/events", get(events))
         .route("/api/v1/stream", get(stream))
-        .fallback(|| async { ApiError::NotFound("no such endpoint".into()) })
+        // Unknown /api paths get a JSON 404; everything else is the web UI.
+        .fallback(crate::ui::serve)
         .with_state(hub)
 }
 
