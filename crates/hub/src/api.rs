@@ -1,9 +1,9 @@
 //! HTTP API, version 1. All responses are JSON; errors are
 //! `{"error": "..."}` with a matching status code.
 
-use crate::auth;
 use crate::view::{Counts, HostView, ServiceDetail, ServiceView};
 use crate::{Hub, Update};
+use crate::{auth, config};
 use axum::extract::{Path, Query, State as AxState};
 use axum::http::StatusCode;
 use axum::middleware;
@@ -43,6 +43,12 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/auth/logout", post(auth::logout))
         .route("/api/v1/tokens", get(auth::tokens).post(auth::create_token))
         .route("/api/v1/tokens/{id}", delete(auth::delete_token))
+        .route("/api/v1/config", get(config::overview))
+        .route("/api/v1/config/files/{*path}", get(config::file))
+        .route("/api/v1/config/objects", get(config::objects))
+        .route("/api/v1/config/edit", post(config::edit))
+        .route("/api/v1/config/preview", post(config::preview))
+        .route("/api/v1/config/apply", post(config::apply))
         // Unknown /api paths get a JSON 404; everything else is the web UI.
         .fallback(crate::ui::serve)
         .layer(middleware::from_fn_with_state(hub.clone(), auth::require))

@@ -7,13 +7,16 @@
 //! [`Service`] with its command macros expanded.
 
 mod bootstrap;
+pub mod diff;
+pub mod edit;
 mod expr;
+pub mod files;
 mod load;
 mod macros;
 
-pub use bootstrap::{Bootstrap, BootstrapError, Database, Role, Smtp, SmtpTls};
+pub use bootstrap::{Bootstrap, BootstrapError, ConfigMode, Database, Role, Smtp, SmtpTls};
 pub use expr::{Expr, ExprError};
-pub use load::load_dir;
+pub use load::{load_dir, load_dir_with};
 
 use std::collections::BTreeMap;
 use std::fmt;

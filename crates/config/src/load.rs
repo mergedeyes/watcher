@@ -15,19 +15,36 @@ use watcher_exec::CommandLine;
 /// Returns the config and its warnings, or every problem found (errors and
 /// warnings) if there is at least one error.
 pub fn load_dir(dir: &Path) -> Result<Loaded, Vec<Diagnostic>> {
+    load_dir_with(dir, &BTreeMap::new())
+}
+
+/// Like [`load_dir`], with some files replaced: `overlay` maps a path below
+/// `dir` to its new text, or to `None` for a deleted file. Paths that don't
+/// exist yet are added. Nothing is written.
+pub fn load_dir_with(
+    dir: &Path,
+    overlay: &BTreeMap<PathBuf, Option<String>>,
+) -> Result<Loaded, Vec<Diagnostic>> {
     let mut sink = Sink::default();
     let mut raw = RawObjects::default();
-    let files = match discover(dir) {
+    let mut files = match discover(dir) {
         Ok(files) => files,
         Err(err) => {
             sink.error(None, format!("cannot read {}: {err}", dir.display()));
             return Err(sink.finish());
         }
     };
+    files.extend(overlay.keys().cloned());
+    files.retain(|f| !matches!(overlay.get(f), Some(None)));
+    files.sort();
+    files.dedup();
     for file in &files {
-        match std::fs::read_to_string(file) {
-            Ok(text) => raw.add_file(file, &text, &mut sink),
-            Err(err) => sink.error(None, format!("cannot read {}: {err}", file.display())),
+        match overlay.get(file) {
+            Some(Some(text)) => raw.add_file(file, text, &mut sink),
+            _ => match std::fs::read_to_string(file) {
+                Ok(text) => raw.add_file(file, &text, &mut sink),
+                Err(err) => sink.error(None, format!("cannot read {}: {err}", file.display())),
+            },
         }
     }
     let mut config = raw.compile(&mut sink);
@@ -43,7 +60,7 @@ pub fn load_dir(dir: &Path) -> Result<Loaded, Vec<Diagnostic>> {
 }
 
 /// All `*.toml` files below `dir`, sorted, skipping hidden entries.
-fn discover(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+pub(crate) fn discover(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     let mut pending = vec![dir.to_path_buf()];
     while let Some(dir) = pending.pop() {
@@ -104,17 +121,17 @@ impl Sink {
 /// The layout of an object file.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawFile {
+pub(crate) struct RawFile {
     #[serde(default)]
-    template: BTreeMap<String, Spanned<Table>>,
+    pub template: BTreeMap<String, Spanned<Table>>,
     #[serde(default)]
-    host: Vec<Spanned<Table>>,
+    pub host: Vec<Spanned<Table>>,
     #[serde(default)]
-    check: Vec<Spanned<Table>>,
+    pub check: Vec<Spanned<Table>>,
     #[serde(default)]
-    contact: BTreeMap<String, Spanned<Table>>,
+    pub contact: BTreeMap<String, Spanned<Table>>,
     #[serde(default)]
-    sink: Vec<Spanned<Table>>,
+    pub sink: Vec<Spanned<Table>>,
 }
 
 struct RawObject {

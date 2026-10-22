@@ -10,9 +10,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tower::ServiceExt;
-use watcher_config::Config;
-use watcher_hub::auth::hash_password;
-use watcher_hub::{AuthSettings, Hub};
+use watcher_config::{Config, ConfigMode};
+use watcher_hub::auth::{hash_password, new_api_token};
+use watcher_hub::{AuthSettings, ConfigFiles, Hub};
 use watcher_store::Store;
 
 /// Creates a database for this test; returns its URL and the admin URL.
@@ -195,6 +195,37 @@ async fn login_sessions_and_tokens() {
         .call("POST", "/api/v1/tokens", Some(json!({"name": "cron"})), &[])
         .await;
     assert_eq!(status, StatusCode::CONFLICT);
+
+    // Config editing is for admins.
+    let dir = std::env::temp_dir().join(format!("watcher-hub-auth-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (reload, _reloads) = mpsc::channel(1);
+    c.hub.enable_config_editing(ConfigFiles {
+        dir,
+        mode: ConfigMode::Hybrid,
+        reload,
+    });
+    assert_eq!(
+        c.call("GET", "/api/v1/config", None, &[]).await.0,
+        StatusCode::OK
+    );
+    let bob = store
+        .create_user("bob", &hash_password("bob's password").unwrap(), false)
+        .await
+        .unwrap();
+    let (bob_token, bob_hash) = new_api_token();
+    store.create_token(bob.id, "bob", &bob_hash).await.unwrap();
+    let bob_bearer = format!("Bearer {bob_token}");
+    let (status, err) = c
+        .call(
+            "GET",
+            "/api/v1/config",
+            None,
+            &[("authorization", &bob_bearer)],
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(err["error"], "admin rights required");
 
     // Logout ends the session; the token keeps working on its own.
     let session = c.cookie.clone();

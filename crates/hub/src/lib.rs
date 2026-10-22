@@ -5,11 +5,12 @@
 
 mod api;
 pub mod auth;
+pub mod config;
 mod ui;
 mod view;
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, SystemTime};
 use tokio::sync::{broadcast, mpsc};
 use watcher_config::Config;
@@ -19,6 +20,7 @@ use watcher_exec::{DEFAULT_OUTPUT_LIMIT, ExecOptions};
 use watcher_store::{HostSpec, ServiceSpec, Store, StoredState};
 
 pub use auth::AuthSettings;
+pub use config::{ConfigFiles, Reload};
 
 /// Live state of one service.
 #[derive(Debug, Clone)]
@@ -54,6 +56,10 @@ pub struct Hub {
     auth: AuthSettings,
     limiter: auth::Limiter,
     started: SystemTime,
+    /// Set when the object files may be read and edited over the API.
+    config_files: OnceLock<ConfigFiles>,
+    /// Held while a config change is written and reloaded.
+    config_lock: tokio::sync::Mutex<()>,
 }
 
 impl Hub {
@@ -88,7 +94,23 @@ impl Hub {
             auth,
             limiter: auth::Limiter::default(),
             started: SystemTime::now(),
+            config_files: OnceLock::new(),
+            config_lock: tokio::sync::Mutex::new(()),
         })
+    }
+
+    /// Serves the object files under `/api/v1/config` (for admins).
+    pub fn enable_config_editing(&self, files: ConfigFiles) {
+        let _ = self.config_files.set(files);
+    }
+
+    /// The running configuration.
+    pub fn config(&self) -> Arc<Config> {
+        self.live
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .config
+            .clone()
     }
 
     /// Installs a reloaded configuration and drops state of services that
