@@ -388,14 +388,45 @@ fn new_table(kind: Kind, fields: &Table) -> toml_edit::Table {
     keys.sort_by_key(|k| (order.iter().position(|o| o == k).unwrap_or(order.len()), *k));
     let mut table = toml_edit::Table::new();
     for key in keys {
-        table.insert(key, Item::Value(to_edit(&fields[key])));
+        table.insert(key, new_item(&fields[key], false));
     }
     table
+}
+
+/// The item for a new key. A table of tables (`service`, `thresholds`,
+/// `for_each` data) becomes dotted keys with inline tables
+/// (`service.http = { ... }`), or headers if its siblings are headers
+/// (`[host.service.http]`); everything else an inline value.
+fn new_item(value: &Value, headers: bool) -> Item {
+    match value {
+        Value::Table(t) if headers => {
+            let mut table = toml_edit::Table::new();
+            for (k, v) in t {
+                table.insert(k, new_item(v, false));
+            }
+            Item::Table(table)
+        }
+        Value::Table(t) if !t.is_empty() && t.values().all(Value::is_table) => {
+            let mut table = toml_edit::Table::new();
+            table.set_dotted(true);
+            for (k, v) in t {
+                table.insert(k, Item::Value(to_edit(v)));
+            }
+            Item::Table(table)
+        }
+        v => Item::Value(to_edit(v)),
+    }
 }
 
 /// Makes `table` hold exactly `fields`. Unchanged values keep their
 /// formatting and comments, changed ones their comments.
 fn update_table(table: &mut dyn TableLike, fields: &Table) {
+    update_table_in(table, fields, None);
+}
+
+/// [`update_table`]; `header_indent` is used for new keys when no sibling
+/// key shows the indentation.
+fn update_table_in(table: &mut dyn TableLike, fields: &Table, header_indent: Option<String>) {
     let gone: Vec<String> = table
         .iter()
         .map(|(k, _)| k.to_string())
@@ -404,17 +435,48 @@ fn update_table(table: &mut dyn TableLike, fields: &Table) {
     for key in gone {
         table.remove(&key);
     }
+    // New keys look like their siblings: headers among headers, and the
+    // same indentation.
+    let headers = table.iter().any(|(_, item)| item.is_table());
+    let indent = table
+        .iter()
+        .filter(|(_, item)| item.is_value())
+        .find_map(|(k, _)| {
+            table
+                .key(k)?
+                .leaf_decor()
+                .prefix()?
+                .as_str()
+                .map(String::from)
+        })
+        .or(header_indent);
     for (key, value) in fields {
         match table.get_mut(key) {
             Some(item) => update_item(item, value),
             None => {
-                table.insert(key, Item::Value(to_edit(value)));
+                let item = new_item(value, headers && value.is_table());
+                let is_value = item.is_value();
+                table.insert(key, item);
+                if let (true, Some(indent), Some(mut k)) = (is_value, &indent, table.key_mut(key)) {
+                    k.leaf_decor_mut().set_prefix(indent.as_str());
+                }
             }
         }
     }
 }
 
 fn update_item(item: &mut Item, value: &Value) {
+    if let (Item::Table(table), Value::Table(fields)) = (&mut *item, value) {
+        // `  [host.service.x]`: keys go below at the same indentation.
+        let indent = table
+            .decor()
+            .prefix()
+            .and_then(|p| p.as_str())
+            .map(|p| p.rsplit('\n').next().unwrap_or_default().to_string())
+            .filter(|p| !p.is_empty());
+        update_table_in(table, fields, indent);
+        return;
+    }
     if let (Some(table), Value::Table(fields)) = (item.as_table_like_mut(), value) {
         update_table(table, fields);
         return;
@@ -608,6 +670,29 @@ name = "db01""#,
             Some("> 500")
         );
         assert!(out.starts_with("[check.q]\ncommand = \"q.sh\"\n"));
+    }
+
+    #[test]
+    fn new_tables_of_tables_use_dotted_keys_or_match_headers() {
+        let new = fields(
+            "name = \"web\"\nservice.http = { check = \"http\" }\nservice.ping = {}\nthresholds.time = { warn = \"> 1s\" }",
+        );
+        let out = edit_text("", Kind::Role, None, Some(&new)).unwrap();
+        assert_eq!(
+            out,
+            "[role.web]\nservice.http = { check = \"http\" }\nservice.ping = {}\nthresholds.time = { warn = \"> 1s\" }\n"
+        );
+
+        let file =
+            "[[host]]\nname = \"h\"\n  [host.service.a]\n  passive = true\n  [host.service.c]\n";
+        let new = fields(
+            "name = \"h\"\nservice.a = { passive = true, freshness = \"1h\" }\nservice.b = { check = \"x\" }\nservice.c = { enabled = false }",
+        );
+        let out = edit_text(file, Kind::Host, Some("h"), Some(&new)).unwrap();
+        assert_eq!(
+            out,
+            "[[host]]\nname = \"h\"\n  [host.service.a]\n  passive = true\n  freshness = \"1h\"\n  [host.service.c]\n  enabled = false\n\n[host.service.b]\ncheck = \"x\"\n"
+        );
     }
 
     #[test]

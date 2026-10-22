@@ -6,7 +6,8 @@
 	import ApplyDialog from '#lib/ApplyDialog.svelte';
 	import { config, fileHref } from '#lib/config.svelte.ts';
 	import ConfigHead from '#lib/ConfigHead.svelte';
-	import { KINDS, SCHEMAS, fromForm, otherKeys, toForm, type Field, type FormValues } from '#lib/schema.ts';
+	import ConfigTree from '#lib/ConfigTree.svelte';
+	import { KINDS, SCHEMAS, SELECTOR_FIELDS, fromForm, otherKeys, toForm, type Field, type FormValues, type ServiceRow } from '#lib/schema.ts';
 
 	let kind = $derived(KINDS.find((k) => k.path === page.params.kind));
 	let name = $derived(page.url.searchParams.get('name'));
@@ -46,6 +47,20 @@
 	});
 
 	let others = $derived(kind ? otherKeys(kind.kind, raw) : []);
+
+	/** Services of the host's roles (as written), by name: role. Host services with these names override them. */
+	let roleServices = $derived.by(() => {
+		const out = new Map<string, string>();
+		if (kind?.kind !== 'host' || !values) return out;
+		const listed = items(String(values.roles ?? ''));
+		for (const role of config.of('role')) {
+			const selected = role.fields.hosts !== undefined;
+			if (!listed.includes(role.name) && !selected) continue;
+			const svc = role.fields.service;
+			if (svc && typeof svc === 'object') for (const s of Object.keys(svc)) out.set(s, role.name);
+		}
+		return out;
+	});
 	/** Problems on disk that point at this object, e.g. a command not found. */
 	let own = $derived(
 		object ? (config.overview?.diagnostics ?? []).filter((p) => p.path === object.path && p.line === object.line) : []
@@ -112,9 +127,12 @@
 				<a href="/config/{kind.path}">{kind.label}</a> / {name ?? `New ${kind.one}`}
 			</h1>
 			{#if object}
-				<a class="mono" href={fileHref(object.path, object.line)}>{object.path}:{object.line}</a>
+				<span class="head-actions">
+					{#if kind.kind !== 'sink' && object.name}<ConfigTree kind={kind.kind} name={object.name} />{/if}
+					<a class="mono" href={fileHref(object.path, object.line)}>{object.path}:{object.line}</a>
+				</span>
 			{:else if name === null}
-				<span class="muted mono">→ {kind.kind === 'template' ? 'ui/templates.toml' : `ui/${kind.path}.toml`}</span>
+				<span class="muted mono">→ {kind.file}</span>
 			{/if}
 		</div>
 		<ConfigHead />
@@ -137,12 +155,6 @@
 									<div class="input">
 										{#if f.type === 'bool'}
 											<input {id} type="checkbox" bind:checked={values[f.key] as boolean} />
-										{:else if f.type === 'tristate'}
-											<select {id} bind:value={values[f.key]}>
-												<option value={null}>—</option>
-												<option value={true}>yes</option>
-												<option value={false}>no</option>
-											</select>
 										{:else if f.type === 'select'}
 											<select {id} bind:value={values[f.key]}>
 												<option value="">— (auto)</option>
@@ -174,6 +186,48 @@
 												{/each}
 												<button type="button" class="btn small"
 													onclick={() => (values![f.key] = [...rows<[string, string, string]>(f.key), ['', '', '']])}>Add threshold</button>
+											</div>
+										{:else if f.type === 'selector'}
+											{@const sel = values[f.key] as Record<string, string>}
+											<div class="selector">
+												{#if sel.list}
+													<label class="sub" for="{id}-list">List</label>
+													<input id="{id}-list" class="mono" bind:value={sel.list} />
+												{:else}
+													<label class="all"><input type="checkbox" checked={sel.all === 'true'}
+														onchange={(e) => (sel.all = e.currentTarget.checked ? 'true' : '')} /> All {f.selects === 'service' ? 'services' : 'hosts'}</label>
+													{#each SELECTOR_FIELDS[f.selects ?? 'host'] as [key, label, placeholder] (key)}
+														<label class="sub" for="{id}-{key}">{label}</label>
+														<input id="{id}-{key}" class:mono={key === 'expr'} {placeholder} bind:value={sel[key]} />
+													{/each}
+												{/if}
+											</div>
+										{:else if f.type === 'services'}
+											<div class="rows">
+												{#if rows<ServiceRow>(f.key).length > 0}
+													<div class="row svc head"><span>Service</span><span>Check</span><span>For Each</span><span>Service Groups</span><span>Enabled</span><span></span></div>
+												{/if}
+												{#each rows<ServiceRow>(f.key) as row, i (i)}
+													<div class="row svc">
+														<input class="mono" placeholder="name" bind:value={row[0]} aria-label="Service" />
+														<input class="mono" placeholder={row[0] || 'check'} bind:value={row[1]} aria-label="Check" list="checks-list" />
+														<input class="mono" placeholder="host var" bind:value={row[2]} aria-label="For each" />
+														<input placeholder="groups" bind:value={row[3]} aria-label="Service groups" />
+														<select bind:value={row[4]} aria-label="Enabled">
+															<option value="">—</option>
+															<option value="yes">yes</option>
+															<option value="no">no</option>
+														</select>
+														<button type="button" class="btn" aria-label="Remove"
+															onclick={() => (values![f.key] = rows<ServiceRow>(f.key).filter((_, j) => j !== i))}>×</button>
+														{#if kind.kind === 'host' && roleServices.has(row[0])}
+															<span class="override">overrides role {roleServices.get(row[0])}</span>
+														{/if}
+													</div>
+												{/each}
+												<button type="button" class="btn small"
+													onclick={() => (values![f.key] = [...rows<ServiceRow>(f.key), ['', '', '', '', '', '']])}>Add service</button>
+												<datalist id="checks-list">{#each names('check') as c (c)}<option value={c}></option>{/each}</datalist>
 											</div>
 										{:else}
 											<input
@@ -317,6 +371,49 @@
 
 	[data-severity='warning'] .sev {
 		color: var(--unknown);
+	}
+
+	.head-actions {
+		display: inline-flex;
+		align-items: center;
+		gap: 10px;
+	}
+
+	.selector {
+		display: grid;
+		grid-template-columns: 120px minmax(0, 1fr);
+		gap: 4px 8px;
+		align-items: center;
+	}
+
+	.selector .all {
+		grid-column: 1 / -1;
+		font-size: 12px;
+	}
+
+	.selector .sub {
+		font-size: 12px;
+		color: var(--muted);
+	}
+
+	.row.svc {
+		grid-template-columns: 1.2fr 1fr 1fr 1.2fr 70px auto;
+	}
+
+	.row.svc > * {
+		min-width: 0;
+	}
+
+	.row.svc.head {
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--muted);
+	}
+
+	.override {
+		grid-column: 1 / -1;
+		font-size: 11px;
+		color: var(--muted);
 	}
 
 	.suggest {

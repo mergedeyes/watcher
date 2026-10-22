@@ -179,6 +179,20 @@ paths:
               schema: { type: array, items: { $ref: "#/components/schemas/StateEvent" } }
         "503": { $ref: "#/components/responses/Error" }
 
+  /groups:
+    get:
+      summary: Host and service groups (members are in the host and service views)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hostgroups: { type: array, items: { $ref: "#/components/schemas/Group" } }
+                  servicegroups: { type: array, items: { $ref: "#/components/schemas/Group" } }
+
   /stream:
     get:
       summary: Live updates (Server-Sent Events)
@@ -648,6 +662,11 @@ components:
         contacts: { $ref: "#/components/schemas/Delta" }
         notify: { $ref: "#/components/schemas/Delta", description: Notify rules by name or place }
         sinks: { $ref: "#/components/schemas/Delta" }
+    Group:
+      type: object
+      properties:
+        name: { type: string }
+        title: { type: [string, "null"] }
     TreeNode:
       type: object
       properties:

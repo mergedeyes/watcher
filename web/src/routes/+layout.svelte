@@ -6,6 +6,7 @@
 	import { api, setUnauthorizedHandler } from '#lib/api.ts';
 	import { auth } from '#lib/auth.svelte.ts';
 	import { live } from '#lib/live.svelte.ts';
+	import { KINDS } from '#lib/schema.ts';
 
 	let { children } = $props();
 	let unreachable = $state<string | null>(null);
@@ -69,19 +70,17 @@
 				{ href: '/hosts', label: 'Hosts' },
 				{ href: '/services', label: 'Services' },
 				{ href: '/problems', label: 'Problems' },
+				{ href: '/hostgroups', label: 'Host Groups' },
+				{ href: '/servicegroups', label: 'Service Groups' },
 				{ href: '/alerts', label: 'Alerts' }
 			]
 		}
 	];
 
-	// Config editing is for admins; without login everyone may.
-	let admin = $derived(!auth.status?.required || auth.status.user?.admin === true);
+	let admin = $derived(auth.admin);
 
 	const CONFIG_NAV = [
-		{ href: '/config/hosts', label: 'Hosts' },
-		{ href: '/config/checks', label: 'Checks' },
-		{ href: '/config/contacts', label: 'Contacts' },
-		{ href: '/config/templates', label: 'Templates' },
+		...KINDS.map((k) => ({ href: `/config/${k.path}`, label: k.label })),
 		{ href: '/config/files', label: 'Files' }
 	];
 

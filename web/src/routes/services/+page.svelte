@@ -12,6 +12,8 @@
 		return (STATES as readonly string[]).includes(s ?? '') ? (s as Filter) : null;
 	});
 	let query = $state('');
+	/** Only services of this service group. */
+	let group = $derived(page.url.searchParams.get('group'));
 
 	let counts = $derived.by(() => {
 		const c = { ok: 0, warning: 0, critical: 0, unknown: 0, pending: 0 };
@@ -24,6 +26,7 @@
 		return live.services.filter(
 			(s) =>
 				(filter === null || (s.state ?? 'pending') === filter) &&
+				(!group || s.groups.includes(group)) &&
 				(!q || `${s.host} ${s.service} ${s.output}`.toLowerCase().includes(q))
 		);
 	});
@@ -31,7 +34,7 @@
 
 <div class="content">
 	<div class="page-head">
-		<h1>Services{filter ? ` · ${filter.toUpperCase()}` : ''}</h1>
+		<h1>Services{group ? ` · ${group}` : ''}{filter ? ` · ${filter.toUpperCase()}` : ''}</h1>
 		<input type="search" placeholder="Search host, service, output" bind:value={query} aria-label="Search" />
 	</div>
 
