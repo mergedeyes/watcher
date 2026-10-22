@@ -115,10 +115,77 @@ export interface ApiToken {
 	last_used: string | null;
 }
 
+export type Kind = 'host' | 'check' | 'template' | 'contact' | 'sink';
+
+/** A config error or warning; `path` is relative to the object directory. */
+export interface Problem {
+	path: string | null;
+	line: number;
+	severity: 'error' | 'warning';
+	message: string;
+}
+
+export interface ConfigOverview {
+	mode: 'hybrid' | 'files' | 'ui';
+	writable: boolean;
+	dir: string;
+	files: { path: string; hash: string; size: number }[];
+	/** Problems of the files as they are on disk. */
+	diagnostics: Problem[];
+}
+
+export interface ConfigFile {
+	path: string;
+	hash: string;
+	text: string;
+}
+
+/** An object as written in its file, before templates apply. */
+export interface ConfigObject {
+	kind: Kind;
+	name: string;
+	path: string;
+	line: number;
+	fields: Record<string, unknown>;
+}
+
+/** A file change: `base` is the hash it was made on (null: new file), `text` null deletes. */
+export interface Change {
+	path: string;
+	base: string | null;
+	text: string | null;
+}
+
+export interface Delta {
+	added: string[];
+	removed: string[];
+	changed: string[];
+}
+
+export interface Changes {
+	hosts: Delta;
+	services: Delta;
+	contacts: Delta;
+	sinks: Delta;
+}
+
+export type Preview =
+	| { valid: true; changes: Changes; diagnostics: Problem[] }
+	| { valid: false; diagnostics: Problem[] };
+
+/** Body of a 409 from preview/apply: the file changed since it was read. */
+export interface Conflict {
+	error: string;
+	path: string;
+	current: ConfigFile | null;
+}
+
 export class ApiError extends Error {
 	constructor(
 		public status: number,
-		message: string
+		message: string,
+		/** The parsed JSON error body, for errors that carry details. */
+		public body: Record<string, unknown> = {}
 	) {
 		super(message);
 	}
@@ -139,12 +206,14 @@ async function get<T>(path: string, init?: RequestInit): Promise<T> {
 	if (!res.ok) {
 		if (res.status === 401 && !path.startsWith('/auth/')) onUnauthorized();
 		let message = `${res.status} ${res.statusText}`;
+		let body = {};
 		try {
-			message = (await res.json()).error ?? message;
+			body = await res.json();
+			message = (body as { error?: string }).error ?? message;
 		} catch {
 			// not JSON
 		}
-		throw new ApiError(res.status, message);
+		throw new ApiError(res.status, message, body);
 	}
 	if (res.status === 204) return undefined as T;
 	return res.json();
@@ -180,7 +249,17 @@ export const api = {
 	logout: () => send<void>('POST', '/auth/logout'),
 	tokens: () => get<ApiToken[]>('/tokens'),
 	createToken: (name: string) => send<{ token: string; info: ApiToken }>('POST', '/tokens', { name }),
-	deleteToken: (id: number) => send<void>('DELETE', `/tokens/${id}`)
+	deleteToken: (id: number) => send<void>('DELETE', `/tokens/${id}`),
+
+	config: () => get<ConfigOverview>('/config'),
+	configFile: (path: string) => get<ConfigFile>(`/config/files/${path.split('/').map(seg).join('/')}`),
+	configObjects: () => get<{ objects: ConfigObject[]; diagnostics: Problem[] }>('/config/objects'),
+	/** The file change for creating (no name), updating or deleting (no fields) an object. */
+	editObject: (kind: Kind, name: string | null, fields: Record<string, unknown> | null) =>
+		send<Change>('POST', '/config/edit', { kind, name, fields }),
+	preview: (changes: Change[]) => send<Preview>('POST', '/config/preview', { changes }),
+	apply: (changes: Change[]) =>
+		send<{ changes: Changes; diagnostics: Problem[] }>('POST', '/config/apply', { changes })
 };
 
 export function serviceHref(host: string, service: string) {
