@@ -56,8 +56,9 @@ interval = "1m"
 
 | Field | Default | |
 |---|---|---|
-| `title` | | display name |
-| `command` | | required unless `passive`. [Macros](../guides/checks.md#macros) |
+| `title` | | display name. [Macros](../guides/checks.md#macros) |
+| `command` | | required unless `passive` or `builtin`. [Macros](../guides/checks.md#macros) |
+| `builtin` | | `ping`: [built-in check](../guides/checks.md#built-in-checks) instead of a command |
 | `shell` | `false` | run with `/bin/sh -c` |
 | `passive` | `false` | results via API, no command |
 | `format` | `auto` | `auto`, `nagios`, `key_value`, `json` |
@@ -91,7 +92,7 @@ for_each = "disks"
 |---|---|---|
 | `check` | check of the same name | none with own `command` or `passive` |
 | every [check](#check) field | | overrides the check's |
-| `for_each` | | host var with a table of tables, dotted if nested (`site.tld`): one service `<name>_<key>` per entry |
+| `for_each` | | host var with a table of tables, dotted if nested (`site.tld`): one service `<name>_<key>` per entry; a `title` without macros gets ` (<key>)` |
 | `groups` | | service groups |
 | `enabled` | `true` | |
 
@@ -118,7 +119,7 @@ vars.disks.data = { path = "/srv" }
 | `servicegroups` | | their services |
 | `vars` | | `$name$` values, `for_each` tables; over host group vars |
 | `node` | | node label (*not yet*: nodes) |
-| `host_check` | from host groups | service giving UP/DOWN |
+| `host_check` | from host groups; with `address`: `ping` | service giving UP/DOWN; `false`: none |
 | `graph` | the host check | service graphed on the host page |
 | `enabled` | `true` | `false`: not monitored |
 | `service.<name>` | | [host service](#host-service) |
@@ -170,7 +171,7 @@ vars.warn = "20%"
 | `members` | host names; `*` and `?` match |
 | `services` | services for every member |
 | `servicegroups` | their services, for every member |
-| `host_check` | service giving its hosts UP/DOWN |
+| `host_check` | service giving its hosts UP/DOWN; `false`: none |
 | `graph` | service graphed on the host page |
 | `vars` | host var defaults |
 

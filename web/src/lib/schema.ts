@@ -79,7 +79,7 @@ const SERVICEGROUPS: Field = {
 	suggest: 'servicegroup',
 	help: 'their services, comma-separated'
 };
-const HOST_CHECK: Field = { key: 'host_check', label: 'Host Check', type: 'text', help: 'service that gives UP/DOWN' };
+const HOST_CHECK: Field = { key: 'host_check', label: 'Host Check', type: 'text', help: 'service that gives UP/DOWN; default with an address: ping' };
 const GRAPH: Field = { key: 'graph', label: 'Graph', type: 'text', help: 'host page graphs; default: Host Check' };
 
 export const SCHEMAS: Record<Kind, Group[]> = {

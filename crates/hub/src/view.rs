@@ -18,6 +18,8 @@ pub fn time(t: SystemTime) -> String {
 pub struct ServiceView {
     pub host: String,
     pub service: String,
+    /// For display; `None` shows the name.
+    pub title: Option<String>,
     /// `None` (null) while pending: no result yet.
     pub state: Option<State>,
     pub state_type: Option<StateType>,
@@ -57,6 +59,7 @@ impl ServiceView {
         ServiceView {
             host: config.host(service).name.clone(),
             service: service.name.clone(),
+            title: service.title.clone(),
             state: live.map(|l| l.state.state),
             state_type: live.map(|l| l.state.state_type),
             attempt: live.map(|l| l.state.attempt),

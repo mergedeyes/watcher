@@ -88,7 +88,7 @@
 		<p class="notice">Loading…</p>
 	{:else}
 		<div class="page-head">
-			<h1>{detail.service} <span class="muted">on <a href={hostHref(host)}>{host}</a></span></h1>
+			<h1 title={detail.title ? detail.service : undefined}>{detail.title ?? detail.service} <span class="muted">on <a href={hostHref(host)}>{host}</a></span></h1>
 			{#if auth.admin}
 				<span class="head-actions">
 					<EditMenu targets={editTargets(detail)} />
@@ -105,9 +105,9 @@
 						<th>Current Status</th>
 						<td>
 							<Status state={detail.state} />
+							{#if detail.last_change}<span class="muted">&nbsp;for {since(detail.last_change, live.now)}</span>{/if}
 							{#if detail.flapping}<span class="tag flap">FLAPPING</span>{/if}
 							<Flags v={detail} />
-							{#if detail.last_change}<span class="muted">&nbsp;for {since(detail.last_change, live.now)}</span>{/if}
 						</td>
 					</tr>
 					<tr><th>Status Information</th><td class="info pre">{detail.output}{detail.long_output ? `\n${detail.long_output}` : ''}</td></tr>

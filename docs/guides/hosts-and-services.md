@@ -184,6 +184,18 @@ Override one: `[host.service.disk_root]`. All: `[host.service.disk]`.
 
 Nested: dotted path. Entry key: `$service.key$`. Entry `{}`: no vars.
 
+Title: `title = "DISK"` shows "DISK (data)". With macros, as written:
+
+```toml
+[service.cert]
+title = "CERT ($website$)"
+for_each = "sites"
+```
+
+```
+CERT (klarsocial.eu)
+```
+
 ```toml
 [check.https]
 command = "check_http -S -H $host.vars.site.name$.$service.key$"
@@ -213,7 +225,11 @@ web01/https_eu  every 1m     check_http -S -H klarsocial.eu
 | OK, WARNING | UP |
 | CRITICAL, UNKNOWN | DOWN |
 
+- Host with `address`, no host check: its service `ping` is the host
+  check, else one from the [built-in](checks.md#built-in-checks) check
+  `ping`. Off: `host_check = false`.
 - No host check: always UP.
+- Retries (`max_attempts`) count only CRITICAL and UNKNOWN; WARNING ends them.
 - Host DOWN (HARD): its other services don't notify.
 - The host check notifies as the host: "web01 is DOWN".
 

@@ -6,7 +6,10 @@
 //! to a limit, and the rest is drained and discarded so the plugin never
 //! blocks on a full pipe.
 
+pub mod builtin;
 pub mod scheduler;
+
+pub use builtin::Builtin;
 
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
@@ -28,11 +31,13 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 /// stay open past that if a child escaped the process group (`setsid`).
 const DRAIN_GRACE: Duration = Duration::from_millis(500);
 
-/// A command to run, either directly or through `/bin/sh -c`.
+/// A command to run, either directly or through `/bin/sh -c`, or a
+/// built-in check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandLine {
     Argv(Vec<String>),
     Shell(String),
+    Builtin(Builtin),
 }
 
 /// Shell-like text for display, e.g. `check_disk -w '20%'`.
@@ -41,6 +46,7 @@ impl std::fmt::Display for CommandLine {
         match self {
             CommandLine::Argv(argv) => f.write_str(&shell_words::join(argv)),
             CommandLine::Shell(script) => write!(f, "/bin/sh -c {}", shell_words::quote(script)),
+            CommandLine::Builtin(b) => b.fmt(f),
         }
     }
 }
@@ -71,6 +77,7 @@ impl CommandLine {
         match self {
             CommandLine::Argv(argv) => argv.first().map_or("", String::as_str),
             CommandLine::Shell(_) => "/bin/sh",
+            CommandLine::Builtin(Builtin::Ping(_)) => "ping (built-in)",
         }
     }
 
@@ -87,6 +94,7 @@ impl CommandLine {
                 cmd.arg("-c").arg(script);
                 Some(cmd)
             }
+            CommandLine::Builtin(_) => None,
         }
     }
 }
@@ -136,6 +144,22 @@ pub async fn run(command: &CommandLine, opts: &ExecOptions) -> Execution {
         stderr_truncated: false,
     };
 
+    if let CommandLine::Builtin(builtin) = command {
+        let (termination, stdout) = match tokio::time::timeout(opts.timeout, builtin.run()).await {
+            Ok((code, out)) => (Termination::Exited(code), out),
+            Err(_) => (Termination::TimedOut(opts.timeout), String::new()),
+        };
+        return Execution {
+            output: RawOutput {
+                termination,
+                stdout,
+                stderr: String::new(),
+            },
+            duration: start.elapsed(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+        };
+    }
     let Some(mut cmd) = command.to_command() else {
         return failed("empty command".into());
     };

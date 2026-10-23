@@ -65,6 +65,11 @@ class Live {
 		this.connection = 'connecting';
 	}
 
+	/** A service's title, else its name. */
+	title(host: string, service: string): string {
+		return this.find(host, service)?.title ?? service;
+	}
+
 	find(host: string, service: string): ServiceView | undefined {
 		// Read the reactive list first: callers must depend on it even while
 		// it is still empty, or they never see it load.

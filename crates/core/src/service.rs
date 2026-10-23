@@ -135,10 +135,24 @@ impl StateChange {
     }
 }
 
+/// Whether `state` is a failed attempt. For a host check only DOWN
+/// (CRITICAL, UNKNOWN) is: WARNING means UP, as in Nagios.
+fn failed(state: State, host_check: bool) -> bool {
+    match host_check {
+        true => HostState::from_check(state) == HostState::Down,
+        false => state != State::Ok,
+    }
+}
+
 impl ServiceState {
     /// The state after the first result of a service.
-    pub fn first(state: State, max_attempts: u32, now: SystemTime) -> (Self, StateChange) {
-        let state_type = if state == State::Ok || max_attempts <= 1 {
+    pub fn first(
+        state: State,
+        max_attempts: u32,
+        host_check: bool,
+        now: SystemTime,
+    ) -> (Self, StateChange) {
+        let state_type = if !failed(state, host_check) || max_attempts <= 1 {
             StateType::Hard
         } else {
             StateType::Soft
@@ -168,31 +182,29 @@ impl ServiceState {
         &mut self,
         state: State,
         max_attempts: u32,
+        host_check: bool,
         now: SystemTime,
     ) -> Option<StateChange> {
         let before = (self.state, self.state_type);
         self.last_check = now;
         self.history.push(state);
+        let was_failed = failed(self.state, host_check);
 
-        let hard = match (self.state_type, state) {
+        let hard = match self.state_type {
             // Recovery. From a hard problem this is a hard change; from a soft
             // one it just ends the retries.
-            (_, State::Ok) => {
-                let hard = self.state != State::Ok && self.state_type == StateType::Hard;
+            _ if !failed(state, host_check) => {
+                let hard = was_failed && self.state_type == StateType::Hard;
                 self.state_type = StateType::Hard;
                 self.attempt = 1;
                 hard
             }
             // A confirmed problem stays confirmed; changing between problem
             // states (WARNING -> CRITICAL) is a hard change.
-            (StateType::Hard, _) if self.state != State::Ok => self.state != state,
+            StateType::Hard if was_failed => self.state != state,
             // A new problem, or another failed attempt.
             _ => {
-                self.attempt = if self.state == State::Ok {
-                    1
-                } else {
-                    self.attempt + 1
-                };
+                self.attempt = if !was_failed { 1 } else { self.attempt + 1 };
                 if self.attempt >= max_attempts.max(1) {
                     self.attempt = max_attempts.max(1);
                     self.state_type = StateType::Hard;
@@ -243,7 +255,7 @@ impl ServiceState {
 
     /// Whether the next check should use the retry interval.
     pub fn retrying(&self) -> bool {
-        self.state != State::Ok && self.state_type == StateType::Soft
+        self.state_type == StateType::Soft
     }
 }
 
@@ -255,11 +267,17 @@ mod tests {
 
     const T: SystemTime = SystemTime::UNIX_EPOCH;
 
-    fn run(results: &[State], max_attempts: u32) -> Vec<(State, StateType, u32, Option<bool>)> {
-        let (mut s, change) = ServiceState::first(results[0], max_attempts, T);
+    type Run = Vec<(State, StateType, u32, Option<bool>)>;
+
+    fn run(results: &[State], max_attempts: u32) -> Run {
+        run_as(results, max_attempts, false)
+    }
+
+    fn run_as(results: &[State], max_attempts: u32, host_check: bool) -> Run {
+        let (mut s, change) = ServiceState::first(results[0], max_attempts, host_check, T);
         let mut out = vec![(s.state, s.state_type, s.attempt, Some(change.hard))];
         for &r in &results[1..] {
-            let change = s.apply(r, max_attempts, T);
+            let change = s.apply(r, max_attempts, host_check, T);
             out.push((s.state, s.state_type, s.attempt, change.map(|c| c.hard)));
         }
         out
@@ -308,6 +326,30 @@ mod tests {
     }
 
     #[test]
+    fn host_check_warning_is_up_without_retries() {
+        assert_eq!(
+            run_as(
+                &[
+                    Warning, Critical, Warning, Critical, Critical, Critical, Warning
+                ],
+                3,
+                true
+            ),
+            [
+                (Warning, Hard, 1, Some(true)),
+                (Critical, Soft, 1, Some(false)),
+                // Ends the retries instead of counting as attempt 2.
+                (Warning, Hard, 1, Some(false)),
+                (Critical, Soft, 1, Some(false)),
+                (Critical, Soft, 2, None),
+                (Critical, Hard, 3, Some(true)),
+                // Recovery: UP again.
+                (Warning, Hard, 1, Some(true)),
+            ]
+        );
+    }
+
+    #[test]
     fn max_attempts_one_is_immediately_hard() {
         assert_eq!(
             run(&[Critical, Ok, Unknown], 1),
@@ -321,7 +363,7 @@ mod tests {
 
     #[test]
     fn first_result_problem_is_soft() {
-        let (s, change) = ServiceState::first(Critical, 3, T);
+        let (s, change) = ServiceState::first(Critical, 3, false, T);
         assert_eq!((s.state_type, change.hard), (Soft, false));
         assert!(s.retrying());
     }
@@ -358,13 +400,13 @@ mod tests {
     #[test]
     fn flapping_starts_high_and_ends_low() {
         let t = Some(FlapThresholds::DEFAULT);
-        let (mut s, _) = ServiceState::first(Ok, 1, T);
+        let (mut s, _) = ServiceState::first(Ok, 1, false, T);
         let mut started = None;
         for (i, state) in [Critical, Ok, Critical, Ok, Critical]
             .into_iter()
             .enumerate()
         {
-            s.apply(state, 1, T);
+            s.apply(state, 1, false, T);
             if s.detect_flapping(t) == Some(true) {
                 started = Some(i);
             }
@@ -374,7 +416,7 @@ mod tests {
         assert!(s.flapping);
         let mut ended = None;
         for i in 0..21 {
-            s.apply(Critical, 1, T);
+            s.apply(Critical, 1, false, T);
             if s.detect_flapping(t) == Some(false) {
                 ended = Some(i);
                 break;
@@ -392,10 +434,10 @@ mod tests {
     fn host_changes_follow_up_down() {
         use HostState::{Down, Up};
         let mut changes = Vec::new();
-        let (mut s, first) = ServiceState::first(Ok, 2, T);
+        let (mut s, first) = ServiceState::first(Ok, 2, true, T);
         changes.push(first.host());
         for r in [Warning, Ok, Critical, Unknown, Unknown, Ok, Critical, Ok] {
-            changes.push(s.apply(r, 2, T).and_then(|c| c.host()));
+            changes.push(s.apply(r, 2, true, T).and_then(|c| c.host()));
         }
         let change = |from, to, hard| Some(HostChange { from, to, hard });
         assert_eq!(

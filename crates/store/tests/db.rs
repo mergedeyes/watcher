@@ -124,11 +124,11 @@ fn record(service: &str, exit: i32, stdout: &str, prev: Option<&ServiceState>) -
     let (state, change) = match prev {
         Some(prev) => {
             let mut s = prev.clone();
-            let change = s.apply(result.state, 3, now);
+            let change = s.apply(result.state, 3, false, now);
             (s, change)
         }
         None => {
-            let (s, c) = ServiceState::first(result.state, 3, now);
+            let (s, c) = ServiceState::first(result.state, 3, false, now);
             (s, Some(c))
         }
     };

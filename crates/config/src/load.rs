@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use toml::{Spanned, Table, Value};
 use watcher_core::{FlapThresholds, Format, ThresholdSpec};
-use watcher_exec::CommandLine;
+use watcher_exec::{Builtin, CommandLine, builtin};
 
 /// Loads and compiles all `*.toml` files below `dir`.
 ///
@@ -530,7 +530,13 @@ struct HostInput<'a> {
     raw: &'a RawObject,
     services: BTreeMap<String, Table>,
     assigned: BTreeMap<String, Vec<Assigned>>,
+    /// Gets the [`DEFAULT_HOST_CHECK`] service.
+    default_ping: bool,
 }
+
+/// The host check of hosts with an address and none set: their service of
+/// this name, or one made from the check of this name.
+pub const DEFAULT_HOST_CHECK: &str = "ping";
 
 impl<'a> Compiler<'a> {
     fn compile_checks(&mut self, config: &mut Config) {
@@ -562,6 +568,25 @@ impl<'a> Compiler<'a> {
             if let Some(command) = &def.command {
                 self.check_command(command, def.shell.unwrap_or(false), &raw.origin, &what);
             }
+            if let Some(name) = &def.builtin {
+                if !builtin::NAMES.contains(&name.as_str()) {
+                    self.sink.error(
+                        Some(&raw.origin),
+                        format!(
+                            "{what}: unknown builtin {name:?} (known: {})",
+                            builtin::NAMES.join(", ")
+                        ),
+                    );
+                    continue;
+                }
+                if def.command.is_some() || def.passive == Some(true) {
+                    self.sink.error(
+                        Some(&raw.origin),
+                        format!("{what}: builtin {name:?} runs without command or passive"),
+                    );
+                    continue;
+                }
+            }
             self.checks
                 .insert(raw.name.clone(), (raw.table.clone(), raw.origin.clone()));
             config.checks.push(Check {
@@ -570,6 +595,19 @@ impl<'a> Compiler<'a> {
                 command: def.command,
                 origin: raw.origin.clone(),
             });
+        }
+        // The built-in checks, unless a check of the same name replaces them.
+        for name in builtin::NAMES {
+            if !self.raw.checks.iter().any(|c| c.name == name) {
+                let mut table = Table::new();
+                table.insert("title".into(), Value::String(name.to_uppercase()));
+                table.insert("builtin".into(), Value::String(name.into()));
+                let origin = Origin {
+                    file: "(built-in)".into(),
+                    line: 0,
+                };
+                self.checks.insert(name.into(), (table, origin));
+            }
         }
     }
 
@@ -688,6 +726,11 @@ impl<'a> Compiler<'a> {
                 }
             }
         }
+    }
+
+    /// Whether check `name` is a built-in one, not replaced by a config check.
+    fn is_builtin_check(&self, name: &str) -> bool {
+        builtin::NAMES.contains(&name) && !self.raw.checks.iter().any(|c| c.name == name)
     }
 
     /// Whether `name` is a service object; reports it if not.
@@ -988,13 +1031,23 @@ impl<'a> Compiler<'a> {
                     .and_then(Value::as_str)
                     .map(String::from)
             };
+            // Hosts with an address and no host check (nor `false`) get their
+            // service "ping" as theirs, or one made from the check "ping".
+            let host_check = text("host_check");
+            let default = host_check.is_none() && def.address.is_some();
+            let default_ping = default
+                && !assigned.contains_key(DEFAULT_HOST_CHECK)
+                && !def.service.contains_key(DEFAULT_HOST_CHECK);
             config.hosts.push(Host {
                 name: def.name.clone(),
                 address: def.address.clone().unwrap_or_else(|| def.name.clone()),
                 node: text("node"),
                 groups,
                 vars,
-                host_check: text("host_check"),
+                host_check: match default {
+                    true => Some(DEFAULT_HOST_CHECK.into()),
+                    false => host_check.filter(|hc| !hc.is_empty()),
+                },
                 graph: text("graph"),
                 enabled: def.enabled,
                 origin: raw.origin.clone(),
@@ -1009,6 +1062,7 @@ impl<'a> Compiler<'a> {
                 raw,
                 services: def.service.clone(),
                 assigned,
+                default_ping,
             });
         }
         inputs
@@ -1158,6 +1212,21 @@ impl<'a> Compiler<'a> {
                 }
             }
         }
+        if input.default_ping {
+            planned.push(Planned {
+                name: DEFAULT_HOST_CHECK.into(),
+                base: DEFAULT_HOST_CHECK.into(),
+                object: None,
+                assigned: vec![Assigned {
+                    name: DEFAULT_HOST_CHECK.into(),
+                    reason: Reason::Listed {
+                        by: "default host check".into(),
+                        origin: host.origin.clone(),
+                    },
+                }],
+                for_each: None,
+            });
+        }
         for name in input.services.keys() {
             if !planned.iter().any(|p| p.name == *name || p.base == *name) {
                 planned.push(Planned {
@@ -1250,8 +1319,14 @@ impl<'a> Compiler<'a> {
         if meta_def.enabled == Some(false) {
             return None;
         }
+        // A built-in check of the same name only applies to services
+        // without their own command.
+        let own_command = ["command", "passive"]
+            .iter()
+            .any(|k| meta.table.contains_key(*k));
         let check_name = match meta_def.check {
             Some(c) => Some(c),
+            None if own_command && self.is_builtin_check(&plan.base) => None,
             None if self.checks.contains_key(&plan.base) => Some(plan.base.clone()),
             None => None,
         };
@@ -1349,7 +1424,42 @@ impl<'a> Compiler<'a> {
             .filter_map(|(k, v)| Some((k.clone(), v.as_text()?.to_string())))
             .collect();
 
+        let lookup = |m: &str| -> Result<String, String> {
+            let value = match macros::parse(m) {
+                Some(Ok(macros::Fixed::HostName)) => Some(host.name.clone()),
+                Some(Ok(macros::Fixed::HostAddress)) => Some(host.address.clone()),
+                Some(Ok(macros::Fixed::HostNode)) => host.node.clone(),
+                Some(Ok(macros::Fixed::HostVar(v))) => var_at(&host.vars, v)
+                    .and_then(Var::as_text)
+                    .map(String::from),
+                Some(Ok(macros::Fixed::ServiceName)) => Some(name.to_string()),
+                Some(Ok(macros::Fixed::ServiceKey)) => {
+                    plan.for_each.as_ref().map(|(_, key, _)| key.clone())
+                }
+                Some(Ok(macros::Fixed::CheckName)) => check_name.clone(),
+                Some(Err(var)) => vars.get(var).cloned(),
+                None => return Err(format!("unknown macro ${m}$")),
+            };
+            value.ok_or_else(|| format!("${m}$ is not set"))
+        };
         let command = match (&def.command, settings.passive) {
+            _ if def.builtin.is_some() => {
+                let name = def.builtin.as_deref().unwrap_or_default();
+                if def.command.is_some() || settings.passive {
+                    self.sink.error(
+                        Some(&origin),
+                        format!("{what}: builtin {name:?} runs without command or passive"),
+                    );
+                    return None;
+                }
+                match Builtin::new(name, &host.address, &vars) {
+                    Ok(b) => Some(CommandLine::Builtin(b)),
+                    Err(msg) => {
+                        self.sink.error(Some(&origin), format!("{what}: {msg}"));
+                        return None;
+                    }
+                }
+            }
             (None, false) => {
                 let msg = match &check_name {
                     Some(c) => {
@@ -1370,35 +1480,35 @@ impl<'a> Compiler<'a> {
                 );
                 return None;
             }
-            (Some(text), false) => {
-                let lookup = |m: &str| -> Result<String, String> {
-                    let value = match macros::parse(m) {
-                        Some(Ok(macros::Fixed::HostName)) => Some(host.name.clone()),
-                        Some(Ok(macros::Fixed::HostAddress)) => Some(host.address.clone()),
-                        Some(Ok(macros::Fixed::HostNode)) => host.node.clone(),
-                        Some(Ok(macros::Fixed::HostVar(v))) => var_at(&host.vars, v)
-                            .and_then(Var::as_text)
-                            .map(String::from),
-                        Some(Ok(macros::Fixed::ServiceName)) => Some(name.to_string()),
-                        Some(Ok(macros::Fixed::ServiceKey)) => {
-                            plan.for_each.as_ref().map(|(_, key, _)| key.clone())
-                        }
-                        Some(Ok(macros::Fixed::CheckName)) => check_name.clone(),
-                        Some(Err(var)) => vars.get(var).cloned(),
-                        None => return Err(format!("unknown macro ${m}$")),
-                    };
-                    value.ok_or_else(|| format!("${m}$ is not set"))
-                };
-                match macros::expand(text, settings.shell, lookup) {
-                    Ok(cmd) => Some(cmd),
-                    Err(msg) => {
-                        self.sink.error(Some(&origin), format!("{what}: {msg}"));
-                        return None;
-                    }
+            (Some(text), false) => match macros::expand(text, settings.shell, lookup) {
+                Ok(cmd) => Some(cmd),
+                Err(msg) => {
+                    self.sink.error(Some(&origin), format!("{what}: {msg}"));
+                    return None;
                 }
-            }
+            },
             (None, true) => None,
         };
+
+        // Title: the service's, else its check's. Macros expand as in
+        // commands; a `for_each` service without any gets its entry key.
+        let check_title = check_name
+            .as_ref()
+            .and_then(|c| self.checks.get(c))
+            .and_then(|(t, _)| t.get("title")?.as_str().map(String::from));
+        let title = meta_def.title.clone().or(check_title).map(|t| {
+            if macros::names(&t).is_empty() {
+                return match &plan.for_each {
+                    Some((_, key, _)) => format!("{t} ({key})"),
+                    None => t,
+                };
+            }
+            macros::expand_text(&t, lookup).unwrap_or_else(|msg| {
+                self.sink
+                    .warning(Some(&origin), format!("{what}: title: {msg}"));
+                t
+            })
+        });
 
         // Service groups: those listing its service object or listed by it,
         // and those its host service lists.
@@ -1442,6 +1552,7 @@ impl<'a> Compiler<'a> {
         Some(Service {
             id: format!("{}/{name}", host.name),
             name: name.to_string(),
+            title,
             host: host_idx,
             check: check_name,
             object: plan.object.clone(),
@@ -2054,6 +2165,7 @@ fn check_hash(command: Option<&CommandLine>, format: Format) -> String {
     let text = match command {
         Some(CommandLine::Argv(argv)) => format!("argv\0{}\0{format}", argv.join("\0")),
         Some(CommandLine::Shell(script)) => format!("shell\0{script}\0{format}"),
+        Some(CommandLine::Builtin(b)) => format!("builtin\0{b}\0{format}"),
         None => format!("passive\0{format}"),
     };
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -2109,6 +2221,8 @@ struct SettingsDef {
     title: Option<String>,
     check: Option<String>,
     command: Option<String>,
+    /// A built-in check instead of a command: `ping`.
+    builtin: Option<String>,
     shell: Option<bool>,
     passive: Option<bool>,
     format: Option<Format>,
@@ -2150,6 +2264,7 @@ struct HostDef {
     servicegroups: Vec<String>,
     #[serde(default)]
     vars: Table,
+    #[serde(default, deserialize_with = "host_check")]
     host_check: Option<String>,
     graph: Option<String>,
     #[serde(default = "yes")]
@@ -2169,6 +2284,7 @@ struct HostGroupDef {
     services: Vec<String>,
     #[serde(default)]
     servicegroups: Vec<String>,
+    #[serde(default, deserialize_with = "host_check")]
     host_check: Option<String>,
     graph: Option<String>,
     #[serde(default)]
@@ -2287,6 +2403,25 @@ fn duration<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Duration>, D::Erro
     humantime::parse_duration(&text)
         .map(Some)
         .map_err(|e| D::Error::custom(format!("invalid duration {text:?}: {e}")))
+}
+
+/// A service name, or `false` for none (kept as `""`, which turns off the
+/// default host check).
+fn host_check<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum HostCheck {
+        Name(String),
+        Off(bool),
+    }
+    match Option::<HostCheck>::deserialize(d)? {
+        None => Ok(None),
+        Some(HostCheck::Name(name)) => Ok(Some(name)),
+        Some(HostCheck::Off(false)) => Ok(Some(String::new())),
+        Some(HostCheck::Off(true)) => Err(D::Error::custom(
+            "host_check: a service name, or false for none",
+        )),
+    }
 }
 
 /// Vars: scalars as text, tables (for `for_each`) kept.

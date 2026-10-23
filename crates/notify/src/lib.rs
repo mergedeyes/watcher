@@ -511,9 +511,9 @@ host_check = "ping"
                 let result = evaluate(&raw, Format::Auto, &BTreeMap::new());
                 let now = SystemTime::now();
                 let change = match &mut state {
-                    Some(s) => s.apply(result.state, 3, now),
+                    Some(s) => s.apply(result.state, 3, false, now),
                     None => {
-                        let (s, c) = ServiceState::first(result.state, 3, now);
+                        let (s, c) = ServiceState::first(result.state, 3, false, now);
                         state = Some(s);
                         Some(c)
                     }

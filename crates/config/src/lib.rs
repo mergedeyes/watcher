@@ -218,6 +218,8 @@ pub struct Service {
     /// `host/name`.
     pub id: String,
     pub name: String,
+    /// For display: the service's or check's title, macros expanded.
+    pub title: Option<String>,
     /// Index into [`Config::hosts`].
     pub host: usize,
     /// The check it runs, if it uses one (not for inline commands).

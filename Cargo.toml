@@ -46,9 +46,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
 shell-words = "1"
+# ICMP for the built-in ping (datagram sockets, raw as a fallback).
+surge-ping = "0.9"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "macros", "json"] }
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "sync", "signal"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "sync", "signal", "net"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 toml = "1"
 toml_edit = "0.25"
