@@ -67,10 +67,14 @@ Works today (single server):
   validation with file and line, hot reload
 - Web UI: Tactical Overview, hosts, services, problems, groups, alert
   history, graphs, configuration forms and file editor
+- Operations: acknowledgements, downtimes (one-off and recurring
+  downtime groups), muted notifications, disabled checks, re-check,
+  process info, scheduling queue
 - Notifications: email, webhooks
 - Storage: PostgreSQL/TimescaleDB, SQL views, read-only DB role, sinks to
   remote PostgreSQL
-- Users, sessions, API tokens, HTTPS
+- Users, sessions, API tokens, HTTPS; the full API (everything the UI
+  does) with tokens
 
 *Not yet:*
 
@@ -80,7 +84,7 @@ Works today (single server):
 | Built-in checks (ICMP, TCP, HTTP, DNS, TLS), checks over SSH | 2 / 5 |
 | Data repair in graphs, rollups, retention | 3 |
 | IBM i, AIX, HMC, MQ checks | 3b |
-| Acknowledgements, downtimes, dependencies, escalations, re-notification | 4 |
+| Dependencies, escalations, re-notification | 4 |
 | Tenants, roles/permissions, TOTP, more notification channels | 4 |
 | SNMP, Prometheus, WinRM, discovery, Nagios config import | 5 |
 

@@ -25,27 +25,39 @@ login with a database, loopback only.
 |---|---|
 | Tactical Overview | Hosts DOWN, service problems, totals |
 | Hosts | host list, state, services per state |
-| Host | services, graphs, alert history |
+| Host | services, commands, graphs, alert history |
 | Services | all services, filter by state |
-| Service | state, output, performance data with thresholds, graphs, alert history |
+| Service | state, output, commands, performance data with thresholds, graphs, alert history |
 | Problems | non-OK services |
 | Host Groups, Service Groups | totals per group |
 | Alerts | alert history: host, type, state, SOFT/HARD, time range |
+| Downtimes | schedule and end downtimes; acknowledged, muted, checks off |
+| Process Info | uptime, results/min; notifications and active checks on/off |
+| Scheduling Queue | next check of every service |
 | Configuration | forms and file editor (admins) |
 | Account | user, API tokens |
 
 Status totals are links to the filtered lists. Columns sort on click.
+The Problems badge counts unhandled problems (not acknowledged, not in a
+downtime).
+
+**Commands:** right-click a host or service row, or use the Commands
+panel on its page: Re-Check Now, Acknowledge Problem, Schedule Downtime,
+Mute Notifications, Disable Active Checks, Submit Result (passive), and
+their undo. Badges: ACK, DOWNTIME, MUTED, CHECKS OFF.
+[Operations](operations.md).
 
 **Live / Paused** (top bar): live updates over Server-Sent Events. Paused:
 pages hold still; Refresh loads once.
 
-**Graphs:** ranges from 30 s; drag to zoom, double-click to reset. Host
-page: the `graph` service, or the host check, with a picker.
+**Graphs:** 15 min by default, ranges from 30 s; drag to zoom,
+double-click to reset. Host page: the `graph` service, or the host check,
+with a picker. `graphs = false` on a check or service: no graphs.
 
 ## Configuration
 
 Admins. Menu: Checks, Services, Hosts, Host Groups, Service Groups,
-Contacts, Contact Groups, Notifications, Files.
+Contacts, Contact Groups, Downtime Groups, Notifications, Files.
 
 - Lists show file and line of every object.
 - Forms show the known fields; other keys in the file are kept. An empty

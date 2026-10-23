@@ -17,10 +17,12 @@ Not sent:
 - other services of a host that is HARD DOWN
 - problems while flapping
 - host check WARNING (host stays UP), CRITICAL ↔ UNKNOWN on a host check
+- muted hosts and services, downtimes, acknowledged problems, and
+  everything while notifications are off ([Operations](operations.md))
 
 The host check notifies as the host: `web01 is DOWN`.
 
-*Not yet:* re-notification, acknowledgements, downtimes, escalations.
+*Not yet:* re-notification, escalations.
 
 ## SMTP
 

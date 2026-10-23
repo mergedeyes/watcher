@@ -23,6 +23,7 @@ conf.d/
 | [servicegroup](#servicegroup) | `[servicegroup.<name>]` |
 | [contact](#contact) | `[contact.<name>]` |
 | [contactgroup](#contactgroup) | `[contactgroup.<name>]` |
+| [downtimegroup](#downtimegroup) | `[downtimegroup.<name>]` |
 | [notify](#notify) | `[[notify]]` |
 | [sink](#sink) | `[[sink]]` |
 
@@ -218,6 +219,26 @@ members = ["alice", "bob"]
 |---|---|
 | `title` | display name |
 | `members` | contact names |
+
+## downtimegroup
+
+```toml
+[downtimegroup.patchday]
+title = "Patch Day"
+members = ["web*"]
+hostgroups = ["linux"]
+schedule = [{ days = ["sun"], from = "02:00", to = "04:00" }]
+```
+
+| Field | |
+|---|---|
+| `title` | display name |
+| `members` | host names; `*` and `?` match |
+| `hostgroups` | their hosts |
+| `schedule` | windows in local time: `{ days, from, to }`; `days` `mon`…`sun` (none: daily); `to` not after `from`: next day; dates in `from`/`to` (`2026-12-24 00:00`): once |
+
+No notifications for its hosts and their services during a window.
+[Operations](../guides/operations.md#downtime-groups).
 
 ## notify
 
