@@ -237,6 +237,26 @@ table.grid td.info {
 	overflow-wrap: anywhere;
 }
 
+/* Host vars: nested keys, for_each entries as rows */
+table.vars {
+	border-collapse: collapse;
+}
+table.grid table.vars tr:nth-child(n) th,
+table.grid table.vars tr:nth-child(n) td {
+	padding: 1px 16px 1px 0;
+	border: 0;
+	background: none;
+	font: inherit;
+	text-align: left;
+	vertical-align: top;
+}
+table.grid table.vars th {
+	color: var(--muted);
+}
+table.grid table.vars thead th {
+	border-bottom: 1px solid var(--line);
+}
+
 /* Status cell / badge: solid colour, as in Nagios */
 .st {
 	display: inline-block;

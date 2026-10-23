@@ -14,6 +14,7 @@
 	import { live } from '#lib/live.svelte.ts';
 	import ServiceTable from '#lib/ServiceTable.svelte';
 	import Status from '#lib/Status.svelte';
+	import VarTree from '#lib/VarTree.svelte';
 
 	let name = $derived(page.params.host ?? '');
 	let host = $derived(live.hosts.find((h) => h.name === name));
@@ -136,7 +137,7 @@
 						</tr>
 					{/if}
 					{#each Object.entries(host.vars) as [k, v] (k)}
-						<tr><th>vars.{k}</th><td class="mono">{typeof v === 'object' ? JSON.stringify(v) : v}</td></tr>
+						<tr><th>vars.{k}</th><td class="mono"><VarTree {v} /></td></tr>
 					{/each}
 					{#if !host.enabled}<tr><th>Enabled</th><td>no</td></tr>{/if}
 					{#if origin}<tr><th>Source</th><td class="mono">{origin}</td></tr>{/if}
