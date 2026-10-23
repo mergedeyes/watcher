@@ -210,6 +210,9 @@ export interface Series {
 	/** Oldest and newest sample; null without samples. */
 	first: string | null;
 	last: string | null;
+	/** Threshold bounds of the latest result, in `unit`: configured, else the plugin's. */
+	warn: number[];
+	crit: number[];
 }
 
 export interface Points {

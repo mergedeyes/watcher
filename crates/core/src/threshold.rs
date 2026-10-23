@@ -143,6 +143,19 @@ impl Threshold {
             }
         }
     }
+
+    /// The finite bounds, to draw as lines in a graph. The implied `0` of a
+    /// plain Nagios range (`10` is `0:10`) is left out.
+    pub fn bounds(&self) -> Vec<f64> {
+        let out = match *self {
+            Threshold::Cmp { bound, .. } => vec![bound],
+            Threshold::Range { lo, hi, inside } => {
+                let lo = (inside || lo != 0.0).then_some(lo);
+                lo.into_iter().chain([hi]).collect()
+            }
+        };
+        out.into_iter().filter(|b| b.is_finite()).collect()
+    }
 }
 
 impl Threshold {
@@ -327,6 +340,18 @@ impl<'de> Deserialize<'de> for Threshold {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounds_for_graph_lines() {
+        let b = |spec: &str| Threshold::parse(spec).unwrap().bounds();
+        assert_eq!(b("> 100"), [100.0]);
+        assert_eq!(b("10"), [10.0]);
+        assert_eq!(b("10:"), [10.0]);
+        assert_eq!(b("~:5"), [5.0]);
+        assert_eq!(b("10:20"), [10.0, 20.0]);
+        assert_eq!(b("@0:20"), [0.0, 20.0]);
+        assert_eq!(b("500ms"), [0.5]);
+    }
 
     #[test]
     fn comparison_syntax() {

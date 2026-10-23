@@ -126,7 +126,7 @@ Need a database.
 | Method, path | |
 |---|---|
 | `GET events` | alert history, newest first |
-| `GET services/{host}/{service}/series` | metric series of a service |
+| `GET services/{host}/{service}/series` | metric series of a service; `warn`, `crit`: threshold bounds of the latest result |
 | `GET series/{id}/points` | points, bucketed |
 
 `GET events`:

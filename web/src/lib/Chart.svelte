@@ -1,6 +1,7 @@
 <!--
 	A metric over time: the average per bucket as a line, min to max as a
-	band. Gaps in the data stay gaps.
+	band. Gaps in the data stay gaps. Warning and critical thresholds are
+	dashed lines, and the y-axis always shows them.
 -->
 <script lang="ts">
 	import uPlot from 'uplot';
@@ -53,6 +54,29 @@
 
 	function css(name: string) {
 		return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+	}
+
+	/** Dashed lines across the plot at the threshold bounds. */
+	function thresholds(u: uPlot) {
+		const { ctx, bbox } = u;
+		ctx.save();
+		ctx.lineWidth = 1.5 * devicePixelRatio;
+		ctx.setLineDash([6 * devicePixelRatio, 4 * devicePixelRatio]);
+		for (const [bounds, color] of [
+			[series.warn, css('--warn')],
+			[series.crit, css('--crit')]
+		] as const) {
+			ctx.strokeStyle = color;
+			for (const v of bounds) {
+				const y = Math.round(u.valToPos(v, 'y', true));
+				if (y < bbox.top || y > bbox.top + bbox.height) continue;
+				ctx.beginPath();
+				ctx.moveTo(bbox.left, y);
+				ctx.lineTo(bbox.left + bbox.width, y);
+				ctx.stroke();
+			}
+		}
+		ctx.restore();
 	}
 
 	/** Columns for uPlot, with nulls where the data has a gap. */
@@ -109,7 +133,16 @@
 				// Double-click resets the zoom, like the button.
 				bind: { dblclick: () => () => (resetZoom(), null) }
 			},
-			scales: { x: { time: true, range: () => (zoom ? [zoom.min, zoom.max] : [full.from, full.to]) } },
+			scales: {
+				x: { time: true, range: () => (zoom ? [zoom.min, zoom.max] : [full.from, full.to]) },
+				// The data and the thresholds, padded like uPlot's default.
+				y: {
+					range: (_u, min, max) => {
+						const all = [min, max, ...series.warn, ...series.crit].filter((v) => v != null && isFinite(v));
+						return uPlot.rangeNum(Math.min(...all), Math.max(...all), 0.1, true);
+					}
+				}
+			},
 			axes: [
 				{
 					...axis,
@@ -135,6 +168,7 @@
 			],
 			bands: [{ series: [3, 2], fill: `color-mix(in srgb, ${ink} 18%, transparent)` }],
 			hooks: {
+				draw: [thresholds],
 				init: [(u) => u.over.addEventListener('mousedown', () => (dragging = true))],
 				// Dragging selects a section; uPlot then sets the scale to it.
 				setSelect: [
