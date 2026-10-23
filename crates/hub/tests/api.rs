@@ -409,6 +409,28 @@ async fn actions_flags_and_downtimes() {
 }
 
 #[tokio::test]
+async fn host_ack_covers_only_the_host_check() {
+    let hub = hub();
+    hub.record(&event("db01/backup", 2, "BACKUP CRITICAL"));
+    hub.record(&event("db01/dump", 2, "DUMP CRITICAL"));
+    let (status, ack) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/ack",
+        Some(json!({ "hosts": ["db01"], "comment": "on it" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(ack["done"], json!(["db01"]));
+    let (_, check) = call(&hub, "GET", "/api/v1/services/db01/backup", None).await;
+    assert_eq!(check["acknowledged"], true);
+    assert_eq!(check["flags"][0]["target"], "db01");
+    let (_, other) = call(&hub, "GET", "/api/v1/services/db01/dump", None).await;
+    assert_eq!(other["acknowledged"], false);
+    assert_eq!(other["flags"], json!([]));
+}
+
+#[tokio::test]
 async fn recheck_process_and_schedule() {
     let hub = hub();
     // The http check runs hourly; recheck runs it now.

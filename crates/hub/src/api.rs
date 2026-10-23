@@ -321,11 +321,13 @@ fn detail(hub: &Hub, id: &str) -> Option<Json<ServiceDetail>> {
     let service = live.config.service(id)?;
     let host = &live.config.host(service).name;
     let status = live.ops.status(&live.config, service, SystemTime::now());
+    // A host acknowledgement covers only its host check.
+    let host_ack = live.config.is_host_check(service);
     let flags = live
         .ops
         .flags
         .values()
-        .filter(|f| f.target == *id || f.target == *host)
+        .filter(|f| f.target == *id || (f.target == *host && (f.kind != FlagKind::Ack || host_ack)))
         .cloned()
         .collect();
     Some(Json(ServiceDetail::new(
