@@ -9,7 +9,7 @@
 //! op      := "==" | "!=" | "~" | "!~" | "contains" | "in"
 //! operand := path | "string" | 'string' | [ "list", ... ]
 //! path    := host.name | host.address | host.node | host.groups
-//!          | host.vars.<name>
+//!          | host.vars.<name>[.<name>…]
 //!          | service.name | service.check | service.groups
 //! ```
 
@@ -153,9 +153,7 @@ fn resolve<'a>(op: &'a Operand, subject: &'a Subject) -> Value<'a> {
         Operand::Path(Path::Address) => Value::Str(&host.address),
         Operand::Path(Path::Node) => host.node.as_deref().map_or(Value::Missing, Value::Str),
         Operand::Path(Path::Groups) => list(host.groups.iter().map(|g| g.name.as_str()).collect()),
-        Operand::Path(Path::Var(name)) => host
-            .vars
-            .get(name)
+        Operand::Path(Path::Var(name)) => crate::var_at(&host.vars, name)
             .and_then(|v| v.as_text())
             .map_or(Value::Missing, Value::Str),
         Operand::Path(Path::ServiceName) => service.map_or(Value::Missing, |s| Value::Str(&s.name)),
@@ -460,7 +458,7 @@ impl Parser {
                     ["host", "address"] => Path::Address,
                     ["host", "node"] => Path::Node,
                     ["host", "groups"] => Path::Groups,
-                    ["host", "vars", var] => Path::Var(var.to_string()),
+                    ["host", "vars", var @ ..] if !var.is_empty() => Path::Var(var.join(".")),
                     ["service", "name"] => Path::ServiceName,
                     ["service", "check"] => Path::ServiceCheck,
                     ["service", "groups"] => Path::ServiceGroups,
@@ -503,7 +501,16 @@ mod tests {
                     },
                 })
                 .collect(),
-            vars: BTreeMap::from([("os".to_string(), Var::Text("debian".to_string()))]),
+            vars: BTreeMap::from([
+                ("os".to_string(), Var::Text("debian".to_string())),
+                (
+                    "site".to_string(),
+                    Var::Table(BTreeMap::from([(
+                        "name".to_string(),
+                        Var::Text("klarsocial".to_string()),
+                    )])),
+                ),
+            ]),
             host_check: None,
             graph: None,
             enabled: true,
@@ -540,6 +547,8 @@ mod tests {
         ));
         assert!(check("true", &web));
         assert!(!check(r#"host.groups contains "db""#, &web));
+        assert!(check(r#"host.vars.site.name == "klarsocial""#, &web));
+        assert!(!check(r#"host.vars.site == "klarsocial""#, &web));
         assert!(!check(r#"host.vars.missing == "x""#, &web));
         assert!(check(r#"host.vars.missing != "x""#, &web));
         assert!(!check(r#"host.node ~ ".""#, &web));

@@ -1,5 +1,6 @@
-//! Command macros: `$host.address$`, `$host.vars.port$`, `$service.name$`,
-//! and bare vars like `$warn$`.
+//! Command macros: `$host.address$`, `$host.vars.port$` (nested:
+//! `$host.vars.site.eu.path$`), `$service.name$`, `$service.key$` (the
+//! `for_each` entry), and bare vars like `$warn$`.
 //!
 //! Macros are `$host.…$`, `$service.…$`, `$check.…$`, the Nagios forms
 //! `$HOSTNAME$` and `$HOSTADDRESS$`, and `$name$` with a lowercase var name
@@ -40,19 +41,27 @@ pub enum Fixed<'a> {
     HostName,
     HostAddress,
     HostNode,
+    /// A host var by dotted path.
     HostVar(&'a str),
     ServiceName,
+    /// The key of the `for_each` entry a service is made from.
+    ServiceKey,
     CheckName,
 }
 
 /// What a macro name refers to: a fixed macro, a var, or nothing known.
 pub fn parse(name: &str) -> Option<Result<Fixed<'_>, &str>> {
+    if let Some(path) = name.strip_prefix("host.vars.")
+        && path.split('.').all(|p| !p.is_empty())
+    {
+        return Some(Ok(Fixed::HostVar(path)));
+    }
     let fixed = match name.split('.').collect::<Vec<_>>().as_slice() {
         ["host", "name"] | ["HOSTNAME"] => Fixed::HostName,
         ["host", "address"] | ["HOSTADDRESS"] => Fixed::HostAddress,
         ["host", "node"] => Fixed::HostNode,
-        ["host", "vars", var] => Fixed::HostVar(var),
         ["service", "name"] => Fixed::ServiceName,
+        ["service", "key"] => Fixed::ServiceKey,
         ["check", "name"] => Fixed::CheckName,
         [var] if is_var_name(var) => return Some(Err(var)),
         _ => return None,
@@ -184,7 +193,12 @@ mod tests {
         assert_eq!(parse("service.name"), Some(Ok(Fixed::ServiceName)));
         assert_eq!(parse("warn"), Some(Err("warn")));
         assert_eq!(parse("host.adress"), None);
-        assert_eq!(parse("host.vars.a.b"), None);
+        assert_eq!(
+            parse("host.vars.site.eu.path"),
+            Some(Ok(Fixed::HostVar("site.eu.path")))
+        );
+        assert_eq!(parse("host.vars.a..b"), None);
+        assert_eq!(parse("service.key"), Some(Ok(Fixed::ServiceKey)));
         assert_eq!(parse("Warn"), None);
     }
 

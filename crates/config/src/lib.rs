@@ -75,6 +75,17 @@ impl Var {
 
 pub type Vars = BTreeMap<String, Var>;
 
+/// The var at a dotted path like `site.klarsocial`.
+pub fn var_at<'v>(vars: &'v Vars, path: &str) -> Option<&'v Var> {
+    let mut parts = path.split('.');
+    let mut var = vars.get(parts.next()?)?;
+    for part in parts {
+        let Var::Table(t) = var else { return None };
+        var = t.get(part)?;
+    }
+    Some(var)
+}
+
 /// The layer a value comes from, most specific last.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]

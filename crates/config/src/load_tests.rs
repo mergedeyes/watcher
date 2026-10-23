@@ -392,6 +392,54 @@ name = "h"
 }
 
 #[test]
+fn for_each_over_a_nested_var() {
+    let config = ok(&[(
+        "a.toml",
+        r#"
+[check.http]
+command = "check_http -H $host.vars.site.name$.$service.key$ -u $path$"
+
+[service.web]
+check = "http"
+for_each = "site.tld"
+vars.path = "/"
+
+[hostgroup.web]
+members = ["w*"]
+services = ["web"]
+vars.site.tld.eu = {}
+
+[[host]]
+name = "w1"
+vars.site.name = "klarsocial"
+vars.site.tld.de = { path = "/de" }
+"#,
+    )]);
+    let eu = config.service("w1/web_eu").unwrap();
+    assert_eq!(argv(eu), ["check_http", "-H", "klarsocial.eu", "-u", "/"]);
+    let de = config.service("w1/web_de").unwrap();
+    assert_eq!(argv(de), ["check_http", "-H", "klarsocial.de", "-u", "/de"]);
+    assert_eq!(de.for_each, Some(("site.tld".into(), "de".into())));
+    assert_eq!(de.sources["vars.path"].layer, Layer::ForEach);
+
+    let (_, diags) = compile(&[(
+        "a.toml",
+        r#"
+[service.ping]
+command = "ping $service.key$"
+
+[[host]]
+name = "h"
+services = ["ping"]
+"#,
+    )]);
+    assert_eq!(
+        messages(&diags)[0],
+        "a.toml:2: error: host \"h\": service \"ping\": $service.key$ is not set"
+    );
+}
+
+#[test]
 fn empty_for_each_entry_from_a_host_group() {
     let config = ok(&[(
         "a.toml",

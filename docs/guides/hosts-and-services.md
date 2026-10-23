@@ -182,6 +182,28 @@ db01/disk_root  every 5m     check_disk -w '20%' -c '10%' -p /
 
 Override one: `[host.service.disk_root]`. All: `[host.service.disk]`.
 
+Nested: dotted path. Entry key: `$service.key$`. Entry `{}`: no vars.
+
+```toml
+[check.https]
+command = "check_http -S -H $host.vars.site.name$.$service.key$"
+
+[service.https]
+for_each = "site.tld"
+
+[[host]]
+name = "web01"
+services = ["https"]
+vars.site.name = "klarsocial"
+vars.site.tld.eu = {}
+vars.site.tld.de = {}
+```
+
+```
+web01/https_de  every 1m     check_http -S -H klarsocial.de
+web01/https_eu  every 1m     check_http -S -H klarsocial.eu
+```
+
 ## Host state
 
 `host_check` names a service on the host:

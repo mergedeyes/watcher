@@ -87,13 +87,26 @@ export class Suggest {
 		return [...out].sort(([a], [b]) => a.localeCompare(b)).map(([value, hint]) => ({ value, hint }));
 	}
 
-	/** Var names (all kinds), or only those holding tables (`for_each` data). */
-	varNames(tables = false): string[] {
+	/** Names of scalar vars. */
+	varNames(): string[] {
 		return uniq(
 			this.objects.flatMap((o) =>
-				isTable(o.fields.vars) ? Object.entries(o.fields.vars).filter(([, v]) => isTable(v) === tables).map(([k]) => k) : []
+				isTable(o.fields.vars) ? Object.entries(o.fields.vars).filter(([, v]) => !isTable(v)).map(([k]) => k) : []
 			)
 		);
+	}
+
+	/** Dotted paths of vars holding a table per item (`for_each` data), nested ones too. */
+	forEachPaths(): string[] {
+		const paths = (t: Record<string, unknown>, prefix: string): string[] =>
+			Object.entries(t).flatMap(([k, v]) => {
+				if (!isTable(v)) return [];
+				const path = prefix + k;
+				const items = Object.values(v);
+				const here = items.length > 0 && items.every(isTable) ? [path] : [];
+				return [...here, ...paths(v, path + '.')];
+			});
+		return uniq(this.objects.flatMap((o) => (isTable(o.fields.vars) ? paths(o.fields.vars, '') : [])));
 	}
 
 	/** Values written for var `name` anywhere. */
@@ -133,7 +146,7 @@ export class Suggest {
 			case 'command':
 				return this.commands(kind);
 			case 'for_each':
-				return this.varNames(true).map((value) => ({ value }));
+				return this.forEachPaths().map((value) => ({ value }));
 			case 'node':
 				return this.nodes().map((value) => ({ value }));
 			case 'host_check':

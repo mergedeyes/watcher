@@ -48,8 +48,9 @@ command = 'echo "uptime=$(cut -d" " -f1 /proc/uptime)s"'
 | `$host.name$`, `$HOSTNAME$` | host name |
 | `$host.address$`, `$HOSTADDRESS$` | host address (default: the name) |
 | `$host.node$` | host `node` |
-| `$host.vars.x$` | host var `x` |
+| `$host.vars.x$`, `$host.vars.x.y$` | host var `x`, nested `x.y` |
 | `$service.name$` | service name |
+| `$service.key$` | `for_each` entry key |
 | `$check.name$` | check name |
 
 ```toml

@@ -15,7 +15,7 @@
 use crate::select::{Glob, HostSelector, Ref, ServiceSelector};
 use crate::{
     Assigned, Check, Config, Contact, Diagnostic, Group, Host, Layer, Loaded, NotifyOn, NotifyRule,
-    Origin, Reason, Service, ServiceObject, Settings, Severity, Source, Var, Vars, macros,
+    Origin, Reason, Service, ServiceObject, Settings, Severity, Source, Var, Vars, macros, var_at,
 };
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
@@ -1116,7 +1116,7 @@ impl<'a> Compiler<'a> {
                 });
                 continue;
             };
-            match host.vars.get(&var) {
+            match var_at(&host.vars, &var) {
                 None => self.sink.warning(
                     Some(&host.origin),
                     format!("{what}: service {svc:?}: for_each: no host var {var:?}"),
@@ -1376,10 +1376,13 @@ impl<'a> Compiler<'a> {
                         Some(Ok(macros::Fixed::HostName)) => Some(host.name.clone()),
                         Some(Ok(macros::Fixed::HostAddress)) => Some(host.address.clone()),
                         Some(Ok(macros::Fixed::HostNode)) => host.node.clone(),
-                        Some(Ok(macros::Fixed::HostVar(v))) => {
-                            host.vars.get(v).and_then(Var::as_text).map(String::from)
-                        }
+                        Some(Ok(macros::Fixed::HostVar(v))) => var_at(&host.vars, v)
+                            .and_then(Var::as_text)
+                            .map(String::from),
                         Some(Ok(macros::Fixed::ServiceName)) => Some(name.to_string()),
+                        Some(Ok(macros::Fixed::ServiceKey)) => {
+                            plan.for_each.as_ref().map(|(_, key, _)| key.clone())
+                        }
                         Some(Ok(macros::Fixed::CheckName)) => check_name.clone(),
                         Some(Err(var)) => vars.get(var).cloned(),
                         None => return Err(format!("unknown macro ${m}$")),

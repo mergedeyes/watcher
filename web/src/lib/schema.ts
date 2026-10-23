@@ -97,7 +97,7 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 				{ key: 'check', label: 'Check', type: 'text', suggestOne: 'check', help: 'default: the check named like the service' },
 				{ ...CHECK[0]!, help: 'instead of a check' },
 				...CHECK.slice(1, 3),
-				{ key: 'for_each', label: 'For Each', type: 'text', help: 'host var with a table per item: one service each (disk_root, …)' },
+				{ key: 'for_each', label: 'For Each', type: 'text', help: 'host var with a table per item, dotted for nested (site.tld): one service each (disk_root, …)' },
 				{ key: 'groups', label: 'Service Groups', type: 'list', suggest: 'servicegroup', help: 'comma-separated' },
 				ENABLED
 			]

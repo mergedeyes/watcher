@@ -91,7 +91,7 @@ for_each = "disks"
 |---|---|---|
 | `check` | check of the same name | none with own `command` or `passive` |
 | every [check](#check) field | | overrides the check's |
-| `for_each` | | host var with a table of tables: one service `<name>_<key>` per entry |
+| `for_each` | | host var with a table of tables, dotted if nested (`site.tld`): one service `<name>_<key>` per entry |
 | `groups` | | service groups |
 | `enabled` | `true` | |
 

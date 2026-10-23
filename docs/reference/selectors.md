@@ -121,7 +121,7 @@ hosts = { expr = 'host.groups contains "db" or host.name ~ "^pg"' }
 |---|---|
 | `host.name`, `host.address`, `host.node` | text |
 | `host.groups` | list |
-| `host.vars.<x>` | var |
+| `host.vars.<x>`, `host.vars.<x>.<y>` | var, nested |
 | `service.name`, `service.check`, `service.groups` | services only |
 
 | Operator | |
