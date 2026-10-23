@@ -39,6 +39,8 @@ nix = { version = "0.31", features = ["signal", "process"] }
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "http2"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+# Encryption of stored SSH secrets (ChaCha20-Poly1305).
+ring = "0.17"
 rpassword = "7"
 rust-embed = { version = "8", features = ["mime-guess"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
@@ -46,6 +48,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
 shell-words = "1"
+# SSH for checks on remote hosts (ring, as rustls uses). No RSA: the rsa
+# crate has RUSTSEC-2023-0071 (timing side channel, no fix); ed25519 and
+# ECDSA keys only.
+russh = { version = "0.64", default-features = false, features = ["ring"] }
 # ICMP for the built-in ping (datagram sockets, raw as a fallback).
 surge-ping = "0.9"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "macros", "json"] }

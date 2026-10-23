@@ -871,3 +871,127 @@ name = "mq01"
     assert_eq!(hosts, ["web01", "db01"]);
     assert_eq!(g.schedule[0].to_string(), "sun 02:00-04:00");
 }
+
+#[test]
+fn ssh_from_host_groups_and_hosts() {
+    let config = ok(&[(
+        "a.toml",
+        r#"
+[check.load]
+command = "check_load -w 5 -c 10"
+run_on = "host"
+
+[service.load]
+
+[service.local_load]
+check = "load"
+run_on = "local"
+
+[hostgroup.linux]
+members = ["web*"]
+services = ["load", "local_load"]
+ssh = { user = "monitor", secret = "monitor" }
+
+[[host]]
+name = "web1"
+
+[[host]]
+name = "web2"
+ssh = { port = 2222, secret = "web2" }
+"#,
+    )]);
+    let host = |name: &str| config.hosts.iter().find(|h| h.name == name).unwrap();
+    assert_eq!(
+        host("web1").ssh,
+        Some(Ssh {
+            user: "monitor".into(),
+            port: 22,
+            secret: "monitor".into(),
+        })
+    );
+    assert_eq!(
+        host("web2").ssh,
+        Some(Ssh {
+            user: "monitor".into(),
+            port: 2222,
+            secret: "web2".into(),
+        })
+    );
+    assert_eq!(host("web2").sources["ssh.user"].layer, Layer::HostGroup);
+    assert_eq!(host("web2").sources["ssh.secret"].layer, Layer::Host);
+
+    let load = config.service("web1/load").unwrap();
+    let local = config.service("web1/local_load").unwrap();
+    assert_eq!(load.settings.run_on, RunOn::Host);
+    assert_eq!(local.settings.run_on, RunOn::Local);
+    // Same command, but on the host it measures something else.
+    assert_ne!(load.check_hash, local.check_hash);
+}
+
+#[test]
+fn ssh_errors() {
+    let (_, diags) = compile(&[(
+        "a.toml",
+        r#"
+[check.load]
+command = "check_load"
+run_on = "host"
+
+[check.script]
+command = "my_script"
+shell = true
+run_on = "host"
+copy = true
+
+[check.copied]
+command = "my_script"
+copy = true
+
+[check.pinger]
+builtin = "ping"
+run_on = "host"
+
+[service.load]
+[service.script]
+[service.copied]
+[service.pinger]
+
+[service.pushed]
+passive = true
+run_on = "host"
+
+[hostgroup.half]
+ssh = { user = "monitor" }
+
+[hostgroup.typo]
+ssh = { usr = "monitor" }
+
+[[host]]
+name = "nossh"
+services = ["load"]
+
+[[host]]
+name = "half"
+groups = ["half"]
+
+[[host]]
+name = "ok"
+ssh = { user = "monitor", secret = "monitor" }
+services = ["script", "copied", "pinger", "pushed"]
+"#,
+    )]);
+    let errors = messages(&diags);
+    let has = |text: &str| {
+        assert!(
+            errors.iter().any(|e| e.contains(text)),
+            "{text:?} not in {errors:#?}"
+        );
+    };
+    has("hostgroup \"typo\": ssh: unknown field `usr`");
+    has("host \"half\": ssh needs user and secret");
+    has("host \"nossh\": service \"load\": run_on = \"host\" needs ssh");
+    has("service \"script\": copy needs a direct command, not shell = true");
+    has("service \"copied\": copy needs run_on = \"host\"");
+    has("service \"pinger\": built-in checks run locally");
+    has("service \"pushed\": passive services have nothing to run on the host");
+}

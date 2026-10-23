@@ -60,7 +60,9 @@ changes notify.
 Works today (single server):
 
 - Checks: Nagios plugins, scripts (Nagios, `key=value` or JSON output),
-  passive results over the API, thresholds with units
+  passive results over the API, thresholds with units, built-in ping
+- Checks over SSH: on the hosts, agentless; keys or passwords stored
+  encrypted, pinned host keys, scripts copied to the hosts
 - State engine: SOFT/HARD, retries, host UP/DOWN, flap detection,
   freshness
 - Config: files and web UI, services, groups, `for_each`, Config Tree,
@@ -81,16 +83,12 @@ Works today (single server):
 | Feature | Phase |
 |---|---|
 | Nodes and hub, UNREACHABLE | 2 |
-| Built-in checks (ICMP, TCP, HTTP, DNS, TLS), checks over SSH | 2 / 5 |
+| Built-in checks (TCP, HTTP, DNS, TLS) | 2 / 5 |
 | Data repair in graphs, rollups, retention | 3 |
 | IBM i, AIX, HMC, MQ checks | 3b |
 | Dependencies, escalations, re-notification | 4 |
 | Tenants, roles/permissions, TOTP, more notification channels | 4 |
 | SNMP, Prometheus, WinRM, discovery, Nagios config import | 5 |
-
-Until checks over SSH exist, checks run on the Watcher machine: remote
-hosts get what works from outside (ping, `check_http`, ...), or
-`check_by_ssh` as a normal plugin.
 
 The UI loads all services at once; fine for hundreds of hosts, not yet for
 thousands.

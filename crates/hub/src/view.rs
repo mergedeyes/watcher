@@ -199,6 +199,8 @@ pub struct HostView {
     pub name: String,
     pub address: String,
     pub node: Option<String>,
+    /// For `run_on = "host"` services.
+    pub ssh: Option<watcher_config::Ssh>,
     pub vars: Vars,
     /// Host groups.
     pub groups: Vec<String>,
@@ -268,6 +270,7 @@ impl HostView {
             name: host.name.clone(),
             address: host.address.clone(),
             node: host.node.clone(),
+            ssh: host.ssh.clone(),
             vars: host.vars.clone(),
             groups: names(&host.groups),
             enabled: host.enabled,

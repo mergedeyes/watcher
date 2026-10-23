@@ -513,6 +513,7 @@ mod tests {
             ]),
             host_check: None,
             graph: None,
+            ssh: None,
             enabled: true,
             origin: Default::default(),
             sources: Default::default(),

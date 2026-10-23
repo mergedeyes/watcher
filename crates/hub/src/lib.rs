@@ -7,6 +7,7 @@ mod api;
 pub mod auth;
 pub mod config;
 mod ops;
+pub mod ssh;
 mod ui;
 mod view;
 
@@ -23,6 +24,7 @@ use watcher_store::{HostSpec, ServiceSpec, Store, StoredState};
 pub use auth::AuthSettings;
 pub use config::{ConfigFiles, Reload};
 pub use ops::DowntimeChange;
+pub use ssh::{StoreVault, remote};
 /// Serves the web UI files and app shell; for routers outside the hub.
 pub use ui::serve as serve_ui;
 
@@ -74,6 +76,8 @@ pub struct Hub {
     /// Hosts and services in a downtime at the last check, for
     /// [`Hub::downtime_changes`]; `None` before the first.
     downtime_seen: Mutex<Option<ops::InDowntime>>,
+    /// Checks over SSH: test runs and the secrets API.
+    ssh: OnceLock<ssh::Access>,
 }
 
 impl Hub {
@@ -118,6 +122,7 @@ impl Hub {
             instance: OnceLock::new(),
             results: Mutex::new(ops::Counter::default()),
             downtime_seen: Mutex::new(None),
+            ssh: OnceLock::new(),
         })
     }
 
@@ -137,6 +142,13 @@ impl Hub {
     /// Names this instance in the API (`health`) and so in the web UI.
     pub fn set_instance_name(&self, name: String) {
         let _ = self.instance.set(name);
+    }
+
+    /// Runs test runs of `run_on = "host"` services over `pool`, and
+    /// serves secrets and host keys from `vault` (`None` without database
+    /// or data directory).
+    pub fn enable_ssh(&self, pool: Arc<watcher_exec::ssh::Pool>, vault: Option<Arc<StoreVault>>) {
+        let _ = self.ssh.set(ssh::Access { pool, vault });
     }
 
     /// Serves the object files under `/api/v1/config` (for admins).
@@ -243,6 +255,7 @@ pub fn jobs(config: &Config, check_dirs: &CheckDirs) -> Vec<Job> {
             Job {
                 id: service.id.clone(),
                 command: service.command.clone(),
+                remote: remote(config, service),
                 options: ExecOptions {
                     timeout: settings.timeout,
                     output_limit: DEFAULT_OUTPUT_LIMIT,

@@ -5,6 +5,7 @@ mod run;
 mod run_check;
 mod setup;
 mod sinks;
+mod ssh_cmd;
 mod tls;
 mod user_cmd;
 mod watch;
@@ -67,6 +68,23 @@ enum Cmd {
         db: user_cmd::DbArgs,
     },
 
+    /// Manage keys and passwords for checks over SSH (stored encrypted in
+    /// the database, with the key in data_dir/secret.key).
+    Secret {
+        #[command(subcommand)]
+        command: ssh_cmd::SecretCommand,
+        #[command(flatten)]
+        db: user_cmd::DbArgs,
+    },
+
+    /// Manage SSH host keys (pinned on the first connection).
+    Hostkey {
+        #[command(subcommand)]
+        command: ssh_cmd::HostKeyCommand,
+        #[command(flatten)]
+        db: user_cmd::DbArgs,
+    },
+
     /// Work with the configuration.
     #[command(subcommand)]
     Config(config_cmd::Command),
@@ -111,6 +129,8 @@ async fn main() -> ExitCode {
         Cmd::User { command, db } => (user_cmd::user(command, db).await, ExitCode::FAILURE),
         Cmd::Token { command, db } => (user_cmd::token(command, db).await, ExitCode::FAILURE),
         Cmd::Db { command, db } => (user_cmd::database(command, db).await, ExitCode::FAILURE),
+        Cmd::Secret { command, db } => (ssh_cmd::secret(command, db).await, ExitCode::FAILURE),
+        Cmd::Hostkey { command, db } => (ssh_cmd::host_key(command, db).await, ExitCode::FAILURE),
     };
     result.unwrap_or_else(|err| {
         eprintln!("error: {err:#}");

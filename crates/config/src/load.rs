@@ -15,7 +15,8 @@
 use crate::select::{Glob, HostSelector, Ref, ServiceSelector};
 use crate::{
     Assigned, Check, Config, Contact, Diagnostic, Group, Host, Layer, Loaded, NotifyOn, NotifyRule,
-    Origin, Reason, Service, ServiceObject, Settings, Severity, Source, Var, Vars, macros, var_at,
+    Origin, Reason, RunOn, Service, ServiceObject, Settings, Severity, Source, Ssh, Var, Vars,
+    macros, var_at,
 };
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
@@ -470,6 +471,7 @@ fn host_part(
     node: Option<&str>,
     host_check: Option<&str>,
     graph: Option<&str>,
+    ssh: Option<&Table>,
     vars: &Table,
 ) -> Table {
     let mut t = Table::new();
@@ -482,6 +484,9 @@ fn host_part(
         if let Some(v) = value {
             t.insert(key.into(), Value::String(v.into()));
         }
+    }
+    if let Some(ssh) = ssh {
+        t.insert("ssh".into(), Value::Table(ssh.clone()));
     }
     if !vars.is_empty() {
         t.insert("vars".into(), Value::Table(vars.clone()));
@@ -792,6 +797,10 @@ impl<'a> Compiler<'a> {
                 self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
                 ok = false;
             }
+            if let Some(Err(msg)) = def.ssh.as_ref().map(SshDef::parse) {
+                self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
+                ok = false;
+            }
             config.hostgroups.push(Group {
                 name: raw.name.clone(),
                 title: def.title.clone(),
@@ -814,6 +823,7 @@ impl<'a> Compiler<'a> {
                     None,
                     def.host_check.as_deref(),
                     def.graph.as_deref(),
+                    def.ssh.as_ref(),
                     &def.vars,
                 ),
                 &source,
@@ -951,6 +961,7 @@ impl<'a> Compiler<'a> {
                     def.node.as_deref(),
                     def.host_check.as_deref(),
                     def.graph.as_deref(),
+                    def.ssh.as_ref(),
                     &def.vars,
                 ),
                 &host_src,
@@ -1020,6 +1031,33 @@ impl<'a> Compiler<'a> {
                     }
                 }
             }
+            let ssh = match layered.table.get("ssh").and_then(Value::as_table) {
+                None => None,
+                Some(table) => match SshDef::parse(table) {
+                    Ok(SshDef {
+                        user: Some(user),
+                        port,
+                        secret: Some(secret),
+                    }) => Some(Ssh {
+                        user,
+                        port: port.unwrap_or(Ssh::DEFAULT_PORT),
+                        secret,
+                    }),
+                    Ok(_) => {
+                        self.sink.error(
+                            Some(&raw.origin),
+                            format!("{what}: ssh needs user and secret"),
+                        );
+                        ok = false;
+                        None
+                    }
+                    Err(msg) => {
+                        self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
+                        ok = false;
+                        None
+                    }
+                },
+            };
             if !ok {
                 continue;
             }
@@ -1049,6 +1087,7 @@ impl<'a> Compiler<'a> {
                     false => host_check.filter(|hc| !hc.is_empty()),
                 },
                 graph: text("graph"),
+                ssh,
                 enabled: def.enabled,
                 origin: raw.origin.clone(),
                 sources: layered
@@ -1489,6 +1528,22 @@ impl<'a> Compiler<'a> {
             },
             (None, true) => None,
         };
+        if settings.run_on == RunOn::Host {
+            let msg = match &command {
+                Some(CommandLine::Builtin(_)) => {
+                    Some("built-in checks run locally, not on the host")
+                }
+                None => Some("passive services have nothing to run on the host"),
+                _ if host.ssh.is_none() => Some(
+                    "run_on = \"host\" needs ssh = { user, secret } on the host or a host group",
+                ),
+                _ => None,
+            };
+            if let Some(msg) = msg {
+                self.sink.error(Some(&origin), format!("{what}: {msg}"));
+                return None;
+            }
+        }
 
         // Title: the service's, else its check's. Macros expand as in
         // commands; a `for_each` service without any gets its entry key.
@@ -1558,7 +1613,11 @@ impl<'a> Compiler<'a> {
             object: plan.object.clone(),
             assigned: plan.assigned.clone(),
             for_each,
-            check_hash: check_hash(command.as_ref(), settings.format),
+            check_hash: check_hash(
+                command.as_ref(),
+                settings.format,
+                settings.run_on == RunOn::Host,
+            ),
             command_text: def.command.clone(),
             command,
             settings,
@@ -1766,11 +1825,20 @@ impl<'a> Compiler<'a> {
         } else if flap.low > flap.high {
             error("flap_low must not be above flap_high".into());
         }
+        let run_on = def.run_on.unwrap_or_default();
+        let copy = def.copy.unwrap_or(false);
+        if copy && run_on != RunOn::Host {
+            error("copy needs run_on = \"host\"".into());
+        } else if copy && def.shell == Some(true) {
+            error("copy needs a direct command, not shell = true".into());
+        }
         if self.sink.diagnostics.len() > before {
             return None;
         }
         Some(Settings {
             shell: def.shell.unwrap_or(false),
+            run_on,
+            copy,
             passive,
             format: def.format.unwrap_or_default(),
             interval,
@@ -2161,13 +2229,18 @@ impl<'a> Compiler<'a> {
 
 /// FNV-1a over the command and format: stable across builds and Rust
 /// versions, unlike `DefaultHasher`.
-fn check_hash(command: Option<&CommandLine>, format: Format) -> String {
-    let text = match command {
+fn check_hash(command: Option<&CommandLine>, format: Format, on_host: bool) -> String {
+    let mut text = match command {
         Some(CommandLine::Argv(argv)) => format!("argv\0{}\0{format}", argv.join("\0")),
         Some(CommandLine::Shell(script)) => format!("shell\0{script}\0{format}"),
         Some(CommandLine::Builtin(b)) => format!("builtin\0{b}\0{format}"),
         None => format!("passive\0{format}"),
     };
+    // The same command on the host measures something else. Appended only
+    // then, so that existing hashes stay the same.
+    if on_host {
+        text.push_str("\0host");
+    }
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in text.bytes() {
         hash ^= u64::from(byte);
@@ -2224,6 +2297,8 @@ struct SettingsDef {
     /// A built-in check instead of a command: `ping`.
     builtin: Option<String>,
     shell: Option<bool>,
+    run_on: Option<RunOn>,
+    copy: Option<bool>,
     passive: Option<bool>,
     format: Option<Format>,
     #[serde(default, deserialize_with = "vars")]
@@ -2267,6 +2342,7 @@ struct HostDef {
     #[serde(default, deserialize_with = "host_check")]
     host_check: Option<String>,
     graph: Option<String>,
+    ssh: Option<Table>,
     #[serde(default = "yes")]
     enabled: bool,
     #[serde(default)]
@@ -2287,8 +2363,26 @@ struct HostGroupDef {
     #[serde(default, deserialize_with = "host_check")]
     host_check: Option<String>,
     graph: Option<String>,
+    ssh: Option<Table>,
     #[serde(default)]
     vars: Table,
+}
+
+/// `ssh = { ... }` of a host or host group; a host needs `user` and
+/// `secret` after its host groups'.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SshDef {
+    user: Option<String>,
+    port: Option<u16>,
+    secret: Option<String>,
+}
+
+impl SshDef {
+    fn parse(table: &Table) -> Result<Self, String> {
+        SshDef::deserialize(Value::Table(table.clone()))
+            .map_err(|err| format!("ssh: {}", err.message().trim()))
+    }
 }
 
 #[derive(Deserialize)]

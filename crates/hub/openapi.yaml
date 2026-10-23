@@ -530,6 +530,73 @@ paths:
         "204": { description: Deleted }
         "404": { $ref: "#/components/responses/Error" }
 
+  /ssh/secrets:
+    get:
+      summary: Secrets for checks over SSH, without their values (admins)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Secret" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    post:
+      summary: Generate or store a key, or store a password (admins)
+      description: >
+        Stored sealed with `secret.key` in the data directory (created on
+        first use). `generate` makes an ed25519 key: put `public_key` into
+        the target's `authorized_keys`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, kind]
+              properties:
+                name: { type: string, description: "As in ssh = { secret = ... }" }
+                kind: { type: string, enum: [generate, key, password] }
+                private_key: { type: string, description: "kind key: ed25519 or ECDSA; OpenSSH, PEM or PuTTY" }
+                passphrase: { type: string, description: "kind key, if encrypted" }
+                password: { type: string, description: kind password }
+                replace: { type: boolean, default: false }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Secret" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /ssh/secrets/{name}:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+    delete:
+      summary: Delete a secret (admins)
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /ssh/hostkeys:
+    get:
+      summary: Pinned host keys, and changed keys waiting for acceptance (admins)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/HostKey" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+
+  /ssh/hostkeys/{address}/{port}:
+    parameters:
+      - { name: address, in: path, required: true, schema: { type: string } }
+      - { name: port, in: path, required: true, schema: { type: integer } }
+    delete:
+      summary: Forget a host key; the next one is pinned (admins)
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /ssh/hostkeys/{address}/{port}/accept:
+    parameters:
+      - { name: address, in: path, required: true, schema: { type: string } }
+      - { name: port, in: path, required: true, schema: { type: integer } }
+    post:
+      summary: Pin the changed key the host presented (admins)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/HostKey" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+
   /config:
     get:
       summary: Config mode, object files and problems on disk (admins)
@@ -911,6 +978,12 @@ components:
         name: { type: string }
         address: { type: string }
         node: { type: [string, "null"] }
+        ssh:
+          description: For run_on = "host" services
+          oneOf:
+            - type: object
+              properties: { user: { type: string }, port: { type: integer }, secret: { type: string } }
+            - type: "null"
         vars: { type: object, description: "Values are strings, or objects (for_each data)" }
         groups: { type: array, items: { type: string }, description: Host groups }
         enabled: { type: boolean }
@@ -973,6 +1046,28 @@ components:
         stderr: { type: string }
         termination: { type: string }
         duration_ms: { type: number }
+    Secret:
+      type: object
+      properties:
+        name: { type: string }
+        kind: { type: string, enum: [key, password] }
+        public_key: { type: [string, "null"], description: For authorized_keys }
+        fingerprint: { type: [string, "null"], example: "SHA256:..." }
+        hosts: { type: array, items: { type: string }, description: Hosts that use it }
+        created: { $ref: "#/components/schemas/Time" }
+        updated: { $ref: "#/components/schemas/Time" }
+    HostKey:
+      type: object
+      properties:
+        address: { type: string }
+        port: { type: integer }
+        key: { type: string }
+        fingerprint: { type: string }
+        pinned: { $ref: "#/components/schemas/Time" }
+        offered: { type: [string, "null"], description: A different key the host presented }
+        offered_fingerprint: { type: [string, "null"] }
+        offered_at: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+        hosts: { type: array, items: { type: string } }
     User:
       type: object
       properties:

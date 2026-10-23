@@ -58,6 +58,8 @@ const SCHEDULE: Field[] = [
 const CHECK: Field[] = [
 	{ key: 'command', label: 'Command', type: 'mono', scripts: true, placeholder: 'check_ping -H $host.address$ -w $warn$ -c $crit$' },
 	{ key: 'shell', label: 'Shell', type: 'bool', default: false, help: 'run with /bin/sh -c' },
+	{ key: 'run_on', label: 'Run On', type: 'select', options: ['local', 'host'], placeholder: 'local', help: 'host: over SSH, see the host’s SSH settings' },
+	{ key: 'copy', label: 'Copy', type: 'bool', default: false, help: 'upload the script from the check directories to the host first' },
 	{ key: 'passive', label: 'Passive', type: 'bool', default: false, help: 'results via API, no command' },
 	{ key: 'format', label: 'Format', type: 'select', options: ['auto', 'nagios', 'key_value', 'json'] }
 ];
@@ -81,6 +83,11 @@ const SERVICEGROUPS: Field = {
 };
 const HOST_CHECK: Field = { key: 'host_check', label: 'Host Check', type: 'text', help: 'service that gives UP/DOWN; default with an address: ping' };
 const GRAPH: Field = { key: 'graph', label: 'Graph', type: 'text', help: 'host page graphs; default: Host Check' };
+const SSH: Field[] = [
+	{ key: 'ssh.user', label: 'SSH User', type: 'text', placeholder: 'monitor' },
+	{ key: 'ssh.port', label: 'SSH Port', type: 'int', placeholder: '22' },
+	{ key: 'ssh.secret', label: 'SSH Secret', type: 'text', help: 'key or password under Configuration → SSH' }
+];
 
 export const SCHEMAS: Record<Kind, Group[]> = {
 	check: [
@@ -96,7 +103,7 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 				TITLE,
 				{ key: 'check', label: 'Check', type: 'text', suggestOne: 'check', help: 'default: the check named like the service' },
 				{ ...CHECK[0]!, help: 'instead of a check' },
-				...CHECK.slice(1, 3),
+				...CHECK.slice(1, 5),
 				{ key: 'for_each', label: 'For Each', type: 'text', help: 'host var with a table per item, dotted for nested (site.tld): one service each (disk_root, …)' },
 				{ key: 'groups', label: 'Service Groups', type: 'list', suggest: 'servicegroup', help: 'comma-separated' },
 				ENABLED
@@ -118,6 +125,7 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 			]
 		},
 		{ title: 'Services', fields: [SERVICES, SERVICEGROUPS] },
+		{ title: 'SSH', fields: SSH.map((f) => ({ ...f, help: f.help ?? 'for run_on = "host"; default: from host groups' })) },
 		{
 			title: 'Host Services',
 			fields: [{ key: 'service', label: 'Overrides', type: 'services', help: 'settings of assigned services on this host, or one-off services' }]
@@ -134,7 +142,7 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 			]
 		},
 		{ title: 'Services', fields: [{ ...SERVICES, help: 'for every member, comma-separated' }, SERVICEGROUPS] },
-		{ title: 'Hosts Get', fields: [HOST_CHECK, GRAPH, { ...VARS, help: 'host var defaults' }] }
+		{ title: 'Hosts Get', fields: [HOST_CHECK, GRAPH, ...SSH, { ...VARS, help: 'host var defaults' }] }
 	],
 	servicegroup: [
 		{
@@ -283,6 +291,27 @@ function isTable(v: unknown): v is Record<string, unknown> {
 	return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/** The value at a field key, dotted for nested tables (`ssh.user`). */
+function at(raw: Record<string, unknown>, key: string): unknown {
+	let v: unknown = raw;
+	for (const part of key.split('.')) v = isTable(v) ? v[part] : undefined;
+	return v;
+}
+
+/** Sets a field key, or removes it (`undefined`) with tables left empty. */
+function put(out: Record<string, unknown>, key: string, value: unknown) {
+	const [head, ...rest] = key.split('.') as [string, ...string[]];
+	if (rest.length === 0) {
+		if (value === undefined) delete out[head];
+		else out[head] = value;
+		return;
+	}
+	const sub = isTable(out[head]) ? copy(out[head]) : {};
+	put(sub, rest.join('.'), value);
+	if (Object.keys(sub).length) out[head] = sub;
+	else delete out[head];
+}
+
 /** Form values for a selector: `all` for `{}`, `list` for the shorthand list. */
 function selectorToForm(v: unknown, selects: 'host' | 'service'): Record<string, string> {
 	const out: Record<string, string> = { all: '', list: '' };
@@ -325,7 +354,7 @@ export function selectorFromForm(form: Record<string, string>, raw: unknown, sel
 export function toForm(kind: Kind, raw: Record<string, unknown>): FormValues {
 	const values: FormValues = {};
 	for (const f of fields(kind)) {
-		const v = raw[f.key];
+		const v = at(raw, f.key);
 		switch (f.type) {
 			case 'list':
 				values[f.key] = list(v).join(', ');
@@ -398,17 +427,18 @@ export function fromForm(kind: Kind, raw: Record<string, unknown>, values: FormV
 	const out: Record<string, unknown> = { ...raw };
 	for (const f of fields(kind)) {
 		const v = values[f.key];
+		const before = at(raw, f.key);
 		let next: unknown;
 		switch (f.type) {
 			case 'list': {
 				const parts = items(String(v ?? ''));
-				next = parts.length === 0 ? undefined : same(parts, list(raw[f.key])) ? raw[f.key] : parts;
+				next = parts.length === 0 ? undefined : same(parts, list(before)) ? before : parts;
 				break;
 			}
 			case 'bool':
 				next = v === (f.default ?? false) ? undefined : v;
 				// Keep an explicit default that was written.
-				if (next === undefined && raw[f.key] === v) next = v;
+				if (next === undefined && before === v) next = v;
 				break;
 			case 'int': {
 				const text = String(v ?? '').trim();
@@ -419,7 +449,7 @@ export function fromForm(kind: Kind, raw: Record<string, unknown>, values: FormV
 			case 'vars': {
 				const rows = (v as [string, string][]).filter(([k]) => k.trim());
 				// Table vars (for_each data) aren't in the form: keep them.
-				const tables = Object.entries(isTable(raw[f.key]) ? (raw[f.key] as Record<string, unknown>) : {}).filter(([, x]) =>
+				const tables = Object.entries(isTable(before) ? (before as Record<string, unknown>) : {}).filter(([, x]) =>
 					isTable(x)
 				);
 				const all = [...tables, ...rows.map(([k, x]) => [k.trim(), x] as [string, unknown])];
@@ -442,10 +472,10 @@ export function fromForm(kind: Kind, raw: Record<string, unknown>, values: FormV
 				break;
 			}
 			case 'selector':
-				next = selectorFromForm(v as Record<string, string>, raw[f.key], f.selects ?? 'host');
+				next = selectorFromForm(v as Record<string, string>, before, f.selects ?? 'host');
 				break;
 			case 'services':
-				next = servicesFromForm(v as ServiceRow[], raw[f.key]);
+				next = servicesFromForm(v as ServiceRow[], before);
 				break;
 			case 'windows': {
 				const rows = (v as WindowRow[]).filter(([, from, to]) => from.trim() || to.trim());
@@ -466,15 +496,14 @@ export function fromForm(kind: Kind, raw: Record<string, unknown>, values: FormV
 				next = text.trim() === '' ? undefined : f.type === 'mono' ? text : text.trim();
 			}
 		}
-		if (next === undefined) delete out[f.key];
-		else out[f.key] = same(next, raw[f.key]) ? raw[f.key] : next;
+		put(out, f.key, next === undefined || !same(next, before) ? next : before);
 	}
 	return out;
 }
 
 /** Keys of `raw` the form doesn't show. */
 export function otherKeys(kind: Kind, raw: Record<string, unknown>): string[] {
-	const known = new Set(fields(kind).map((f) => f.key));
+	const known = new Set(fields(kind).map((f) => f.key.split('.')[0]));
 	return Object.keys(raw).filter((k) => !known.has(k));
 }
 

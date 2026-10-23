@@ -130,6 +130,12 @@
 				<tbody>
 					<tr><th>Address</th><td class="mono">{host.address}</td></tr>
 					{#if host.node}<tr><th>Node</th><td>{host.node}</td></tr>{/if}
+					{#if host.ssh}
+						<tr>
+							<th>SSH</th>
+							<td class="mono">{host.ssh.user}@{host.address}{host.ssh.port === 22 ? '' : `:${host.ssh.port}`} <span class="muted">secret {host.ssh.secret}</span></td>
+						</tr>
+					{/if}
 					{#if host.groups.length}
 						<tr>
 							<th>Host Groups</th>

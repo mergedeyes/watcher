@@ -359,6 +359,7 @@ mod tests {
             vars: [("os".to_string(), Var::Text("debian".into()))].into(),
             host_check: None,
             graph: None,
+            ssh: None,
             enabled: true,
             origin: Default::default(),
             sources: Default::default(),

@@ -23,7 +23,16 @@ pub struct DbArgs {
 }
 
 impl DbArgs {
-    async fn store(&self) -> Result<Store> {
+    /// `data_dir` from watcher.toml (where `secret.key` is).
+    pub fn data_dir(&self) -> Result<PathBuf> {
+        let (bootstrap, _) = config_cmd::locate(self.config.as_deref())?;
+        match bootstrap {
+            Some(b) => Ok(b.data_dir),
+            None => bail!("secrets need watcher.toml: its data_dir holds secret.key"),
+        }
+    }
+
+    pub async fn store(&self) -> Result<Store> {
         let url = match &self.database {
             Some(url) => url.clone(),
             None => {

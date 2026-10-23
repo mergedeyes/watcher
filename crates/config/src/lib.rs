@@ -166,10 +166,12 @@ pub struct Host {
     /// The service whose graphs the host page shows; defaults to
     /// `host_check`.
     pub graph: Option<String>,
+    /// How to reach it for checks with `run_on = "host"`.
+    pub ssh: Option<Ssh>,
     pub enabled: bool,
     pub origin: Origin,
-    /// Where `address`, `node`, `host_check`, `graph` and each `vars.<x>`
-    /// came from.
+    /// Where `address`, `node`, `host_check`, `graph`, `ssh.<x>` and each
+    /// `vars.<x>` came from.
     pub sources: BTreeMap<String, Source>,
 }
 
@@ -185,10 +187,38 @@ impl Host {
     }
 }
 
+/// SSH settings of a host: `ssh = { user = "monitor", secret = "monitor" }`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct Ssh {
+    pub user: String,
+    pub port: u16,
+    /// The credential (key or password) in the secret store.
+    pub secret: String,
+}
+
+impl Ssh {
+    pub const DEFAULT_PORT: u16 = 22;
+}
+
+/// Where a service's command runs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunOn {
+    /// On the Watcher machine.
+    #[default]
+    Local,
+    /// On the host, over SSH.
+    Host,
+}
+
 /// How a service runs and is evaluated, after all layers.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     pub shell: bool,
+    pub run_on: RunOn,
+    /// Upload the program from the check directories to the host first
+    /// (`run_on = "host"` only).
+    pub copy: bool,
     pub passive: bool,
     pub format: Format,
     pub interval: Duration,

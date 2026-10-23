@@ -11,10 +11,11 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
-use watcher_config::{CheckDirs, Config, ConfigMode, Severity, files, load_dir};
+use watcher_config::{CheckDirs, Config, ConfigMode, RunOn, Severity, files, load_dir};
 use watcher_core::StateType;
 use watcher_exec::scheduler::{Control, Event, schedule};
-use watcher_hub::{AuthSettings, ConfigFiles, Hub, jobs, specs};
+use watcher_exec::ssh::Pool;
+use watcher_hub::{AuthSettings, ConfigFiles, Hub, StoreVault, jobs, specs};
 use watcher_notify::{DowntimeChange, Message, Notifier, setup_warnings};
 use watcher_store::{Record, Store, StoredState, ingest};
 
@@ -157,12 +158,32 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
         .map(|(id, s)| (id.clone(), s.state.clone()))
         .collect();
 
+    // Checks over SSH: secrets in the database, sealed with data_dir/secret.key.
+    let ssh_vault = match (&storage, &data_dir) {
+        (Some(s), Some(dir)) => Some(Arc::new(StoreVault::new(s.store.clone(), dir.clone()))),
+        _ => None,
+    };
+    let ssh = Arc::new(match (&ssh_vault, &storage) {
+        (Some(vault), _) => Pool::new(vault.clone()),
+        (None, None) => Pool::unavailable("checks over SSH need a database for their secrets"),
+        (None, Some(_)) => Pool::unavailable("checks over SSH need watcher.toml (data_dir)"),
+    });
+    if ssh_vault.is_none()
+        && config
+            .services
+            .iter()
+            .any(|s| s.settings.run_on == RunOn::Host)
+    {
+        warn!("services with run_on = \"host\" can't run: SSH needs a database and watcher.toml");
+    }
+
     let (control, control_rx) = mpsc::channel(64);
     let (events_tx, mut events) = mpsc::channel(256);
     let scheduler = tokio::spawn(schedule(
         jobs(&config, &check_dirs),
         initial,
         args.max_concurrent,
+        ssh.clone(),
         control_rx,
         events_tx,
     ));
@@ -170,6 +191,7 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
     let store = storage.as_ref().map(|s| s.store.clone());
     let auth = auth_settings(args.no_auth, listen, https, store.as_deref()).await?;
     let hub = Hub::new(config.clone(), restored, control.clone(), store, auth);
+    hub.enable_ssh(ssh, ssh_vault);
     if let Some(name) = instance {
         hub.set_instance_name(name);
     }

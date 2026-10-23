@@ -422,3 +422,104 @@ async fn users_api_and_actions_with_a_token() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn ssh_secrets_and_host_keys() {
+    use watcher_exec::ssh::{Credential, Pool, Vault};
+    use watcher_hub::StoreVault;
+
+    let Some((url, _)) = database("ssh").await else {
+        eprintln!("skipped: set WATCHER_TEST_POSTGRES_URL");
+        return;
+    };
+    let store = Arc::new(Store::connect(&url).await.unwrap());
+    let data_dir = std::env::temp_dir().join(format!("watcher-hub-ssh-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data_dir);
+    let vault = Arc::new(StoreVault::new(store.clone(), data_dir.clone()));
+    let (control, _rx) = mpsc::channel(1);
+    let hub = Hub::new(
+        Arc::new(Config::default()),
+        HashMap::new(),
+        control,
+        Some(store.clone()),
+        AuthSettings::OFF,
+    );
+    hub.enable_ssh(Arc::new(Pool::new(vault.clone())), Some(vault.clone()));
+    let mut c = Client { hub, cookie: None };
+
+    // Without secret.key nothing can be read; storing a secret creates it.
+    let err = vault.credential("monitor").await.unwrap_err();
+    assert!(err.contains("no such secret"), "{err}");
+    let new = json!({ "name": "monitor", "kind": "generate" });
+    let (status, created) = c
+        .call("POST", "/api/v1/ssh/secrets", Some(new.clone()), &[])
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let public_key = created["public_key"].as_str().unwrap();
+    assert!(public_key.starts_with("ssh-ed25519 ") && public_key.ends_with(" watcher-monitor"));
+    assert!(data_dir.join("secret.key").exists());
+    let (status, _) = c.call("POST", "/api/v1/ssh/secrets", Some(new), &[]).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let missing = json!({ "name": "pw", "kind": "password" });
+    let (status, _) = c
+        .call("POST", "/api/v1/ssh/secrets", Some(missing), &[])
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let password = json!({ "name": "pw", "kind": "password", "password": "s3cret" });
+    let (status, _) = c
+        .call("POST", "/api/v1/ssh/secrets", Some(password), &[])
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (_, list) = c.call("GET", "/api/v1/ssh/secrets", None, &[]).await;
+    assert_eq!(list.as_array().unwrap().len(), 2);
+    assert_eq!(list[0]["name"], "monitor");
+    let fingerprint = list[0]["fingerprint"].as_str().unwrap();
+    assert!(list[0].get("sealed").is_none());
+    let key = vault.credential("monitor").await.unwrap();
+    assert_eq!(key.fingerprint().as_deref(), Some(fingerprint));
+    assert!(
+        matches!(vault.credential("pw").await.unwrap(), Credential::Password(p) if p == "s3cret")
+    );
+
+    // Host keys: pinned on first use, a changed one waits for acceptance.
+    let host_key = |comment: &str| match Credential::generate(comment).unwrap() {
+        Credential::Key(k) => k.public_key().clone(),
+        Credential::Password(_) => unreachable!(),
+    };
+    let (a, b) = (host_key("a"), host_key("b"));
+    vault.check_host_key("db1", 22, &a).await.unwrap();
+    let err = vault.check_host_key("db1", 22, &b).await.unwrap_err();
+    assert!(
+        err.contains("host key changed") && err.contains("watcher hostkey accept db1"),
+        "{err}"
+    );
+    let (_, keys) = c.call("GET", "/api/v1/ssh/hostkeys", None, &[]).await;
+    assert_eq!(keys[0]["address"], "db1");
+    assert!(
+        keys[0]["offered_fingerprint"]
+            .as_str()
+            .unwrap()
+            .starts_with("SHA256:")
+    );
+    let (status, _) = c
+        .call("POST", "/api/v1/ssh/hostkeys/db1/22/accept", None, &[])
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    vault.check_host_key("db1", 22, &b).await.unwrap();
+    let (status, _) = c
+        .call("POST", "/api/v1/ssh/hostkeys/db1/22/accept", None, &[])
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = c
+        .call("DELETE", "/api/v1/ssh/hostkeys/db1/22", None, &[])
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    vault.check_host_key("db1", 22, &a).await.unwrap();
+
+    let (status, _) = c.call("DELETE", "/api/v1/ssh/secrets/pw", None, &[]).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = c.call("DELETE", "/api/v1/ssh/secrets/pw", None, &[]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    std::fs::remove_dir_all(&data_dir).unwrap();
+}

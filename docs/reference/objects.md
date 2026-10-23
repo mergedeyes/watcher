@@ -60,6 +60,8 @@ interval = "1m"
 | `command` | | required unless `passive` or `builtin`. [Macros](../guides/checks.md#macros) |
 | `builtin` | | `ping`: [built-in check](../guides/checks.md#built-in-checks) instead of a command |
 | `shell` | `false` | run with `/bin/sh -c` |
+| `run_on` | `local` | `host`: on the host, [over SSH](../guides/ssh.md) |
+| `copy` | `false` | with `run_on = "host"`: [upload the script](../guides/ssh.md#copying-scripts) first |
 | `passive` | `false` | results via API, no command |
 | `format` | `auto` | `auto`, `nagios`, `key_value`, `json` |
 | `vars` | | `$name$` values; scalars or tables |
@@ -121,6 +123,7 @@ vars.disks.data = { path = "/srv" }
 | `node` | | node label (*not yet*: nodes) |
 | `host_check` | from host groups; with `address`: `ping` | service giving UP/DOWN; `false`: none |
 | `graph` | the host check | service graphed on the host page |
+| `ssh` | from host groups | `{ user, secret, port }` for [checks over SSH](../guides/ssh.md#ssh) |
 | `enabled` | `true` | `false`: not monitored |
 | `service.<name>` | | [host service](#host-service) |
 
@@ -173,6 +176,7 @@ vars.warn = "20%"
 | `servicegroups` | their services, for every member |
 | `host_check` | service giving its hosts UP/DOWN; `false`: none |
 | `graph` | service graphed on the host page |
+| `ssh` | `{ user, secret, port }` for its hosts ([SSH](../guides/ssh.md#ssh)) |
 | `vars` | host var defaults |
 
 Hosts also join with host `groups`.

@@ -44,6 +44,8 @@ export interface HostView {
 	name: string;
 	address: string;
 	node: string | null;
+	/** For run_on = "host" services. */
+	ssh: { user: string; port: number; secret: string } | null;
 	/** Text, or tables (for_each data). */
 	vars: Record<string, unknown>;
 	/** Host groups. */
@@ -248,6 +250,41 @@ export interface EventQuery {
 	since?: string;
 	before?: string;
 	limit?: number;
+}
+
+/** A secret for checks over SSH, without its value. */
+export interface Secret {
+	name: string;
+	kind: 'key' | 'password';
+	/** Keys: the line for authorized_keys. */
+	public_key: string | null;
+	fingerprint: string | null;
+	/** Hosts that log in with it. */
+	hosts: string[];
+	created: string;
+	updated: string;
+}
+
+export interface NewSecret {
+	name: string;
+	kind: 'generate' | 'key' | 'password';
+	private_key?: string;
+	passphrase?: string;
+	password?: string;
+	replace?: boolean;
+}
+
+/** A pinned SSH host key, and a changed one waiting for acceptance. */
+export interface HostKey {
+	address: string;
+	port: number;
+	key: string;
+	fingerprint: string | null;
+	pinned: string;
+	offered: string | null;
+	offered_fingerprint: string | null;
+	offered_at: string | null;
+	hosts: string[];
 }
 
 export interface User {
@@ -466,6 +503,14 @@ export const api = {
 	updateUser: (name: string, change: { password?: string; admin?: boolean; disabled?: boolean }) =>
 		send<User>('PUT', `/users/${seg(name)}`, change),
 	deleteUser: (name: string) => send<void>('DELETE', `/users/${seg(name)}`),
+
+	secrets: () => get<Secret[]>('/ssh/secrets'),
+	createSecret: (secret: NewSecret) => send<Secret>('POST', '/ssh/secrets', secret),
+	deleteSecret: (name: string) => send<void>('DELETE', `/ssh/secrets/${seg(name)}`),
+	hostKeys: () => get<HostKey[]>('/ssh/hostkeys'),
+	acceptHostKey: (address: string, port: number) =>
+		send<HostKey>('POST', `/ssh/hostkeys/${seg(address)}/${port}/accept`),
+	forgetHostKey: (address: string, port: number) => send<void>('DELETE', `/ssh/hostkeys/${seg(address)}/${port}`),
 
 	config: () => get<ConfigOverview>('/config'),
 	configFile: (path: string) => get<ConfigFile>(`/config/files/${path.split('/').map(seg).join('/')}`),

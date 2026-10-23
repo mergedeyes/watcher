@@ -46,7 +46,7 @@ fn user((id, username, admin, disabled, created, last_login): UserRow) -> User {
 }
 
 /// Maps a unique violation to [`Error::Conflict`].
-fn conflict(err: sqlx::Error, what: impl FnOnce() -> String) -> Error {
+pub(crate) fn conflict(err: sqlx::Error, what: impl FnOnce() -> String) -> Error {
     match &err {
         sqlx::Error::Database(db) if db.code().as_deref() == Some("23505") => {
             Error::Conflict(what())
