@@ -19,12 +19,13 @@ pub enum Kind {
     ServiceGroup,
     Contact,
     ContactGroup,
+    DowntimeGroup,
     Notify,
     Sink,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 9] = [
+    pub const ALL: [Kind; 10] = [
         Kind::Check,
         Kind::Service,
         Kind::Host,
@@ -32,6 +33,7 @@ impl Kind {
         Kind::ServiceGroup,
         Kind::Contact,
         Kind::ContactGroup,
+        Kind::DowntimeGroup,
         Kind::Notify,
         Kind::Sink,
     ];
@@ -46,6 +48,7 @@ impl Kind {
             Kind::ServiceGroup => "servicegroup",
             Kind::Contact => "contact",
             Kind::ContactGroup => "contactgroup",
+            Kind::DowntimeGroup => "downtimegroup",
             Kind::Notify => "notify",
             Kind::Sink => "sink",
         }
@@ -63,7 +66,9 @@ impl Kind {
             Kind::Check => "ui/checks.toml",
             Kind::Service => "ui/services.toml",
             Kind::Host => "ui/hosts.toml",
-            Kind::HostGroup | Kind::ServiceGroup | Kind::ContactGroup => "ui/groups.toml",
+            Kind::HostGroup | Kind::ServiceGroup | Kind::ContactGroup | Kind::DowntimeGroup => {
+                "ui/groups.toml"
+            }
             Kind::Contact => "ui/contacts.toml",
             Kind::Notify => "ui/notify.toml",
             Kind::Sink => "ui/sinks.toml",
@@ -131,6 +136,7 @@ impl Kind {
             ],
             Kind::ServiceGroup => &["title", "services"],
             Kind::ContactGroup => &["title", "members"],
+            Kind::DowntimeGroup => &["title", "members", "hostgroups", "schedule"],
             Kind::Contact => &["email", "webhook", "groups"],
             Kind::Notify => &[
                 "name",
@@ -235,6 +241,7 @@ fn parse(path: &str, text: &str) -> Result<Vec<Object>, (usize, String)> {
         (Kind::ServiceGroup, file.servicegroup),
         (Kind::Contact, file.contact),
         (Kind::ContactGroup, file.contactgroup),
+        (Kind::DowntimeGroup, file.downtimegroup),
     ];
     for (kind, map) in keyed {
         for (name, t) in map {

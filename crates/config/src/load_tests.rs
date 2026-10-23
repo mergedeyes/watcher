@@ -600,3 +600,53 @@ vars.label = "two words"
     );
     assert_eq!(s.check, None);
 }
+
+#[test]
+fn downtime_groups() {
+    let (config, diags) = compile(&[(
+        "a.toml",
+        r#"
+[hostgroup.linux]
+members = ["db*"]
+
+[downtimegroup.patchday]
+title = "Patch Day"
+members = ["web01"]
+hostgroups = ["linux"]
+schedule = [{ days = ["sun"], from = "02:00", to = "04:00" }]
+
+[downtimegroup.bad]
+hostgroups = ["nope"]
+schedule = [{ from = "02:00" }]
+
+[[host]]
+name = "web01"
+
+[[host]]
+name = "db01"
+
+[[host]]
+name = "mq01"
+"#,
+    )]);
+    let msgs = messages(&diags);
+    assert!(
+        msgs.iter()
+            .any(|m| m.contains("downtimegroup \"bad\": unknown hostgroup \"nope\"")),
+        "{msgs:?}"
+    );
+    assert!(
+        msgs.iter()
+            .any(|m| m.contains("downtimegroup \"bad\": schedule 1: needs to")),
+        "{msgs:?}"
+    );
+    let g = &config.downtimegroups[0];
+    let hosts: Vec<_> = config
+        .hosts
+        .iter()
+        .filter(|h| g.has_host(h))
+        .map(|h| h.name.as_str())
+        .collect();
+    assert_eq!(hosts, ["web01", "db01"]);
+    assert_eq!(g.schedule[0].to_string(), "sun 02:00-04:00");
+}

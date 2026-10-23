@@ -16,6 +16,7 @@ mod expr;
 pub mod files;
 mod load;
 mod macros;
+pub mod schedule;
 mod select;
 pub mod tree;
 
@@ -25,6 +26,7 @@ pub use bootstrap::{
 pub use check_dirs::CheckDirs;
 pub use expr::{Expr, ExprError};
 pub use load::{load_dir, load_dir_with};
+pub use schedule::Window;
 pub use select::{HostSelector, ServiceSelector};
 
 use serde::Serialize;
@@ -260,6 +262,30 @@ pub struct Group {
     pub origin: Origin,
 }
 
+/// Hosts that share planned downtimes: listed by name or pattern, or in
+/// a host group.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DowntimeGroup {
+    pub name: String,
+    pub title: Option<String>,
+    /// Host names and patterns, as written.
+    pub members: Vec<String>,
+    pub hostgroups: Vec<String>,
+    /// Recurring or one-off windows, in local time.
+    pub schedule: Vec<Window>,
+    pub origin: Origin,
+}
+
+impl DowntimeGroup {
+    pub fn has_host(&self, host: &Host) -> bool {
+        self.hostgroups.iter().any(|g| host.in_group(g))
+            || self
+                .members
+                .iter()
+                .any(|m| select::Glob::new(m).is_match(&host.name))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Contact {
     pub name: String,
@@ -371,6 +397,7 @@ pub struct Config {
     pub servicegroups: Vec<Group>,
     pub contacts: Vec<Contact>,
     pub contactgroups: Vec<Group>,
+    pub downtimegroups: Vec<DowntimeGroup>,
     pub notify: Vec<NotifyRule>,
     pub sinks: Vec<Sink>,
 }

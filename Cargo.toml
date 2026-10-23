@@ -29,6 +29,8 @@ clap = { version = "4", features = ["derive", "env"] }
 getrandom = "0.4"
 http-body-util = "0.1"
 humantime = "2"
+# Local time and time zones, for downtime schedules.
+jiff = "0.2"
 # TLS uses rustls with the ring provider throughout (as sqlx does); the
 # binary installs ring as the process default for reqwest.
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "hostname", "tokio1", "tokio1-rustls", "ring", "rustls-platform-verifier"] }

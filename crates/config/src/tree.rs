@@ -10,7 +10,7 @@ use std::time::Duration;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Node {
     /// `host`, `service`, `check`, `hostgroup`, `servicegroup`, `contact`,
-    /// `contactgroup` and `notify` for objects; `section` and `value`
+    /// `contactgroup`, `downtimegroup` and `notify` for objects; `section` and `value`
     /// otherwise. A `service` named `host/service` is a service on a host,
     /// one without `/` a service object.
     pub kind: &'static str,
@@ -58,6 +58,7 @@ impl<'a> Builder<'a> {
             "servicegroup" => self.servicegroup(name),
             "contact" => self.contact(name),
             "contactgroup" => self.contactgroup(name),
+            "downtimegroup" => self.downtimegroup(name),
             "notify" => self.rule(name),
             _ => None,
         }
@@ -794,6 +795,56 @@ impl<'a> Builder<'a> {
             .map(|r| self.rule_link(r))
             .collect();
         root.children.extend(self.section("notify rules", rules));
+        Some(root)
+    }
+
+    fn downtimegroup(&self, name: &str) -> Option<Node> {
+        let config = self.config;
+        let g = config.downtimegroups.iter().find(|g| g.name == name)?;
+        let mut root = self.node(
+            "downtimegroup",
+            Some(&g.name),
+            g.title.as_deref().unwrap_or(&g.name),
+            Some(&g.origin),
+        );
+        let windows: Vec<Node> = g
+            .schedule
+            .iter()
+            .map(|w| {
+                let mut n = self.node("value", None, "window", Some(&g.origin));
+                n.detail = Some(w.to_string());
+                n
+            })
+            .collect();
+        root.children.extend(self.section("schedule", windows));
+        let members = config
+            .hosts
+            .iter()
+            .filter_map(|h| {
+                let why = match g.hostgroups.iter().find(|x| h.in_group(x)) {
+                    Some(hg) => format!("in hostgroup {hg}"),
+                    None => {
+                        let m = g
+                            .members
+                            .iter()
+                            .find(|m| crate::select::Glob::new(m).is_match(&h.name))?;
+                        match m == &h.name {
+                            true => "listed".to_string(),
+                            false => format!("matched: members {m}"),
+                        }
+                    }
+                };
+                let mut n = self.node(
+                    "host",
+                    Some(&h.name),
+                    format!("host {}", h.name),
+                    Some(&h.origin),
+                );
+                n.detail = Some(why);
+                Some(n)
+            })
+            .collect();
+        root.children.extend(self.section("members", members));
         Some(root)
     }
 

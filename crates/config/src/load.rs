@@ -153,6 +153,8 @@ pub(crate) struct RawFile {
     #[serde(default)]
     pub contactgroup: BTreeMap<String, Spanned<Table>>,
     #[serde(default)]
+    pub downtimegroup: BTreeMap<String, Spanned<Table>>,
+    #[serde(default)]
     pub notify: Vec<Spanned<Table>>,
     #[serde(default)]
     pub sink: Vec<Spanned<Table>>,
@@ -215,6 +217,7 @@ struct RawObjects {
     servicegroups: Vec<RawObject>,
     contacts: Vec<RawObject>,
     contactgroups: Vec<RawObject>,
+    downtimegroups: Vec<RawObject>,
     notify: Vec<RawObject>,
     sinks: Vec<RawObject>,
 }
@@ -260,6 +263,7 @@ impl RawObjects {
         keyed(&mut self.servicegroups, file.servicegroup);
         keyed(&mut self.contacts, file.contact);
         keyed(&mut self.contactgroups, file.contactgroup);
+        keyed(&mut self.downtimegroups, file.downtimegroup);
         for (i, t) in file.host.into_iter().enumerate() {
             let table = t.get_ref();
             let name = table
@@ -319,6 +323,7 @@ impl RawObjects {
         c.compile_hostgroups(&mut config);
         let hosts = c.compile_hosts(&mut config);
         c.compile_services(&mut config, &hosts);
+        c.compile_downtimegroups(&mut config);
         c.compile_contacts(&mut config);
         c.compile_notify(&mut config);
         c.compile_sinks(&mut config);
@@ -1447,6 +1452,65 @@ impl<'a> Compiler<'a> {
         })
     }
 
+    fn compile_downtimegroups(&mut self, config: &mut Config) {
+        for raw in &self.raw.downtimegroups {
+            if self.duplicate(
+                "downtimegroup",
+                &raw.name,
+                &raw.origin,
+                &self.raw.downtimegroups,
+            ) {
+                continue;
+            }
+            let what = format!("downtimegroup {:?}", raw.name);
+            if let Err(msg) = valid_name(&raw.name) {
+                self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
+                continue;
+            }
+            let def: DowntimeGroupDef =
+                match DowntimeGroupDef::deserialize(Value::Table(raw.table.clone())) {
+                    Ok(d) => d,
+                    Err(err) => {
+                        self.sink.error(
+                            Some(&raw.origin),
+                            format!("{what}: {}", err.message().trim()),
+                        );
+                        continue;
+                    }
+                };
+            let before = self.sink.diagnostics.len();
+            for g in &def.hostgroups {
+                if !config.hostgroups.iter().any(|x| x.name == *g) {
+                    self.sink.error(
+                        Some(&raw.origin),
+                        format!("{what}: unknown hostgroup {g:?}"),
+                    );
+                }
+            }
+            let mut schedule = Vec::new();
+            for (i, entry) in def.schedule.iter().enumerate() {
+                match crate::Window::parse(entry) {
+                    Ok(w) => schedule.push(w),
+                    Err(e) => self.sink.error(
+                        Some(&raw.origin),
+                        format!("{what}: schedule {}: {e}", i + 1),
+                    ),
+                }
+            }
+            if self.sink.diagnostics.len() > before {
+                continue;
+            }
+            config.downtimegroups.push(crate::DowntimeGroup {
+                name: raw.name.clone(),
+                title: def.title,
+                members: def.members,
+                hostgroups: def.hostgroups,
+                schedule,
+                origin: raw.origin.clone(),
+            });
+        }
+    }
+
     /// Warnings for objects used by nothing and selector names that exist
     /// nowhere (likely typos).
     fn check_references(&mut self, config: &Config) {
@@ -1483,6 +1547,14 @@ impl<'a> Compiler<'a> {
                 self.sink.warning(
                     Some(&g.origin),
                     format!("hostgroup {:?} has no hosts", g.name),
+                );
+            }
+        }
+        for g in &config.downtimegroups {
+            if !config.hosts.iter().any(|h| g.has_host(h)) {
+                self.sink.warning(
+                    Some(&g.origin),
+                    format!("downtimegroup {:?} has no hosts", g.name),
                 );
             }
         }
@@ -2099,6 +2171,18 @@ struct ServiceGroupDef {
     title: Option<String>,
     #[serde(default)]
     services: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DowntimeGroupDef {
+    title: Option<String>,
+    #[serde(default)]
+    members: Vec<String>,
+    #[serde(default)]
+    hostgroups: Vec<String>,
+    #[serde(default)]
+    schedule: Vec<Value>,
 }
 
 #[derive(Deserialize)]
