@@ -12,6 +12,7 @@ publish.workspace = true
 [dependencies]
 nix.workspace = true
 shell-words.workspace = true
+surge-ping.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 watcher-core.workspace = true

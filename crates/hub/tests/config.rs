@@ -332,9 +332,10 @@ async fn objects_in_one_step() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{applied}");
+    // An address: the default ping host check.
     assert_eq!(
         applied["changes"]["services"]["added"],
-        json!(["web02/http"])
+        json!(["web02/http", "web02/ping"])
     );
     assert_eq!(s.reloads.recv().await.unwrap(), "local user");
     let (_, host) = call(&s.hub, "GET", "/api/v1/config/objects/host/web02", None).await;

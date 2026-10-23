@@ -29,6 +29,39 @@ Full path:
 command = "/opt/scripts/backup_age.sh /srv/backup"
 ```
 
+## Built-in checks
+
+Run inside Watcher, no plugin. A check `ping` exists without config;
+an own `[check.ping]` replaces it.
+
+```toml
+[service.ping]                 # check "ping", built-in
+vars.crit = "500,60%"
+```
+
+```
+web01/ping  every 1m     ping -H 10.0.0.5 -p 5 -w 3000,80% -c 500,60% (built-in)
+```
+
+| Builtin | Vars | Default | |
+|---|---|---|---|
+| `ping` | `packets` | `5` | ICMP echo requests, 200ms apart |
+| | `warn` | `3000,80%` | round trip average (ms), packet loss |
+| | `crit` | `5000,100%` | |
+
+Output as `check_ping`: `rta` (ms) and `pl` (%). DNS names resolve on
+every run; unresolvable: CRITICAL. No ICMP socket: UNKNOWN; allow with
+`sysctl net.ipv4.ping_group_range="0 2147483647"` (default on most
+distributions) or `CAP_NET_RAW`.
+
+Under another name:
+
+```toml
+[check.ping_fast]
+builtin = "ping"
+vars = { packets = "2", warn = "100,20%", crit = "500,60%" }
+```
+
 ## Shell
 
 Default: no shell, arguments split like a shell would. Pipes, `$(...)`,

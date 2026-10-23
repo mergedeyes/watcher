@@ -4,6 +4,9 @@
 import type { ConfigObject, Kind } from './api.ts';
 import type { Field } from './schema.ts';
 
+/** Built-in checks (crates/exec/src/builtin.rs). */
+const BUILTIN_CHECKS = ['ping'];
+
 export interface Option {
 	value: string;
 	/** Shown muted next to the value, e.g. where it comes from. */
@@ -64,6 +67,13 @@ export class Suggest {
 			const title = o.fields.title;
 			return { value: o.name, hint: typeof title === 'string' ? title : undefined };
 		});
+	}
+
+	/** Checks, and the built-in ones no check of the same name replaces. */
+	checkNames(): Option[] {
+		const out = this.names('check');
+		for (const value of BUILTIN_CHECKS) if (!out.some((o) => o.value === value)) out.push({ value, hint: 'built-in' });
+		return out;
 	}
 
 	/** Values written for `key` in objects of `kind` (lists: their items). */
@@ -138,6 +148,7 @@ export class Suggest {
 	/** Options for a form field of `kind`. */
 	field(kind: Kind, f: Field): Option[] {
 		if (f.suggest) return this.names(f.suggest);
+		if (f.suggestOne === 'check') return this.checkNames();
 		if (f.suggestOne) return this.names(f.suggestOne);
 		const used = this.used(kind, f.key);
 		switch (f.key) {

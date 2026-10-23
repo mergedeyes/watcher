@@ -440,6 +440,122 @@ services = ["ping"]
 }
 
 #[test]
+fn default_host_check_is_the_builtin_ping() {
+    let config = ok(&[(
+        "a.toml",
+        r#"
+[check.check_ping]
+command = "check_ping -H $host.address$ -w 50,5% -c 100,25%"
+
+[service.check_ping]
+
+[service.ping]
+command = "my_ping $host.address$"
+
+[hostgroup.quiet]
+members = ["q*"]
+host_check = false
+
+[[host]]
+name = "a"
+address = "10.0.0.1"
+
+[[host]]
+name = "own"
+address = "10.0.0.2"
+services = ["check_ping"]
+host_check = "check_ping"
+
+[[host]]
+name = "noaddress"
+
+[[host]]
+name = "off"
+address = "10.0.0.3"
+host_check = false
+
+[[host]]
+name = "q1"
+address = "10.0.0.4"
+
+[[host]]
+name = "ownping"
+address = "10.0.0.5"
+services = ["ping"]
+  [host.service.tuned]
+  check = "ping"
+  vars.packets = "2"
+"#,
+    )]);
+    let host = |name: &str| config.hosts.iter().find(|h| h.name == name).unwrap();
+    let services = |name: &str| -> Vec<&str> {
+        config
+            .services
+            .iter()
+            .filter(|s| config.host(s).name == name)
+            .map(|s| s.name.as_str())
+            .collect()
+    };
+    let ping = config.service("a/ping").unwrap();
+    assert_eq!(host("a").host_check.as_deref(), Some("ping"));
+    assert_eq!(ping.check.as_deref(), Some("ping"));
+    assert_eq!(ping.title.as_deref(), Some("PING"));
+    assert_eq!(
+        ping.command.as_ref().unwrap().to_string(),
+        "ping -H 10.0.0.1 -p 5 -w 3000,80% -c 5000,100% (built-in)"
+    );
+    assert!(
+        matches!(&ping.assigned[0].reason, Reason::Listed { by, .. } if by == "default host check")
+    );
+    assert_eq!(host("own").host_check.as_deref(), Some("check_ping"));
+    assert_eq!(services("own"), ["check_ping"]);
+    for name in ["noaddress", "off", "q1"] {
+        assert_eq!(host(name).host_check, None, "{name}");
+        assert!(services(name).is_empty(), "{name}");
+    }
+    // A service "ping" of its own is the host check; the built-in by name.
+    assert_eq!(host("ownping").host_check.as_deref(), Some("ping"));
+    assert_eq!(
+        argv(config.service("ownping/ping").unwrap()),
+        ["my_ping", "10.0.0.5"]
+    );
+    assert_eq!(
+        config
+            .service("ownping/tuned")
+            .unwrap()
+            .command
+            .as_ref()
+            .unwrap()
+            .to_string(),
+        "ping -H 10.0.0.5 -p 2 -w 3000,80% -c 5000,100% (built-in)"
+    );
+
+    let (_, diags) = compile(&[(
+        "a.toml",
+        r#"
+[check.x]
+builtin = "dns"
+
+[check.y]
+builtin = "ping"
+command = "true"
+
+[[host]]
+name = "h"
+host_check = true
+"#,
+    )]);
+    assert_eq!(
+        messages(&diags),
+        [
+            "a.toml:2: error: check \"x\": unknown builtin \"dns\" (known: ping)",
+            "a.toml:5: error: check \"y\": builtin \"ping\" runs without command or passive",
+            "a.toml:9: error: host \"h\": host_check: a service name, or false for none",
+        ]
+    );
+}
+
+#[test]
 fn titles_with_macros_and_for_each_keys() {
     let config = ok(&[(
         "a.toml",

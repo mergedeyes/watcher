@@ -57,7 +57,8 @@ interval = "1m"
 | Field | Default | |
 |---|---|---|
 | `title` | | display name. [Macros](../guides/checks.md#macros) |
-| `command` | | required unless `passive`. [Macros](../guides/checks.md#macros) |
+| `command` | | required unless `passive` or `builtin`. [Macros](../guides/checks.md#macros) |
+| `builtin` | | `ping`: [built-in check](../guides/checks.md#built-in-checks) instead of a command |
 | `shell` | `false` | run with `/bin/sh -c` |
 | `passive` | `false` | results via API, no command |
 | `format` | `auto` | `auto`, `nagios`, `key_value`, `json` |
@@ -118,7 +119,7 @@ vars.disks.data = { path = "/srv" }
 | `servicegroups` | | their services |
 | `vars` | | `$name$` values, `for_each` tables; over host group vars |
 | `node` | | node label (*not yet*: nodes) |
-| `host_check` | from host groups | service giving UP/DOWN |
+| `host_check` | from host groups; with `address`: `ping` | service giving UP/DOWN; `false`: none |
 | `graph` | the host check | service graphed on the host page |
 | `enabled` | `true` | `false`: not monitored |
 | `service.<name>` | | [host service](#host-service) |
@@ -170,7 +171,7 @@ vars.warn = "20%"
 | `members` | host names; `*` and `?` match |
 | `services` | services for every member |
 | `servicegroups` | their services, for every member |
-| `host_check` | service giving its hosts UP/DOWN |
+| `host_check` | service giving its hosts UP/DOWN; `false`: none |
 | `graph` | service graphed on the host page |
 | `vars` | host var defaults |
 
