@@ -66,6 +66,14 @@ Contacts, Contact Groups, Downtime Groups, Notifications, Files.
   any value can be typed.
 - Host form: host groups, services, service groups, overrides of
   assigned services, one-off services.
+- Group membership shows on both sides: the host form lists host groups
+  that list the host (`Also: dc1 · pattern web*`), the host group form
+  hosts that list the group; the same for service and contact groups.
+  × removes it there on save. Deleting an object takes it out of those
+  lists too. Lists show it muted.
+- Selectors, host group members and downtime groups show what they
+  match now: `3 hosts: web01 (name web*), …`; errors (e.g. in `expr`)
+  at once.
 - **Config Tree:** where the object and each value come from, where it is
   used. Each entry links to its form or file line.
 - **Save** → preview of the effective changes (+ added, ~ changed,

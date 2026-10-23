@@ -370,3 +370,41 @@ async fn objects_in_one_step() {
     let (status, _) = call(&s.hub, "POST", "/api/v1/config/reload", None).await;
     assert_eq!(status, StatusCode::OK);
 }
+
+#[tokio::test]
+async fn selector_preview() {
+    let s = setup("match", ConfigMode::Hybrid);
+    let (status, m) = call(
+        &s.hub,
+        "POST",
+        "/api/v1/config/match",
+        Some(json!({ "kind": "host", "selectors": [["web*"]] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{m}");
+    assert_eq!(m["total"], 1);
+    assert_eq!(
+        m["matches"][0],
+        json!({ "name": "web01", "why": "name web*" })
+    );
+    let (_, m) = call(
+        &s.hub,
+        "POST",
+        "/api/v1/config/match",
+        Some(json!({ "kind": "service", "selectors": [{ "expr": "service.check == \"http\"" }] })),
+    )
+    .await;
+    assert_eq!(m["matches"][0]["name"], "web01/http");
+    let (status, err) = call(
+        &s.hub,
+        "POST",
+        "/api/v1/config/match",
+        Some(json!({ "kind": "host", "selectors": [{ "expr": "host.nme == \"x\"" }] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        err["error"].as_str().unwrap().contains("unknown field"),
+        "{err}"
+    );
+}

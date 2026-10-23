@@ -189,6 +189,7 @@ Admins.
 | `PUT config/objects/{kind}/{name}` | create or replace it, apply |
 | `DELETE config/objects/{kind}/{name}` | delete it, apply |
 | `POST config/reload` | read the files again |
+| `POST config/match` | `{"kind": "host"\|"service", "selectors": [...]}`: what they match now, with why |
 | `GET config/scripts` | check directories and their executables |
 | `GET config/tree/{kind}/{name}` | Config Tree; service name `host/service` |
 | `POST config/edit` | object → file change; writes nothing |

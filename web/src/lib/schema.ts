@@ -301,7 +301,7 @@ function selectorToForm(v: unknown, selects: 'host' | 'service'): Record<string,
 }
 
 /** The selector to write; keys the form doesn't show are kept. */
-function selectorFromForm(form: Record<string, string>, raw: unknown, selects: 'host' | 'service'): unknown {
+export function selectorFromForm(form: Record<string, string>, raw: unknown, selects: 'host' | 'service'): unknown {
 	if (form.list?.trim()) return items(form.list);
 	const out: Record<string, unknown> = isTable(raw) ? copy(raw) : {};
 	for (const [key] of SELECTOR_FIELDS[selects]) {

@@ -4,6 +4,7 @@
 	import { config, editHref, fileHref } from '#lib/config.svelte.ts';
 	import ConfigHead from '#lib/ConfigHead.svelte';
 	import { live } from '#lib/live.svelte.ts';
+	import { RELATIONS, remote } from '#lib/membership.ts';
 	import { KINDS } from '#lib/schema.ts';
 
 	let kind = $derived(KINDS.find((k) => k.path === page.params.kind));
@@ -59,6 +60,17 @@
 	}
 
 </script>
+
+<!-- A membership list: what the object lists, then (muted) what lists it on the other side. -->
+{#snippet both(o: ConfigObject)}
+	{@const rel = RELATIONS[o.kind]}
+	{#if rel}
+		{@const own = list(o.fields[rel.field])}
+		{own}{#each remote(config.objects, o.kind, o.name, own.split(', ').filter(Boolean)) as r, i (r.name)}{own || i ? ', ' : ''}<span
+				class="muted" title={r.pattern ? `${rel.other} ${r.name}: pattern ${r.pattern}` : `listed on ${rel.other} ${r.name}`}>{r.name}</span
+			>{/each}
+	{/if}
+{/snippet}
 
 <div class="content">
 	{#if !kind}
@@ -128,23 +140,23 @@
 								</td>
 								{#if kind.kind === 'host'}
 									<td class="mono">{f.address ?? ''}</td>
-									<td>{list(f.groups)}</td>
+									<td>{@render both(o)}</td>
 									<td class="hide-narrow">{[list(f.services), list(f.servicegroups)].filter(Boolean).join(' · ')}</td>
 								{:else if kind.kind === 'service'}
 									<td class="mono info">{f.passive === true ? 'passive' : f.command !== undefined ? list(f.command) : list(f.check ?? o.name)}</td>
-									<td class="hide-narrow">{list(f.groups)}</td>
+									<td class="hide-narrow">{@render both(o)}</td>
 								{:else if kind.kind === 'check'}
 									<td class="mono info">{f.passive === true ? 'passive' : list(f.command)}</td>
 								{:else if kind.kind === 'hostgroup'}
 									<td>{list(f.title)}</td>
-									<td class="mono">{list(f.members)}</td>
+									<td class="mono">{@render both(o)}</td>
 									<td class="hide-narrow">{[list(f.services), list(f.servicegroups)].filter(Boolean).join(' · ')}</td>
 								{:else if kind.kind === 'servicegroup'}
 									<td>{list(f.title)}</td>
-									<td class="mono">{list(f.services)}</td>
+									<td class="mono">{@render both(o)}</td>
 								{:else if kind.kind === 'contactgroup'}
 									<td>{list(f.title)}</td>
-									<td class="mono">{list(f.members)}</td>
+									<td class="mono">{@render both(o)}</td>
 								{:else if kind.kind === 'downtimegroup'}
 									<td>{list(f.title)}</td>
 									<td class="mono">{[list(f.members), list(f.hostgroups)].filter(Boolean).join(' · ')}</td>
@@ -152,7 +164,7 @@
 								{:else if kind.kind === 'contact'}
 									<td>{list(f.email)}</td>
 									<td class="mono hide-narrow info">{list(f.webhook)}</td>
-									<td class="hide-narrow">{list(f.groups)}</td>
+									<td class="hide-narrow">{@render both(o)}</td>
 								{:else if kind.kind === 'notify'}
 									<td>{[list(f.contacts), list(f.contact_groups)].filter(Boolean).join(', ')}</td>
 									<td class="mono">{[f.hosts !== undefined ? `hosts ${selector(f.hosts)}` : '', f.services !== undefined ? `services ${selector(f.services)}` : ''].filter(Boolean).join(' · ') || 'all'}</td>

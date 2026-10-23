@@ -10,7 +10,9 @@
 	import ConfigTree from '#lib/ConfigTree.svelte';
 	import { live } from '#lib/live.svelte.ts';
 	import { Suggest } from '#lib/suggest.ts';
-	import { KINDS, SCHEMAS, SELECTOR_FIELDS, expandNames, fromForm, otherKeys, toForm, type Field, type FormValues, type ServiceRow, type WindowRow } from '#lib/schema.ts';
+	import MatchPreview from '#lib/MatchPreview.svelte';
+	import { RELATIONS, remote, without } from '#lib/membership.ts';
+	import { KINDS, SCHEMAS, SELECTOR_FIELDS, expandNames, fromForm, otherKeys, selectorFromForm, toForm, type Field, type FormValues, type ServiceRow, type WindowRow } from '#lib/schema.ts';
 
 	const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 	const TIMES = ['00:00', '01:00', '02:00', '03:00', '04:00', '05:00', '06:00', '12:00', '18:00', '20:00', '22:00', '23:00', '24:00'];
@@ -50,7 +52,10 @@
 		void kind;
 		void name;
 		void cloneName;
-		untrack(() => (values = null));
+		untrack(() => {
+			values = null;
+			dropped = [];
+		});
 	});
 
 	// Fill the form once the object is there; later reloads don't reset edits.
@@ -71,6 +76,57 @@
 	});
 
 	let others = $derived(kind ? otherKeys(kind.kind, raw) : []);
+
+	/** Group membership kept on the other side (a host group listing this host, ...). */
+	let relation = $derived(kind ? RELATIONS[kind.kind] : undefined);
+	let otherPath = $derived(KINDS.find((k) => k.kind === relation?.other)?.path ?? '');
+	let remotes = $derived.by(() => {
+		if (!kind || !relation || !values || !object) return [];
+		return remote(config.objects, kind.kind, object.name, items(String(values[relation.field] ?? '')));
+	});
+	/** Other objects this form takes the membership out of on save. */
+	let dropped = $state<string[]>([]);
+
+	/** Edits of the other side: `drop` loses this object, the rest follow a rename. */
+	function remoteEdits(drop: string[], newName: string | null) {
+		if (!relation || !object) return [];
+		const rel = relation;
+		const old = object.name;
+		return remotes
+			.filter((r) => r.listed && (drop.includes(r.name) || (newName !== null && newName !== old)))
+			.flatMap((r) => {
+				const o = config.find(rel.other, r.name);
+				if (!o) return [];
+				const fields = without(o, rel.otherField, old);
+				if (!drop.includes(r.name) && newName) fields[rel.otherField] = [...list(fields[rel.otherField]), newName];
+				return [{ kind: rel.other, name: r.name, fields }];
+			});
+	}
+
+	function list(v: unknown): string[] {
+		return v === undefined ? [] : Array.isArray(v) ? v.map(String) : [String(v)];
+	}
+
+	/** Selectors for the match preview of a field, or null for none. */
+	function previewOf(f: Field): { kind: 'host' | 'service'; selectors: unknown[]; none?: string } | null {
+		if (!kind || !values) return null;
+		if (f.type === 'selector') {
+			const selects = f.selects ?? 'host';
+			const sel = selectorFromForm(values[f.key] as Record<string, string>, raw[f.key], selects);
+			return { kind: selects, selectors: sel === undefined ? [] : [sel], none: selects === 'host' ? 'All hosts' : 'All services' };
+		}
+		const names = (key: string) => items(String(values![key] ?? ''));
+		if (kind.kind === 'hostgroup' && f.key === 'members') {
+			return { kind: 'host', selectors: names('members').length ? [names('members')] : [] };
+		}
+		if (kind.kind === 'downtimegroup' && f.key === 'hostgroups') {
+			const sels: unknown[] = [];
+			if (names('members').length) sels.push(names('members'));
+			if (names('hostgroups').length) sels.push({ groups: names('hostgroups') });
+			return { kind: 'host', selectors: sels, none: 'No hosts' };
+		}
+		return null;
+	}
 
 	let suggest = $derived(
 		new Suggest(config.objects, [...new Set(live.services.map((s) => s.service))], scripts?.scripts ?? [])
@@ -115,8 +171,11 @@
 		error = null;
 		try {
 			const fields = fromForm(kind.kind, raw, values);
+			const extra = remoteEdits(dropped, typeof fields.name === 'string' ? fields.name : null);
 			if (source) {
 				pending = await clones(kind.kind, fields, source.path);
+			} else if (extra.length) {
+				pending = (await api.editMany([{ kind: kind.kind, name, fields }, ...extra])).changes;
 			} else {
 				pending = [await api.editObject(kind.kind, name, fields)];
 			}
@@ -130,7 +189,11 @@
 		if (!kind || name === null) return;
 		error = null;
 		try {
-			pending = [await api.editObject(kind.kind, name, null)];
+			// Lists on the other side lose it too.
+			const extra = remoteEdits(remotes.map((r) => r.name), null);
+			pending = extra.length
+				? (await api.editMany([{ kind: kind.kind, name, fields: null }, ...extra])).changes
+				: [await api.editObject(kind.kind, name, null)];
 			deleting = true;
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
@@ -317,6 +380,26 @@
 											/>
 										{/if}
 										{#if f.help}<div class="help">{f.help}</div>{/if}
+										{#if relation && f.key === relation.field && remotes.length > 0}
+											<div class="also">
+												<span class="muted">Also:</span>
+												{#each remotes as r (r.name)}
+													<span class="chip" class:gone={dropped.includes(r.name)}>
+														<a href="/config/{otherPath}/edit?name={encodeURIComponent(r.name)}">{r.name}</a>
+														<span class="muted">{r.pattern ? `pattern ${r.pattern}` : `listed on ${relation.other}`}</span>
+														{#if r.listed}
+															<button type="button" class="x" aria-label="Remove {r.name}" title={dropped.includes(r.name) ? 'Keep' : 'Remove there on save'}
+																onclick={() => (dropped = dropped.includes(r.name) ? dropped.filter((d) => d !== r.name) : [...dropped, r.name])}
+															>{dropped.includes(r.name) ? '↺' : '×'}</button>
+														{/if}
+													</span>
+												{/each}
+											</div>
+										{/if}
+										{#if previewOf(f)}
+											{@const preview = previewOf(f)!}
+											<MatchPreview kind={preview.kind} selectors={preview.selectors} none={preview.none} />
+										{/if}
 										{#if f.scripts && scripts}
 											<div class="help">Check dirs: <span class="mono">{scripts.dirs.join(', ')}</span> ({scripts.scripts.length} scripts)</div>
 										{/if}
@@ -456,6 +539,39 @@
 		outline: 2px solid var(--link);
 		outline-offset: 3px;
 		border-radius: 2px;
+	}
+
+	.also {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px 6px;
+		align-items: center;
+		margin-top: 4px;
+		font-size: 12px;
+	}
+
+	.chip {
+		display: inline-flex;
+		gap: 5px;
+		align-items: center;
+		padding: 1px 6px;
+		border: 1px solid var(--line);
+		border-radius: 3px;
+		background: var(--panel-alt);
+	}
+
+	.chip.gone {
+		text-decoration: line-through;
+		opacity: 0.6;
+	}
+
+	.chip .x {
+		border: 0;
+		padding: 0 2px;
+		background: none;
+		color: var(--muted);
+		cursor: pointer;
+		font: inherit;
 	}
 
 	.row.head {

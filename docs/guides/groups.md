@@ -12,6 +12,9 @@ Fields: [reference](../reference/objects.md#hostgroup).
 
 ## Host groups
 
+Membership can be written on the host or on the group. Both forms in the
+web UI show all of it, with where it is written.
+
 Listed on the host:
 
 ```toml

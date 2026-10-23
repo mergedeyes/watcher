@@ -478,6 +478,9 @@ export const api = {
 	editMany: (
 		edits: { kind: Kind; name: string | null; fields: Record<string, unknown> | null; path?: string }[]
 	) => send<{ changes: Change[] }>('POST', '/config/edit-many', { edits }),
+	/** What selectors match in the running config, with why. */
+	match: (kind: 'host' | 'service', selectors: unknown[]) =>
+		send<{ total: number; matches: { name: string; why: string }[] }>('POST', '/config/match', { kind, selectors }),
 	preview: (changes: Change[]) => send<Preview>('POST', '/config/preview', { changes }),
 	apply: (changes: Change[]) =>
 		send<{ changes: Changes; diagnostics: Problem[] }>('POST', '/config/apply', { changes })

@@ -195,6 +195,74 @@ pub async fn tree(
     }
 }
 
+#[derive(Deserialize)]
+pub struct MatchBody {
+    /// `host` or `service`.
+    kind: String,
+    /// Selectors as in the object files; a match of any counts.
+    selectors: Vec<serde_json::Value>,
+}
+
+/// What selectors (or host group member lists) match in the running
+/// configuration, with why: the preview under selector fields.
+pub async fn matches(
+    State(hub): Shared,
+    user: User,
+    Json(body): Json<MatchBody>,
+) -> Result<Response, ApiError> {
+    admin(&hub, &user)?;
+    let config = hub.config();
+    let values = body
+        .selectors
+        .into_iter()
+        .map(|v| {
+            toml::Value::deserialize(v).map_err(|e| ApiError::BadRequest(format!("selector: {e}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let found: Vec<(String, String)> = match body.kind.as_str() {
+        "host" => {
+            let sels = values
+                .iter()
+                .map(|v| watcher_config::HostSelector::parse(v).map_err(ApiError::BadRequest))
+                .collect::<Result<Vec<_>, _>>()?;
+            config
+                .hosts
+                .iter()
+                .filter_map(|h| {
+                    let why = sels.iter().find_map(|s| s.matches(h))?;
+                    Some((h.name.clone(), why))
+                })
+                .collect()
+        }
+        "service" => {
+            let sels = values
+                .iter()
+                .map(|v| watcher_config::ServiceSelector::parse(v).map_err(ApiError::BadRequest))
+                .collect::<Result<Vec<_>, _>>()?;
+            config
+                .services
+                .iter()
+                .filter_map(|s| {
+                    let why = sels.iter().find_map(|sel| sel.matches(s, config.host(s)))?;
+                    Some((s.id.clone(), why))
+                })
+                .collect()
+        }
+        other => {
+            return Err(ApiError::BadRequest(format!(
+                "kind {other:?}: host or service"
+            )));
+        }
+    };
+    let total = found.len();
+    let matches: Vec<_> = found
+        .into_iter()
+        .take(500)
+        .map(|(name, why)| json!({ "name": name, "why": why }))
+        .collect();
+    Ok(Json(json!({ "total": total, "matches": matches })).into_response())
+}
+
 pub async fn file(
     State(hub): Shared,
     user: User,

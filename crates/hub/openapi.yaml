@@ -618,6 +618,33 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "422": { description: Invalid (something still uses it); diagnostics }
 
+  /config/match:
+    post:
+      summary: What selectors match in the running config, with why (admins)
+      description: For previews. Host group and downtime group member lists are host selectors (lists of names and patterns).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, selectors]
+              properties:
+                kind: { type: string, enum: [host, service] }
+                selectors: { type: array, items: {}, description: "Selectors; a match of any counts" }
+            example: { kind: host, selectors: [{ groups: [linux], exclude: { name: "lab*" } }] }
+      responses:
+        "200":
+          description: Matches (first 500)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  matches: { type: array, items: { type: object, properties: { name: { type: string }, why: { type: string } } } }
+        "400": { $ref: "#/components/responses/Error" }
+
   /config/reload:
     post:
       summary: Read the object files again (admins)

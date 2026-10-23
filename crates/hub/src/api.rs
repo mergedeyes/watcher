@@ -71,6 +71,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
                 .delete(config::delete_object),
         )
         .route("/api/v1/config/reload", post(config::reload))
+        .route("/api/v1/config/match", post(config::matches))
         .route("/api/v1/config/scripts", get(config::scripts))
         .route("/api/v1/config/tree/{kind}/{*name}", get(config::tree))
         .route("/api/v1/config/edit", post(config::edit))
