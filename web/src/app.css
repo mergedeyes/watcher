@@ -28,6 +28,8 @@
 	--on-crit: #ffffff;
 	--on-unknown: #ffffff;
 	--on-pending: #ffffff;
+	--downtime: #1f6feb;
+	--on-downtime: #ffffff;
 	/* Row tints for problems */
 	--tint-warn: #fff8db;
 	--tint-crit: #ffecec;
@@ -56,6 +58,7 @@
 		--muted: #8d96a0;
 		--link: #58a6ff;
 		--focus: #58a6ff;
+		--downtime: #388bfd;
 		--side-bg: #0b0f14;
 		--side-active: #1b2129;
 		--tint-warn: #2b2610;
@@ -373,8 +376,9 @@ a.btn:hover {
 	border-color: var(--link);
 }
 .tag.downtime {
-	color: var(--pending);
-	border-color: var(--pending);
+	color: var(--on-downtime);
+	background: var(--downtime);
+	border-color: var(--downtime);
 }
 
 /* Host rows: DOWN is tinted like CRITICAL */

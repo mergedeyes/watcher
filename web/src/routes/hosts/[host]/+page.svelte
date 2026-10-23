@@ -101,9 +101,9 @@
 						<th>Host Status</th>
 						<td>
 							<Status state={host.state} />
+							{#if host.last_change}<span class="muted">&nbsp;for {since(host.last_change, live.now)}</span>{/if}
 							{#if host.flapping}<span class="tag flap">FLAPPING</span>{/if}
 							<Flags v={host} />
-							{#if host.last_change}<span class="muted">&nbsp;for {since(host.last_change, live.now)}</span>{/if}
 						</td>
 					</tr>
 					{#if host.check}
