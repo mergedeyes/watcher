@@ -28,6 +28,24 @@ function uniq(values: string[]): string[] {
 	return [...new Set(values.filter((v) => v.trim() !== ''))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
 
+const UNIT_SECS: Record<string, number> = { ms: 0.001, s: 1, m: 60, h: 3600, d: 86400, w: 604800 };
+
+/** Seconds in a duration like `90s`, `1h30m`; NaN if it isn't one. */
+export function durationSecs(text: string): number {
+	const parts = [...text.trim().matchAll(/(\d+(?:\.\d+)?)\s*(ms|s|m|h|d|w)/g)];
+	if (parts.length === 0 || parts.map((p) => p[0]).join('') !== text.replace(/\s+/g, '')) return NaN;
+	return parts.reduce((sum, [, n, unit]) => sum + Number(n) * UNIT_SECS[unit!]!, 0);
+}
+
+/** Durations, shortest first; other text after them. */
+function byDuration(values: string[]): string[] {
+	const secs = (v: string) => {
+		const n = durationSecs(v);
+		return Number.isNaN(n) ? Infinity : n;
+	};
+	return [...values].sort((a, b) => secs(a) - secs(b) || a.localeCompare(b));
+}
+
 /** Suggestions for one config form, built from all objects. */
 export class Suggest {
 	constructor(
@@ -132,7 +150,7 @@ export class Suggest {
 			case 'retry_interval':
 			case 'timeout':
 			case 'freshness':
-				return uniq([...used, ...DURATIONS]).map((value) => ({ value }));
+				return byDuration(uniq([...used, ...DURATIONS])).map((value) => ({ value }));
 			case 'email':
 				return this.used('contact', 'email').map((value) => ({ value }));
 			default:
