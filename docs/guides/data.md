@@ -38,6 +38,8 @@ Values are stored normalized: seconds, bytes, percent
 
 - `state_events.kind`: `service`, `host` (UP/DOWN), `flap_start`,
   `flap_stop`.
+- `v_service_state`: state changes at once; `last_check` and `output`
+  without a change every 30 s.
 - `samples.flags`: 1 SYNTHETIC, 2 SUSPECT, 4 MASKED. `v_metrics` hides
   MASKED.
 - Hosts and services removed from the config get `removed_at`; history
