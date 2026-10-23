@@ -884,6 +884,120 @@ pub(crate) async fn scheduler(
     Ok(Json(out))
 }
 
+/// The result of a run that isn't recorded.
+#[derive(Debug, Serialize)]
+pub(crate) struct RunResult {
+    command: String,
+    #[serde(flatten)]
+    result: watcher_core::CheckResult,
+    stdout: String,
+    stderr: String,
+    /// How the process ended, e.g. `exit 2` or `timeout`.
+    termination: String,
+    duration_ms: f64,
+}
+
+async fn run_once(
+    hub: &Hub,
+    command: &watcher_exec::CommandLine,
+    timeout: Duration,
+    format: watcher_core::Format,
+    thresholds: &BTreeMap<String, watcher_core::ThresholdSpec>,
+) -> RunResult {
+    let path = hub
+        .config_files
+        .get()
+        .map(|f| Arc::from(f.check_dirs.search_path().as_os_str()));
+    let options = watcher_exec::ExecOptions {
+        timeout,
+        output_limit: watcher_exec::DEFAULT_OUTPUT_LIMIT,
+        path,
+    };
+    let execution = watcher_exec::run(command, &options).await;
+    let result = watcher_core::evaluate(&execution.output, format, thresholds);
+    let termination = execution.output.termination.to_string();
+    RunResult {
+        command: command.to_string(),
+        result,
+        stdout: execution.output.stdout,
+        stderr: execution.output.stderr,
+        termination,
+        duration_ms: execution.duration.as_secs_f64() * 1000.0,
+    }
+}
+
+/// `POST /services/{host}/{service}/run`: runs the service's command now
+/// and returns the result without recording it (a test run).
+pub(crate) async fn run_service(
+    State(hub): Shared,
+    user: User,
+    Path((host, name)): Path<(String, String)>,
+) -> Result<Json<RunResult>, ApiError> {
+    author(&hub, &user)?;
+    let id = format!("{host}/{name}");
+    let service = hub
+        .config()
+        .service(&id)
+        .cloned()
+        .ok_or_else(|| ApiError::NotFound(format!("no service {id:?}")))?;
+    let command = service
+        .command
+        .as_ref()
+        .ok_or_else(|| ApiError::BadRequest(format!("{id} is passive: no command")))?;
+    let settings = &service.settings;
+    Ok(Json(
+        run_once(
+            &hub,
+            command,
+            settings.timeout,
+            settings.format,
+            &settings.thresholds,
+        )
+        .await,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RunBody {
+    command: String,
+    #[serde(default)]
+    shell: bool,
+    #[serde(default)]
+    format: watcher_core::Format,
+    /// Default 60s.
+    timeout: Option<String>,
+}
+
+/// `POST /run-check`: runs any command as a check, with the check
+/// directories in `PATH`, and returns the result. Admins only.
+pub(crate) async fn run_check(
+    State(hub): Shared,
+    user: User,
+    Json(body): Json<RunBody>,
+) -> Result<Json<RunResult>, ApiError> {
+    let who = require_admin(&hub, &user)?;
+    let command = match body.shell {
+        true => watcher_exec::CommandLine::Shell(body.command.clone()),
+        false => watcher_exec::CommandLine::Argv(
+            shell_words::split(&body.command)
+                .map_err(|e| ApiError::BadRequest(format!("cannot split command: {e}")))?,
+        ),
+    };
+    if matches!(&command, watcher_exec::CommandLine::Argv(a) if a.is_empty()) {
+        return Err(ApiError::BadRequest("command is empty".into()));
+    }
+    let timeout = match &body.timeout {
+        Some(t) => humantime::parse_duration(t)
+            .map_err(|e| ApiError::BadRequest(format!("invalid timeout {t:?}: {e}")))?,
+        None => Duration::from_secs(60),
+    };
+    info!("{who}: run-check {}", body.command);
+    Ok(Json(
+        run_once(&hub, &command, timeout, body.format, &BTreeMap::new()).await,
+    ))
+}
+
 /// Results per minute, for the process view.
 #[derive(Default)]
 pub(crate) struct Counter {

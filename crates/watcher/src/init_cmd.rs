@@ -12,7 +12,7 @@ use watcher_hub::auth::hash_password;
 use watcher_notify::{Mailer, Notification, Notifier};
 use watcher_store::Store;
 
-pub(crate) const MIN_PASSWORD: usize = 10;
+pub(crate) use watcher_hub::auth::MIN_PASSWORD;
 
 #[derive(clap::Args)]
 pub struct Args {

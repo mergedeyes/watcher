@@ -9,7 +9,7 @@ use crate::Hub;
 use crate::api::ApiError;
 use crate::auth::CurrentUser;
 use axum::Json;
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
@@ -212,17 +212,128 @@ pub async fn file(
 }
 
 /// All objects as written, before templates apply.
-pub async fn objects(State(hub): Shared, user: User) -> Result<Response, ApiError> {
+#[derive(Deserialize)]
+pub struct ObjectsQuery {
+    /// Only objects of this kind.
+    kind: Option<Kind>,
+}
+
+pub async fn objects(
+    State(hub): Shared,
+    user: User,
+    Query(q): Query<ObjectsQuery>,
+) -> Result<Response, ApiError> {
     admin(&hub, &user)?;
     let files = files(&hub)?;
     let dir = files.dir.clone();
-    let (objects, broken) = blocking(move || edit::objects(&dir))
+    let (mut objects, broken) = blocking(move || edit::objects(&dir))
         .await?
         .map_err(|e| ApiError::Internal(format!("cannot read the object files: {e}")))?;
+    if let Some(kind) = q.kind {
+        objects.retain(|o| o.kind == kind);
+    }
     Ok(
         Json(json!({ "objects": objects, "diagnostics": problems(files, &broken) }))
             .into_response(),
     )
+}
+
+/// One object as written, with its file and line.
+pub async fn object(
+    State(hub): Shared,
+    user: User,
+    Path((kind, name)): Path<(Kind, String)>,
+) -> Result<Response, ApiError> {
+    admin(&hub, &user)?;
+    let files = files(&hub)?;
+    let dir = files.dir.clone();
+    let (objects, _) = blocking(move || edit::objects(&dir))
+        .await?
+        .map_err(|e| ApiError::Internal(format!("cannot read the object files: {e}")))?;
+    objects
+        .into_iter()
+        .find(|o| o.kind == kind && o.name == name)
+        .map(|o| Json(o).into_response())
+        .ok_or_else(|| ApiError::NotFound(format!("{} {name:?} not found", kind.key())))
+}
+
+#[derive(Deserialize)]
+pub struct PutQuery {
+    /// For a new object: the file it goes to (default: the kind's UI file).
+    path: Option<String>,
+}
+
+/// Creates or replaces an object and applies it in one step: the body is
+/// its fields as written (`name` comes from the path). 422 with the
+/// diagnostics if the result has errors; nothing is written then.
+pub async fn put_object(
+    State(hub): Shared,
+    user: User,
+    Path((kind, name)): Path<(Kind, String)>,
+    Query(q): Query<PutQuery>,
+    Json(fields): Json<serde_json::Map<String, serde_json::Value>>,
+) -> Result<Response, ApiError> {
+    let by = admin(&hub, &user)?;
+    let files = files(&hub)?;
+    writable(files)?;
+    let mut fields = toml::Table::deserialize(serde_json::Value::Object(fields))
+        .map_err(|e| ApiError::BadRequest(format!("fields: {e}")))?;
+    fields.insert("name".into(), toml::Value::String(name.clone()));
+    let dir = files.dir.clone();
+    let lookup = dir.clone();
+    let (objects, _) = blocking(move || edit::objects(&lookup))
+        .await?
+        .map_err(|e| ApiError::Internal(format!("cannot read the object files: {e}")))?;
+    let exists = objects.iter().any(|o| o.kind == kind && o.name == name);
+    let e = edit::Edit {
+        kind,
+        name: exists.then_some(name),
+        fields: Some(fields),
+        path: q.path,
+    };
+    match blocking(move || edit::edit_many(&dir, &[e])).await? {
+        Ok(changes) => apply_changes(&hub, files, by, changes).await,
+        Err(err) => edit_error(files, err),
+    }
+}
+
+/// Deletes an object and applies it in one step.
+pub async fn delete_object(
+    State(hub): Shared,
+    user: User,
+    Path((kind, name)): Path<(Kind, String)>,
+) -> Result<Response, ApiError> {
+    let by = admin(&hub, &user)?;
+    let files = files(&hub)?;
+    writable(files)?;
+    let dir = files.dir.clone();
+    let e = edit::Edit {
+        kind,
+        name: Some(name),
+        fields: None,
+        path: None,
+    };
+    match blocking(move || edit::edit_many(&dir, &[e])).await? {
+        Ok(changes) => apply_changes(&hub, files, by, changes).await,
+        Err(err) => edit_error(files, err),
+    }
+}
+
+/// Reads the object files again, e.g. after editing them on the server.
+pub async fn reload(State(hub): Shared, user: User) -> Result<Response, ApiError> {
+    let by = admin(&hub, &user)?;
+    let files = files(&hub)?;
+    let (reply, rx) = oneshot::channel();
+    let unavailable = || ApiError::Unavailable("the server is not reloading".into());
+    files
+        .reload
+        .send(Reload { by, reply })
+        .await
+        .map_err(|_| unavailable())?;
+    match rx.await.map_err(|_| unavailable())? {
+        Ok(()) => Ok(Json(json!({ "reloaded": true })).into_response()),
+        Err(err) => Err(ApiError::BadRequest(format!("not reloaded: {err}"))),
+    }
 }
 
 #[derive(Deserialize)]
@@ -364,9 +475,18 @@ pub async fn apply(
     let by = admin(&hub, &user)?;
     let files = files(&hub)?;
     writable(files)?;
+    apply_changes(&hub, files, by, body.changes).await
+}
+
+/// Writes changes and reloads; see [`apply`].
+async fn apply_changes(
+    hub: &Hub,
+    files: &ConfigFiles,
+    by: String,
+    changes: Vec<Change>,
+) -> Result<Response, ApiError> {
     let _guard = hub.config_lock.lock().await;
     let dir = files.dir.clone();
-    let changes = body.changes;
     let paths: Vec<String> = changes.iter().map(|c| c.path.clone()).collect();
     let check_dirs = files.check_dirs.clone();
     let applied = blocking(move || {

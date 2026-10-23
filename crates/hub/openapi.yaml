@@ -129,6 +129,37 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
 
+  /services/{host}/{service}/run:
+    post:
+      summary: Run the service's command once and return the result, without recording it
+      parameters:
+        - { name: host, in: path, required: true, schema: { type: string } }
+        - { name: service, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: The result, content: { application/json: { schema: { $ref: "#/components/schemas/RunResult" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /run-check:
+    post:
+      summary: Run any command as a check, with the check directories in PATH (admins)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [command]
+              properties:
+                command: { type: string }
+                shell: { type: boolean, default: false }
+                format: { type: string, enum: [auto, nagios, key_value, json], default: auto }
+                timeout: { type: string, default: 60s }
+            example: { command: "check_ping -H 10.0.0.5 -w 100,20% -c 500,60%" }
+      responses:
+        "200": { description: The result, content: { application/json: { schema: { $ref: "#/components/schemas/RunResult" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+
   /services/{host}/{service}/series:
     get:
       summary: Metric series of a service
@@ -451,6 +482,54 @@ paths:
         "204": { description: Revoked }
         "404": { $ref: "#/components/responses/Error" }
 
+  /users:
+    get:
+      summary: User accounts (admins)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/User" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+    post:
+      summary: Create a user (admins)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, minLength: 10 }
+                admin: { type: boolean, default: false }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /users/{name}:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+    put:
+      summary: Change a user (admins), or your own password
+      description: A new password or disabling ends the user's sessions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                password: { type: string, minLength: 10 }
+                admin: { type: boolean }
+                disabled: { type: boolean }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      summary: Delete a user with their sessions and tokens (admins; not yourself)
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Error" }
+
   /config:
     get:
       summary: Config mode, object files and problems on disk (admins)
@@ -490,7 +569,9 @@ paths:
 
   /config/objects:
     get:
-      summary: All objects as written, before templates (admins)
+      summary: All objects as written (admins)
+      parameters:
+        - { name: kind, in: query, description: Only this kind, schema: { $ref: "#/components/schemas/Kind" } }
       responses:
         "200":
           description: OK
@@ -502,11 +583,53 @@ paths:
                   objects: { type: array, items: { $ref: "#/components/schemas/ConfigObject" } }
                   diagnostics: { type: array, items: { $ref: "#/components/schemas/Problem" } }
 
+  /config/objects/{kind}/{name}:
+    parameters:
+      - { name: kind, in: path, required: true, schema: { $ref: "#/components/schemas/Kind" } }
+      - { name: name, in: path, required: true, schema: { type: string } }
+    get:
+      summary: One object as written, with file and line (admins)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ConfigObject" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      summary: Create or replace an object and apply it (admins)
+      description: |
+        One step instead of edit + apply. The body is the object's fields as
+        written; `name` comes from the path. Existing objects are edited where
+        they are (comments kept); new ones go to `path` or the kind's UI file.
+        Responses as for `config/apply` (422 with diagnostics when invalid;
+        nothing is written then).
+      parameters:
+        - { name: path, in: query, description: "New objects: file, e.g. hosts/web.toml", schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+            example: { address: 10.0.0.7, groups: [linux], services: [http] }
+      responses:
+        "200": { description: Applied; changes and warnings }
+        "422": { description: Invalid; diagnostics }
+    delete:
+      summary: Delete an object and apply it (admins)
+      responses:
+        "200": { description: Applied; changes and warnings }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { description: Invalid (something still uses it); diagnostics }
+
+  /config/reload:
+    post:
+      summary: Read the object files again (admins)
+      responses:
+        "200": { description: Reloaded }
+        "400": { $ref: "#/components/responses/Error" }
+
   /config/tree/{kind}/{name}:
     get:
       summary: Config Tree of an object in the running config (admins)
       parameters:
-        - { name: kind, in: path, required: true, schema: { type: string, enum: [host, service, check, hostgroup, servicegroup, contact, contactgroup, notify] } }
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [host, service, check, hostgroup, servicegroup, contact, contactgroup, downtimegroup, notify] } }
         - { name: name, in: path, required: true, description: "host/service for services", schema: { type: string } }
       responses:
         "200":
@@ -809,6 +932,20 @@ components:
         state_type: { $ref: "#/components/schemas/StateType" }
         hard: { type: boolean }
         output: { type: string }
+    RunResult:
+      type: object
+      properties:
+        command: { type: string }
+        state: { $ref: "#/components/schemas/State" }
+        plugin_state: { $ref: "#/components/schemas/State" }
+        message: { type: string }
+        long_output: { type: string }
+        format: { type: [string, "null"] }
+        metrics: { type: array, items: { $ref: "#/components/schemas/Metric" } }
+        stdout: { type: string }
+        stderr: { type: string }
+        termination: { type: string }
+        duration_ms: { type: number }
     User:
       type: object
       properties:
@@ -838,10 +975,11 @@ components:
         path: { type: string }
         hash: { type: string, description: SHA-256 }
         text: { type: string }
+    Kind: { type: string, enum: [check, service, host, hostgroup, servicegroup, contact, contactgroup, downtimegroup, notify, sink] }
     ConfigObject:
       type: object
       properties:
-        kind: { type: string, enum: [check, service, host, hostgroup, servicegroup, contact, contactgroup, notify, sink] }
+        kind: { $ref: "#/components/schemas/Kind" }
         name: { type: string }
         path: { type: string }
         line: { type: integer }
@@ -850,7 +988,7 @@ components:
       type: object
       required: [kind]
       properties:
-        kind: { type: string, enum: [check, service, host, hostgroup, servicegroup, contact, contactgroup, notify, sink] }
+        kind: { $ref: "#/components/schemas/Kind" }
         name: { type: [string, "null"], description: The object to change; null creates one }
         fields: { type: [object, "null"], description: The fields as written, with name; null deletes, example: { name: web01, address: 10.0.0.5, groups: [linux] } }
         path: { type: [string, "null"], description: "New objects: the file, relative to the object directory (default: the kind's ui/ file)" }

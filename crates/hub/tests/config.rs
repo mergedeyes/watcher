@@ -320,3 +320,53 @@ async fn clones_in_one_file() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
 }
+
+#[tokio::test]
+async fn objects_in_one_step() {
+    let mut s = setup("onestep", ConfigMode::Hybrid);
+    let (status, applied) = call(
+        &s.hub,
+        "PUT",
+        "/api/v1/config/objects/host/web02",
+        Some(json!({ "address": "10.0.0.6", "groups": ["web"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(
+        applied["changes"]["services"]["added"],
+        json!(["web02/http"])
+    );
+    assert_eq!(s.reloads.recv().await.unwrap(), "local user");
+    let (_, host) = call(&s.hub, "GET", "/api/v1/config/objects/host/web02", None).await;
+    assert_eq!(host["path"], "ui/hosts.toml");
+    assert_eq!(host["fields"]["address"], "10.0.0.6");
+
+    // Update in place, then an invalid change is refused.
+    let (status, _) = call(
+        &s.hub,
+        "PUT",
+        "/api/v1/config/objects/host/web02",
+        Some(json!({ "address": "10.0.0.7", "groups": ["web"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, err) = call(
+        &s.hub,
+        "PUT",
+        "/api/v1/config/objects/host/web02",
+        Some(json!({ "groups": ["nope"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{err}");
+    let (_, objects) = call(&s.hub, "GET", "/api/v1/config/objects?kind=host", None).await;
+    assert_eq!(objects["objects"].as_array().unwrap().len(), 2);
+
+    let (status, applied) = call(&s.hub, "DELETE", "/api/v1/config/objects/host/web02", None).await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(applied["changes"]["hosts"]["removed"], json!(["web02"]));
+    let (status, _) = call(&s.hub, "GET", "/api/v1/config/objects/host/web02", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = call(&s.hub, "POST", "/api/v1/config/reload", None).await;
+    assert_eq!(status, StatusCode::OK);
+}

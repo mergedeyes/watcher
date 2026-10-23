@@ -7,7 +7,7 @@ use watcher_hub::auth::{hash_password, new_api_token};
 use watcher_store::{Store, TokenRef};
 
 /// Shortest password accepted.
-const MIN_PASSWORD: usize = 10;
+use watcher_hub::auth::MIN_PASSWORD;
 
 /// Where the user accounts are: the database from watcher.toml or --database.
 #[derive(clap::Args)]

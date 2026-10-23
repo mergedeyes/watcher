@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use axum::middleware;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
@@ -35,6 +35,10 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/services", get(services))
         .route("/api/v1/services/{host}/{service}", get(service))
         .route("/api/v1/services/{host}/{service}/result", post(submit))
+        .route(
+            "/api/v1/services/{host}/{service}/run",
+            post(ops::run_service),
+        )
         .route("/api/v1/services/{host}/{service}/series", get(series))
         .route("/api/v1/series/{id}/points", get(points))
         .route("/api/v1/events", get(events))
@@ -44,6 +48,12 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/downtimes/{id}", delete(ops::cancel_downtime))
         .route("/api/v1/process", get(ops::process).put(ops::set_process))
         .route("/api/v1/scheduler", get(ops::scheduler))
+        .route("/api/v1/run-check", post(ops::run_check))
+        .route("/api/v1/users", get(auth::users).post(auth::create_user))
+        .route(
+            "/api/v1/users/{name}",
+            put(auth::update_user).delete(auth::delete_user),
+        )
         .route("/api/v1/groups", get(groups))
         .route("/api/v1/stream", get(stream))
         .route("/api/v1/auth/status", get(auth::status))
@@ -54,6 +64,13 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/config", get(config::overview))
         .route("/api/v1/config/files/{*path}", get(config::file))
         .route("/api/v1/config/objects", get(config::objects))
+        .route(
+            "/api/v1/config/objects/{kind}/{name}",
+            get(config::object)
+                .put(config::put_object)
+                .delete(config::delete_object),
+        )
+        .route("/api/v1/config/reload", post(config::reload))
         .route("/api/v1/config/scripts", get(config::scripts))
         .route("/api/v1/config/tree/{kind}/{*name}", get(config::tree))
         .route("/api/v1/config/edit", post(config::edit))
@@ -529,9 +546,13 @@ mod tests {
     #[test]
     fn openapi_lists_every_route() {
         let source = include_str!("api.rs");
-        let mut routes: Vec<String> = source
-            .lines()
-            .filter_map(|l| l.trim().strip_prefix(".route(\"/api/v1"))
+        // `.route("/api/v1/...` with the path on the same or the next line,
+        // outside this test.
+        let router = source.split("#[cfg(test)]").next().unwrap();
+        let mut routes: Vec<String> = router
+            .split(".route(")
+            .skip(1)
+            .filter_map(|r| r.trim_start().strip_prefix("\"/api/v1"))
             .map(|r| r.split('"').next().unwrap().replace("{*", "{"))
             .collect();
         routes.sort();

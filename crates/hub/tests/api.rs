@@ -461,3 +461,29 @@ async fn recheck_process_and_schedule() {
     assert_eq!(http["paused"], true);
     assert_eq!(http["host"], "web01");
 }
+
+#[tokio::test]
+async fn run_without_recording() {
+    let hub = hub();
+    let (status, run) = call(
+        &hub,
+        "POST",
+        "/api/v1/run-check",
+        Some(json!({ "command": "echo 'DISK OK | used=42%;80;90'", "shell": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{run}");
+    assert_eq!(run["state"], "ok");
+    assert_eq!(run["message"], "DISK OK");
+    assert_eq!(run["metrics"][0]["name"], "used");
+    assert_eq!(run["termination"], "check exited with code 0");
+
+    // A configured service: its command runs, nothing is recorded.
+    let (status, run) = call(&hub, "POST", "/api/v1/services/web01/http/run", None).await;
+    assert_eq!(status, StatusCode::OK, "{run}");
+    assert!(run["command"].as_str().unwrap().starts_with("check_http"));
+    let (_, svc) = call(&hub, "GET", "/api/v1/services/web01/http", None).await;
+    assert_eq!(svc["last_check"], Value::Null);
+    let (status, _) = call(&hub, "POST", "/api/v1/services/db01/dump/run", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

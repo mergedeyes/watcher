@@ -355,6 +355,133 @@ pub async fn delete_token(
     }
 }
 
+/// Admins only; without login, anyone (the server is on loopback then).
+fn admin_user(hub: &Hub, user: &Option<Extension<CurrentUser>>) -> Result<String, ApiError> {
+    match user {
+        Some(Extension(CurrentUser(u))) if u.admin => Ok(u.username.clone()),
+        None if !hub.auth.required => Ok("local user".into()),
+        _ => Err(ApiError::Forbidden("admin rights required".into())),
+    }
+}
+
+/// All user accounts. Admins only.
+pub async fn users(
+    State(hub): State<Arc<Hub>>,
+    user: Option<Extension<CurrentUser>>,
+) -> Result<Json<Vec<User>>, ApiError> {
+    admin_user(&hub, &user)?;
+    let store = hub.store.as_deref().ok_or(ApiError::NoDatabase)?;
+    Ok(Json(store.users().await?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NewUser {
+    username: String,
+    password: String,
+    #[serde(default)]
+    admin: bool,
+}
+
+/// Creates a user. Admins only.
+pub async fn create_user(
+    State(hub): State<Arc<Hub>>,
+    user: Option<Extension<CurrentUser>>,
+    Json(body): Json<NewUser>,
+) -> Result<(StatusCode, Json<User>), ApiError> {
+    let by = admin_user(&hub, &user)?;
+    let store = hub.store.as_deref().ok_or(ApiError::NoDatabase)?;
+    let name = body.username.trim();
+    if name.is_empty()
+        || name.len() > 64
+        || name.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(ApiError::BadRequest(
+            "usernames are 1 to 64 characters without spaces".into(),
+        ));
+    }
+    check_password(&body.password)?;
+    let hash = hash_password(&body.password).map_err(ApiError::Internal)?;
+    let created = store.create_user(name, &hash, body.admin).await?;
+    tracing::info!("{by}: created user {name}");
+    Ok((StatusCode::CREATED, Json(created)))
+}
+
+/// Shortest password accepted anywhere (API, CLI, setup).
+pub const MIN_PASSWORD: usize = 10;
+
+fn check_password(password: &str) -> Result<(), ApiError> {
+    match password.chars().count() < MIN_PASSWORD {
+        true => Err(ApiError::BadRequest(format!(
+            "password: at least {MIN_PASSWORD} characters"
+        ))),
+        false => Ok(()),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserChange {
+    password: Option<String>,
+    admin: Option<bool>,
+    disabled: Option<bool>,
+}
+
+/// Changes a user: admins anything, users their own password.
+pub async fn update_user(
+    State(hub): State<Arc<Hub>>,
+    user: Option<Extension<CurrentUser>>,
+    Path(name): Path<String>,
+    Json(body): Json<UserChange>,
+) -> Result<Json<User>, ApiError> {
+    let store = hub.store.as_deref().ok_or(ApiError::NoDatabase)?;
+    let own = user
+        .as_ref()
+        .is_some_and(|Extension(CurrentUser(u))| u.username.eq_ignore_ascii_case(&name));
+    let only_password = body.admin.is_none() && body.disabled.is_none();
+    let by = match (own && only_password, admin_user(&hub, &user)) {
+        (true, _) => name.clone(),
+        (false, Ok(by)) => by,
+        (false, Err(e)) => return Err(e),
+    };
+    if own && body.disabled == Some(true) {
+        return Err(ApiError::BadRequest("you can't disable yourself".into()));
+    }
+    let not_found = || ApiError::NotFound(format!("no user {name:?}"));
+    if let Some(password) = &body.password {
+        check_password(password)?;
+        let hash = hash_password(password).map_err(ApiError::Internal)?;
+        if !store.set_password(&name, &hash).await? {
+            return Err(not_found());
+        }
+    }
+    let updated = store
+        .update_user(&name, body.admin, body.disabled)
+        .await?
+        .ok_or_else(not_found)?;
+    tracing::info!("{by}: changed user {name}");
+    Ok(Json(updated))
+}
+
+/// Deletes a user with their sessions and tokens. Admins only, not
+/// themselves.
+pub async fn delete_user(
+    State(hub): State<Arc<Hub>>,
+    user: Option<Extension<CurrentUser>>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let by = admin_user(&hub, &user)?;
+    if by.eq_ignore_ascii_case(&name) {
+        return Err(ApiError::BadRequest("you can't delete yourself".into()));
+    }
+    let store = hub.store.as_deref().ok_or(ApiError::NoDatabase)?;
+    if !store.delete_user(&name).await? {
+        return Err(ApiError::NotFound(format!("no user {name:?}")));
+    }
+    tracing::info!("{by}: deleted user {name}");
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

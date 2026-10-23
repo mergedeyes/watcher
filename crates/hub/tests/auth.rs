@@ -15,10 +15,10 @@ use watcher_hub::auth::{hash_password, new_api_token};
 use watcher_hub::{AuthSettings, ConfigFiles, Hub};
 use watcher_store::Store;
 
-/// Creates a database for this test; returns its URL and the admin URL.
-async fn database() -> Option<(String, String)> {
+/// Creates a database for test `test`; returns its URL and the admin URL.
+async fn database(test: &str) -> Option<(String, String)> {
     let admin = std::env::var("WATCHER_TEST_POSTGRES_URL").ok()?;
-    let name = format!("watcher_hub_auth_{}", std::process::id());
+    let name = format!("watcher_hub_auth_{test}_{}", std::process::id());
     let mut conn = PgConnection::connect(&admin).await.unwrap();
     sqlx::query(AssertSqlSafe(format!(
         "DROP DATABASE IF EXISTS {name} WITH (FORCE)"
@@ -95,7 +95,7 @@ impl Client {
 
 #[tokio::test]
 async fn login_sessions_and_tokens() {
-    let Some((url, admin)) = database().await else {
+    let Some((url, admin)) = database("login").await else {
         eprintln!("skipped: set WATCHER_TEST_POSTGRES_URL");
         return;
     };
@@ -273,6 +273,144 @@ async fn login_sessions_and_tokens() {
             .await
             .0,
         StatusCode::TOO_MANY_REQUESTS
+    );
+
+    drop(c);
+    drop(store);
+    let mut conn = PgConnection::connect(&admin).await.unwrap();
+    let name = &url[url.rfind('/').unwrap() + 1..];
+    sqlx::query(AssertSqlSafe(format!("DROP DATABASE {name} WITH (FORCE)")))
+        .execute(&mut conn)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn users_api_and_actions_with_a_token() {
+    let Some((url, admin)) = database("users").await else {
+        eprintln!("skipped: set WATCHER_TEST_POSTGRES_URL");
+        return;
+    };
+    let store = Arc::new(Store::connect(&url).await.unwrap());
+    let alice = store
+        .create_user("alice", &hash_password("alice's password").unwrap(), true)
+        .await
+        .unwrap();
+    let (token, hash) = new_api_token();
+    store.create_token(alice.id, "ci", &hash).await.unwrap();
+    let bearer = format!("Bearer {token}");
+    let auth = [("authorization", bearer.as_str())];
+    let (control, _rx) = mpsc::channel(8);
+    let settings = AuthSettings {
+        required: true,
+        secure_cookies: false,
+    };
+    let hub = Hub::new(
+        Arc::new(Config::default()),
+        HashMap::new(),
+        control,
+        Some(store.clone()),
+        settings,
+    );
+    let mut c = Client { hub, cookie: None };
+
+    let (status, bob) = c
+        .call(
+            "POST",
+            "/api/v1/users",
+            Some(json!({ "username": "bob", "password": "bob's password" })),
+            &auth,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{bob}");
+    assert_eq!(bob["admin"], false);
+    let (status, _) = c
+        .call(
+            "POST",
+            "/api/v1/users",
+            Some(json!({ "username": "carol", "password": "short" })),
+            &auth,
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (_, list) = c.call("GET", "/api/v1/users", None, &auth).await;
+    assert_eq!(list.as_array().unwrap().len(), 2);
+
+    // Bob may change his own password, nothing else.
+    let bob_login = json!({ "username": "bob", "password": "bob's password" });
+    assert_eq!(
+        c.call("POST", "/api/v1/auth/login", Some(bob_login), &[])
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (status, _) = c
+        .call(
+            "PUT",
+            "/api/v1/users/bob",
+            Some(json!({ "password": "bob's new password" })),
+            &[("origin", "http://watcher.test")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    // A new password ends all sessions, this one too.
+    let bob_login = json!({ "username": "bob", "password": "bob's new password" });
+    assert_eq!(
+        c.call("GET", "/api/v1/services", None, &[]).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        c.call("POST", "/api/v1/auth/login", Some(bob_login), &[])
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (status, _) = c
+        .call(
+            "PUT",
+            "/api/v1/users/bob",
+            Some(json!({ "admin": true })),
+            &[("origin", "http://watcher.test")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    c.cookie = None;
+
+    // Admin with the token: make bob admin, disable, delete.
+    let (_, changed) = c
+        .call(
+            "PUT",
+            "/api/v1/users/bob",
+            Some(json!({ "admin": true, "disabled": true })),
+            &auth,
+        )
+        .await;
+    assert_eq!(
+        (changed["admin"].clone(), changed["disabled"].clone()),
+        (json!(true), json!(true))
+    );
+    assert_eq!(
+        c.call("DELETE", "/api/v1/users/alice", None, &auth).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        c.call("DELETE", "/api/v1/users/bob", None, &auth).await.0,
+        StatusCode::NO_CONTENT
+    );
+
+    // Process switches with the token, stored in the database.
+    let (status, _) = c
+        .call(
+            "PUT",
+            "/api/v1/process",
+            Some(json!({ "notifications": false })),
+            &auth,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        store.setting("notifications").await.unwrap(),
+        Some(json!(false))
     );
 
     drop(c);
