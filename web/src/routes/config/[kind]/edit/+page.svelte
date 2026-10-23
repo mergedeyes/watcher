@@ -279,7 +279,7 @@
 											<input {id} type="checkbox" bind:checked={values[f.key] as boolean} />
 										{:else if f.type === 'select'}
 											<select {id} bind:value={values[f.key]}>
-												<option value="">— (auto)</option>
+												<option value="">— ({f.placeholder ?? 'auto'})</option>
 												{#each f.options ?? [] as o (o)}<option value={o}>{o}</option>{/each}
 											</select>
 										{:else if f.type === 'vars'}

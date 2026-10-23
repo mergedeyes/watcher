@@ -8,6 +8,7 @@
 
 pub mod builtin;
 pub mod scheduler;
+pub mod ssh;
 
 pub use builtin::Builtin;
 
@@ -246,14 +247,14 @@ fn termination(status: ExitStatus) -> Termination {
 }
 
 /// Keeps the first `limit` bytes of a stream.
-struct Capture {
+pub(crate) struct Capture {
     data: Vec<u8>,
     limit: usize,
-    truncated: bool,
+    pub(crate) truncated: bool,
 }
 
 impl Capture {
-    fn new(limit: usize) -> Self {
+    pub(crate) fn new(limit: usize) -> Self {
         Capture {
             data: Vec::new(),
             limit,
@@ -261,7 +262,7 @@ impl Capture {
         }
     }
 
-    fn push(&mut self, chunk: &[u8]) {
+    pub(crate) fn push(&mut self, chunk: &[u8]) {
         let room = self.limit.saturating_sub(self.data.len());
         if chunk.len() > room {
             self.truncated = true;
@@ -269,7 +270,7 @@ impl Capture {
         self.data.extend_from_slice(&chunk[..room.min(chunk.len())]);
     }
 
-    fn text(&self) -> String {
+    pub(crate) fn text(&self) -> String {
         String::from_utf8_lossy(&self.data).into_owned()
     }
 }

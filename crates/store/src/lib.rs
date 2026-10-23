@@ -10,6 +10,7 @@ mod ops;
 mod query;
 mod reader;
 mod spool;
+mod ssh;
 mod sync;
 mod write;
 
@@ -19,6 +20,7 @@ pub use ops::{Downtime, Flag, FlagKind, OpsEvent};
 pub use query::{EventFilter, Points, Series, StateEvent};
 pub use reader::READABLE;
 pub use spool::Spool;
+pub use ssh::{HostKey, SecretInfo};
 pub use sync::{HostSpec, ServiceSpec, StoredState, SyncMode};
 pub use write::SeriesCache;
 

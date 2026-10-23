@@ -65,6 +65,7 @@ fn hub() -> Arc<Hub> {
         jobs(&config, &CheckDirs::default()),
         HashMap::new(),
         4,
+        Arc::new(watcher_exec::ssh::Pool::unavailable("no SSH in tests")),
         control_rx,
         events_tx,
     ));

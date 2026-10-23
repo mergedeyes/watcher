@@ -5,7 +5,7 @@
 //! server's own PATH, so lookup works the same for direct commands and for
 //! `shell = true`, and a script added to a directory works without a reload.
 
-use crate::{Config, Diagnostic, Origin, Severity};
+use crate::{Config, Diagnostic, Origin, RunOn, Severity};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -101,13 +101,17 @@ impl CheckDirs {
 
     /// Warnings for services whose program doesn't exist, at the place the
     /// command is written (usually the check). Only direct commands are
-    /// checked, not `shell = true` scripts.
+    /// checked, not `shell = true` scripts, nor commands that run on the
+    /// host without `copy`.
     pub fn missing_commands(&self, config: &Config) -> Vec<Diagnostic> {
         let mut found: BTreeMap<(Origin, String), String> = BTreeMap::new();
         for service in &config.services {
             let Some(CommandLine::Argv(argv)) = &service.command else {
                 continue;
             };
+            if service.settings.run_on == RunOn::Host && !service.settings.copy {
+                continue;
+            }
             let Some(program) = argv.first() else {
                 continue;
             };

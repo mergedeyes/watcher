@@ -44,7 +44,7 @@ from = "Watcher <watcher@example.com>"
 | `listen` | `127.0.0.1:8080` | HTTP API and web UI. Non-loopback needs a database (logins) |
 | `public_url` | | links in notifications; `https://` marks cookies Secure |
 | `conf_dir` | `conf.d` | object files, every `*.toml` below |
-| `data_dir` | `data` | sink buffers, instance id, self-signed certificate |
+| `data_dir` | `data` | sink buffers, instance id, self-signed certificate, `secret.key` ([SSH](../guides/ssh.md#secrets)) |
 | `config_mode` | `hybrid` | `hybrid`: UI and files; `files`: UI read-only; `ui`: files not watched |
 | `check_dirs` | `checks`, then the monitoring-plugins dirs | where bare command names are looked up, before `PATH` |
 

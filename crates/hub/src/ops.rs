@@ -1103,10 +1103,11 @@ pub(crate) struct RunResult {
 async fn run_once(
     hub: &Hub,
     command: &watcher_exec::CommandLine,
+    remote: Option<&watcher_exec::ssh::Remote>,
     timeout: Duration,
     format: watcher_core::Format,
     thresholds: &BTreeMap<String, watcher_core::ThresholdSpec>,
-) -> RunResult {
+) -> Result<RunResult, ApiError> {
     let path = hub
         .config_files
         .get()
@@ -1116,17 +1117,29 @@ async fn run_once(
         output_limit: watcher_exec::DEFAULT_OUTPUT_LIMIT,
         path,
     };
-    let execution = watcher_exec::run(command, &options).await;
+    let execution = match (remote, hub.ssh.get()) {
+        (Some(remote), Some(ssh)) => {
+            watcher_exec::ssh::run(&ssh.pool, remote, command, &options).await
+        }
+        (Some(_), None) => {
+            return Err(ApiError::Unavailable("SSH is not set up".into()));
+        }
+        (None, _) => watcher_exec::run(command, &options).await,
+    };
     let result = watcher_core::evaluate(&execution.output, format, thresholds);
     let termination = execution.output.termination.to_string();
-    RunResult {
-        command: command.to_string(),
+    let command = match remote {
+        Some(r) => format!("{command} (on {})", r.target),
+        None => command.to_string(),
+    };
+    Ok(RunResult {
+        command,
         result,
         stdout: execution.output.stdout,
         stderr: execution.output.stderr,
         termination,
         duration_ms: execution.duration.as_secs_f64() * 1000.0,
-    }
+    })
 }
 
 /// `POST /services/{host}/{service}/run`: runs the service's command now
@@ -1148,15 +1161,17 @@ pub(crate) async fn run_service(
         .as_ref()
         .ok_or_else(|| ApiError::BadRequest(format!("{id} is passive: no command")))?;
     let settings = &service.settings;
+    let remote = crate::remote(&hub.config(), &service);
     Ok(Json(
         run_once(
             &hub,
             command,
+            remote.as_ref(),
             settings.timeout,
             settings.format,
             &settings.thresholds,
         )
-        .await,
+        .await?,
     ))
 }
 
@@ -1197,7 +1212,7 @@ pub(crate) async fn run_check(
     };
     info!("{who}: run-check {}", body.command);
     Ok(Json(
-        run_once(&hub, &command, timeout, body.format, &BTreeMap::new()).await,
+        run_once(&hub, &command, None, timeout, body.format, &BTreeMap::new()).await?,
     ))
 }
 

@@ -185,9 +185,38 @@ watcher db reader <name> [--password-stdin]
 
 Without `--password-stdin` a password is generated and printed.
 
+## secret
+
+Keys and passwords for [checks over SSH](../guides/ssh.md#secrets), in
+the database, encrypted with `data_dir/secret.key`.
+
+```
+watcher secret new <name> [--replace]
+watcher secret import <name> <file> [--passphrase-stdin] [--replace]
+watcher secret password <name> [--password-stdin] [--replace]
+watcher secret show <name>
+watcher secret list
+watcher secret remove <name>
+```
+
+- `new`: ed25519 key; the public key alone on stdout:
+  `watcher secret new monitor >> authorized_keys`.
+- `import`: ed25519 or ECDSA; OpenSSH, PEM, PuTTY; passphrase asked if
+  encrypted. No RSA.
+
+## hostkey
+
+SSH host keys, pinned on the first connection.
+
+```
+watcher hostkey list
+watcher hostkey accept <address>[:<port>]
+watcher hostkey forget <address>[:<port>]
+```
+
 ## Database options
 
-`user`, `token`, `db` take:
+`user`, `token`, `db`, `secret`, `hostkey` take:
 
 | Option | |
 |---|---|

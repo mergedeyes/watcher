@@ -13,6 +13,7 @@
 //! but runs are skipped until they are resumed. A job can be run now, also
 //! while paused.
 
+use crate::ssh::{self, Pool, Remote};
 use crate::{CommandLine, ExecOptions, run};
 use std::cmp::Reverse;
 use std::collections::hash_map::DefaultHasher;
@@ -34,6 +35,8 @@ pub struct Job {
     pub id: String,
     /// `None` for passive jobs.
     pub command: Option<CommandLine>,
+    /// Run the command on the host, over SSH.
+    pub remote: Option<Remote>,
     pub options: ExecOptions,
     pub format: Format,
     pub thresholds: BTreeMap<String, ThresholdSpec>,
@@ -134,11 +137,13 @@ struct Done {
 type Queue = BinaryHeap<Reverse<(Instant, String)>>;
 
 /// Runs `jobs` until `events` is closed. `initial` holds states to continue
-/// from, e.g. restored from the database, keyed by job id.
+/// from, e.g. restored from the database, keyed by job id. Jobs with a
+/// remote run over the connections in `ssh`.
 pub async fn schedule(
     jobs: Vec<Job>,
     mut initial: HashMap<String, ServiceState>,
     max_concurrent: usize,
+    ssh: Arc<Pool>,
     mut control: mpsc::Receiver<Control>,
     events: mpsc::Sender<Event>,
 ) {
@@ -179,9 +184,13 @@ pub async fn schedule(
                     paused.forced.remove(&id);
                     slot.running = true;
                     let (job, permits, done) = (slot.job.clone(), permits.clone(), done_tx.clone());
+                    let pool = ssh.clone();
                     tokio::spawn(async move {
                         let Ok(_permit) = permits.acquire_owned().await else { return };
-                        let execution = run(&command, &job.options).await;
+                        let execution = match &job.remote {
+                            Some(remote) => ssh::run(&pool, remote, &command, &job.options).await,
+                            None => run(&command, &job.options).await,
+                        };
                         let result = evaluate(&execution.output, job.format, &job.thresholds);
                         let duration = execution.duration;
                         let _ = done.send(Done { id, duration, result });
@@ -434,6 +443,7 @@ mod tests {
         Job {
             id: id.into(),
             command: Some(CommandLine::Shell(script.into())),
+            remote: None,
             options: ExecOptions::default(),
             format: Format::Auto,
             thresholds: BTreeMap::new(),
@@ -444,6 +454,10 @@ mod tests {
             freshness: None,
             flap: Some(FlapThresholds::DEFAULT),
         }
+    }
+
+    fn no_ssh() -> Arc<Pool> {
+        Arc::new(Pool::unavailable("no SSH in tests"))
     }
 
     async fn collect(rx: &mut mpsc::Receiver<Event>, n: usize) -> Vec<Event> {
@@ -473,6 +487,7 @@ mod tests {
             vec![job("h/fail", "echo broken; exit 2", 400)],
             HashMap::new(),
             4,
+            no_ssh(),
             reload_rx,
             tx,
         ));
@@ -505,6 +520,7 @@ mod tests {
             vec![job("h/fail", "exit 2", 400)],
             initial,
             4,
+            no_ssh(),
             reload_rx,
             tx,
         ));
@@ -557,6 +573,7 @@ mod tests {
             vec![passive("h/backup", None)],
             HashMap::new(),
             4,
+            no_ssh(),
             control_rx,
             tx,
         ));
@@ -594,6 +611,7 @@ mod tests {
             vec![passive("h/cron", Some(200))],
             HashMap::new(),
             4,
+            no_ssh(),
             control_rx,
             tx,
         ));
@@ -616,6 +634,7 @@ mod tests {
             vec![job("h/a", "exit 0", 200), job("h/b", "exit 0", 60_000)],
             HashMap::new(),
             4,
+            no_ssh(),
             control_rx,
             tx,
         ));
@@ -667,7 +686,14 @@ mod tests {
         let (reload_tx, reload_rx) = mpsc::channel(1);
         let (tx, mut rx) = mpsc::channel(16);
         let a = job("h/a", "exit 0", 100);
-        tokio::spawn(schedule(vec![a.clone()], HashMap::new(), 4, reload_rx, tx));
+        tokio::spawn(schedule(
+            vec![a.clone()],
+            HashMap::new(),
+            4,
+            no_ssh(),
+            reload_rx,
+            tx,
+        ));
 
         let first = collect(&mut rx, 1).await;
         assert!(first[0].change.is_some());

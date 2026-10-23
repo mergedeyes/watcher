@@ -2,7 +2,9 @@
 //! is used. Every node that is an object names it (`kind` and `name`) so a
 //! client can link to it, and carries the file and line it is written at.
 
-use crate::{Assigned, Config, Host, Layer, NotifyRule, Origin, Reason, Service, Source, files};
+use crate::{
+    Assigned, Config, Host, Layer, NotifyRule, Origin, Reason, RunOn, Service, Source, files,
+};
 use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
@@ -282,6 +284,12 @@ impl<'a> Builder<'a> {
         } else {
             out.push(self.value("passive", "true".into(), src("passive")));
         }
+        if st.run_on == RunOn::Host {
+            out.push(self.value("run_on", "host".into(), src("run_on")));
+        }
+        if st.copy {
+            out.push(self.value("copy", "true".into(), src("copy")));
+        }
         out.push(self.value("interval", duration(st.interval), src("interval")));
         out.push(self.value(
             "retry_interval",
@@ -444,6 +452,11 @@ impl<'a> Builder<'a> {
         }
         if let Some(g) = host.graph_check() {
             out.push(self.value("graph", g.to_string(), src("graph").or(src("host_check"))));
+        }
+        if let Some(ssh) = &host.ssh {
+            out.push(self.value("ssh.user", ssh.user.clone(), src("ssh.user")));
+            out.push(self.value("ssh.port", ssh.port.to_string(), src("ssh.port")));
+            out.push(self.value("ssh.secret", ssh.secret.clone(), src("ssh.secret")));
         }
         for (k, v) in &host.vars {
             let key = format!("vars.{k}");

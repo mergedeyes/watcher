@@ -29,6 +29,9 @@ Full path:
 command = "/opt/scripts/backup_age.sh /srv/backup"
 ```
 
+On the host instead of the Watcher machine: `run_on = "host"`, see
+[Checks over SSH](ssh.md).
+
 ## Built-in checks
 
 Run inside Watcher, no plugin. A check `ping` exists without config;

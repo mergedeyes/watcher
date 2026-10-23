@@ -356,7 +356,10 @@ pub async fn delete_token(
 }
 
 /// Admins only; without login, anyone (the server is on loopback then).
-fn admin_user(hub: &Hub, user: &Option<Extension<CurrentUser>>) -> Result<String, ApiError> {
+pub(crate) fn admin_user(
+    hub: &Hub,
+    user: &Option<Extension<CurrentUser>>,
+) -> Result<String, ApiError> {
     match user {
         Some(Extension(CurrentUser(u))) if u.admin => Ok(u.username.clone()),
         None if !hub.auth.required => Ok("local user".into()),

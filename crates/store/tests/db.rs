@@ -553,3 +553,66 @@ async fn flags_downtimes_and_settings() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn secrets_and_host_keys() {
+    each_server(|store, _, _| async move {
+        store
+            .put_secret(
+                "monitor",
+                "key",
+                Some("ssh-ed25519 AAAA x"),
+                b"sealed",
+                false,
+            )
+            .await
+            .unwrap();
+        let err = store
+            .put_secret("monitor", "password", None, b"other", false)
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "secret \"monitor\" already exists");
+        store
+            .put_secret("monitor", "password", None, b"other", true)
+            .await
+            .unwrap();
+        let list = store.secrets().await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(
+            (list[0].kind.as_str(), list[0].public_key.as_deref()),
+            ("password", None)
+        );
+        assert_eq!(
+            store.secret("monitor").await.unwrap(),
+            Some(("password".into(), b"other".to_vec()))
+        );
+        assert!(store.delete_secret("monitor").await.unwrap());
+        assert!(!store.delete_secret("monitor").await.unwrap());
+        assert_eq!(store.secret("monitor").await.unwrap(), None);
+
+        // Pinned on first use; another key is offered, then accepted.
+        assert!(store.check_host_key("db1", 22, "key-a").await.unwrap());
+        assert!(store.check_host_key("db1", 22, "key-a").await.unwrap());
+        assert!(store.check_host_key("db1", 2222, "key-b").await.unwrap());
+        assert!(!store.check_host_key("db1", 22, "key-b").await.unwrap());
+        let keys = store.host_keys().await.unwrap();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(
+            (
+                keys[0].port,
+                keys[0].key.as_str(),
+                keys[0].offered.as_deref()
+            ),
+            (22, "key-a", Some("key-b"))
+        );
+        assert!(keys[0].offered_at.is_some());
+        let accepted = store.accept_host_key("db1", 22).await.unwrap().unwrap();
+        assert_eq!((accepted.key.as_str(), accepted.offered), ("key-b", None));
+        assert!(store.accept_host_key("db1", 22).await.unwrap().is_none());
+        assert!(store.check_host_key("db1", 22, "key-b").await.unwrap());
+
+        assert!(store.forget_host_key("db1", 22).await.unwrap());
+        assert!(store.check_host_key("db1", 22, "key-c").await.unwrap());
+    })
+    .await;
+}

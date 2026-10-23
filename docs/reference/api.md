@@ -176,6 +176,25 @@ user's sessions.
 
 Cookie requests that change something need a matching `Origin`.
 
+## SSH
+
+Admins. Secret values never leave the server.
+
+| Method, path | |
+|---|---|
+| `GET ssh/secrets` | name, kind, public key, fingerprint, hosts using it |
+| `POST ssh/secrets` | `{"name", "kind": "generate"}`, `{"name", "kind": "key", "private_key", "passphrase"}`, `{"name", "kind": "password", "password"}`; `"replace": true` overwrites |
+| `DELETE ssh/secrets/{name}` | |
+| `GET ssh/hostkeys` | pinned keys, changed ones (`offered`) |
+| `POST ssh/hostkeys/{address}/{port}/accept` | pin the changed key |
+| `DELETE ssh/hostkeys/{address}/{port}` | forget; the next key is pinned |
+
+```sh
+curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
+  -d '{"name": "monitor", "kind": "generate"}' .../api/v1/ssh/secrets
+# → {"name": "monitor", "kind": "key", "public_key": "ssh-ed25519 AAAA... watcher-monitor", ...}
+```
+
 ## Configuration
 
 Admins.
