@@ -1,4 +1,4 @@
-<!-- Alert history: service and host state changes and flapping, newest first. -->
+<!-- Alert history: state changes, flapping, acknowledgements and downtimes, newest first. -->
 <script lang="ts">
 	import { hostHref, serviceHref, type StateEvent } from './api.ts';
 	import { datetime } from './format.ts';
@@ -8,14 +8,22 @@
 		events: StateEvent[];
 		showHost?: boolean;
 		showService?: boolean;
-		/** The Alert column: HOST, SERVICE or FLAPPING. */
+		/** The Alert column: HOST, SERVICE, FLAPPING, ACK or DOWNTIME. */
 		showKind?: boolean;
 		empty?: string;
 	}
 
 	let { events, showHost = false, showService = false, showKind = false, empty = 'No alerts.' }: Props = $props();
 
-	const KIND = { service: 'SERVICE', host: 'HOST', flap_start: 'FLAPPING', flap_stop: 'FLAPPING' } as const;
+	const KIND = {
+		service: 'SERVICE',
+		host: 'HOST',
+		flap_start: 'FLAPPING',
+		flap_stop: 'FLAPPING',
+		ack: 'ACK',
+		downtime_start: 'DOWNTIME',
+		downtime_end: 'DOWNTIME'
+	} as const;
 </script>
 
 {#if events.length === 0}
@@ -41,7 +49,7 @@
 					{#if showHost}<td class="nowrap"><a href={hostHref(e.host)}>{e.host}</a></td>{/if}
 					{#if showService}
 						<td class="nowrap">
-							{#if e.kind === 'host'}<span class="muted">{e.service}</span>{:else}<a href={serviceHref(e.host, e.service)}>{e.service}</a>{/if}
+							{#if e.kind === 'host'}<span class="muted">{e.service}</span>{:else if e.service}<a href={serviceHref(e.host, e.service)}>{e.service}</a>{/if}
 						</td>
 					{/if}
 					<td class="nowrap">
@@ -49,6 +57,12 @@
 							<span class="tag flap">STARTED</span>
 						{:else if e.kind === 'flap_stop'}
 							<span class="tag">STOPPED</span>
+						{:else if e.kind === 'ack'}
+							<span class="tag ack">ACKNOWLEDGED</span>
+						{:else if e.kind === 'downtime_start'}
+							<span class="tag downtime">DOWNTIME START</span>
+						{:else if e.kind === 'downtime_end'}
+							<span class="tag">DOWNTIME END</span>
 						{:else}
 							<Status state={e.to_state} />
 						{/if}

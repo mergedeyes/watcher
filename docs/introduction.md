@@ -9,8 +9,9 @@ checks.
 
 - **Monitoring for service providers and in-house ops.** Hosts, services,
   metrics, alerting, reporting.
-- **Config as simple as Nagios, less verbose.** Roles and selectors instead
-  of host × service lists. Every value traceable to its file and line.
+- **Config as simple as Nagios, less verbose.** Checks, services, hosts and
+  groups; services assigned to groups instead of host × service lists.
+  Every value traceable to its file and line.
 - **Any script is a check.** Its output is the data. Nagios plugins work
   unchanged.
 - **Data easy to reach and repair.** Plain SQL views; range edits in the
@@ -28,8 +29,8 @@ checks.
 | Problem elsewhere | Watcher |
 |---|---|
 | "Where does this value come from?" | Config Tree on every object: each value with its file, line and layer (`watcher config explain`, web UI) |
-| Inheritance surprises (first template wins, lists replaced) | One precedence rule: host > role > check > defaults. Two roles setting the same thing differently is an error, not a silent pick |
-| One edit per host, disk, URL | Roles assigned by tag or name pattern; `for_each` makes one service per disk, site, queue |
+| Inheritance surprises (first template wins, lists replaced) | One precedence rule: host > host group > service > check > defaults. Two host groups setting the same thing differently is an error, not a silent pick |
+| One edit per host, disk, URL | Services and service groups assigned to host groups, members by name pattern; `for_each` makes one service per disk, site, queue |
 | UI and files out of sync | The UI edits the same TOML files, keeps comments, shows a diff before Apply. File edits reload within a second |
 | Notification routing by order | `[[notify]]` rules: every matching rule notifies, no order |
 | Data locked in a custom store | PostgreSQL (TimescaleDB optional). Views for SQL, Grafana, BI |
@@ -40,13 +41,14 @@ checks.
 | Term | Meaning |
 |---|---|
 | check | What to run: command, defaults, thresholds |
-| role | The services a kind of host gets |
+| service | A check with its settings, assigned to hosts; on a host: id `host/service` |
 | host | Something to monitor |
-| service | A check on a host, id `host/service` |
+| host group | Hosts that get the same services and settings |
+| service group | Services assigned together |
 | host check | The service that gives a host UP/DOWN |
 | contact | Who gets alerts: email, webhook |
 | notify rule | Which contacts get which alerts |
-| group | Host, service or contact group, for views and rules |
+| contact group | Several contacts |
 | sink | Where results are copied to, with a disk buffer |
 
 States: OK, WARNING, CRITICAL, UNKNOWN, PENDING (no result yet); hosts UP,
@@ -61,14 +63,18 @@ Works today (single server):
   passive results over the API, thresholds with units
 - State engine: SOFT/HARD, retries, host UP/DOWN, flap detection,
   freshness
-- Config: files and web UI, roles, selectors, groups, `for_each`, Config
-  Tree, validation with file and line, hot reload
+- Config: files and web UI, services, groups, `for_each`, Config Tree,
+  validation with file and line, hot reload
 - Web UI: Tactical Overview, hosts, services, problems, groups, alert
   history, graphs, configuration forms and file editor
+- Operations: acknowledgements, downtimes (one-off and recurring
+  downtime groups), muted notifications, disabled checks, re-check,
+  process info, scheduling queue
 - Notifications: email, webhooks
 - Storage: PostgreSQL/TimescaleDB, SQL views, read-only DB role, sinks to
   remote PostgreSQL
-- Users, sessions, API tokens, HTTPS
+- Users, sessions, API tokens, HTTPS; the full API (everything the UI
+  does) with tokens
 
 *Not yet:*
 
@@ -78,7 +84,7 @@ Works today (single server):
 | Built-in checks (ICMP, TCP, HTTP, DNS, TLS), checks over SSH | 2 / 5 |
 | Data repair in graphs, rollups, retention | 3 |
 | IBM i, AIX, HMC, MQ checks | 3b |
-| Acknowledgements, downtimes, dependencies, escalations, re-notification | 4 |
+| Dependencies, escalations, re-notification | 4 |
 | Tenants, roles/permissions, TOTP, more notification channels | 4 |
 | SNMP, Prometheus, WinRM, discovery, Nagios config import | 5 |
 

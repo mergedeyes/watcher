@@ -27,7 +27,16 @@
 	let active = $state(-1);
 	let input: HTMLInputElement;
 
-	let list = $derived(options.map((o) => (typeof o === 'string' ? { value: o } : o)));
+	// One entry per value (the first wins): sources overlap, e.g. a command
+	// used in the config that is also a script name.
+	let list = $derived.by(() => {
+		const seen = new Map<string, Option>();
+		for (const o of options) {
+			const opt = typeof o === 'string' ? { value: o } : o;
+			if (!seen.has(opt.value)) seen.set(opt.value, opt);
+		}
+		return [...seen.values()];
+	});
 
 	/** The part being typed: everything, or (multi) after the last comma. */
 	let token = $derived(multi ? (value.split(',').at(-1) ?? '').trim() : value.trim());

@@ -8,11 +8,15 @@
 //! Passive jobs have no command: their results are submitted from outside
 //! (the HTTP API) and go through the same state machine. With `freshness`
 //! set, a missing result turns them UNKNOWN.
+//!
+//! Active checks can be paused (all, or some jobs): their schedule goes on,
+//! but runs are skipped until they are resumed. A job can be run now, also
+//! while paused.
 
 use crate::{CommandLine, ExecOptions, run};
 use std::cmp::Reverse;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{BTreeMap, BinaryHeap, HashMap};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -72,6 +76,42 @@ pub enum Control {
         output: RawOutput,
         reply: oneshot::Sender<Option<Event>>,
     },
+    /// Run these active jobs now (unless already running), also if paused.
+    /// Their schedule continues from then.
+    RunNow(Vec<String>),
+    /// Skip the runs of these jobs, or of all with `all`; replaces the
+    /// previous setting.
+    Pause { all: bool, ids: HashSet<String> },
+    /// The schedule, ordered by when each job runs next.
+    Status(oneshot::Sender<Vec<Scheduled>>),
+}
+
+/// A job in the schedule, for [`Control::Status`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Scheduled {
+    pub id: String,
+    /// When it runs next (active jobs), or when a passive job turns stale;
+    /// `None` while running or without a deadline.
+    pub next: Option<SystemTime>,
+    pub running: bool,
+    pub passive: bool,
+    /// Runs are skipped (paused).
+    pub paused: bool,
+}
+
+/// Which runs are skipped.
+#[derive(Default)]
+struct Paused {
+    all: bool,
+    ids: HashSet<String>,
+    /// Run once anyway (run now while paused).
+    forced: HashSet<String>,
+}
+
+impl Paused {
+    fn skips(&self, id: &str) -> bool {
+        (self.all || self.ids.contains(id)) && !self.forced.contains(id)
+    }
 }
 
 struct Slot {
@@ -104,6 +144,7 @@ pub async fn schedule(
     let (done_tx, mut done_rx) = mpsc::unbounded_channel::<Done>();
     let mut slots: HashMap<String, Slot> = HashMap::new();
     let mut queue = Queue::new();
+    let mut paused = Paused::default();
     let mut control_open = true;
     replace_jobs(&mut slots, &mut queue, jobs, &mut initial);
     drop(initial);
@@ -128,6 +169,12 @@ pub async fn schedule(
                         stale.push(id);
                         continue;
                     };
+                    if paused.skips(&id) {
+                        let next = now + slot.job.interval;
+                        set_due(slot, &mut queue, Some(next));
+                        continue;
+                    }
+                    paused.forced.remove(&id);
                     slot.running = true;
                     let (job, permits, done) = (slot.job.clone(), permits.clone(), done_tx.clone());
                     tokio::spawn(async move {
@@ -157,6 +204,27 @@ pub async fn schedule(
                     let _ = reply.send(event.clone());
                     event
                 }
+                Some(Control::RunNow(ids)) => {
+                    let now = Instant::now();
+                    for id in ids {
+                        let Some(slot) = slots.get_mut(&id) else { continue };
+                        if slot.running || slot.job.command.is_none() {
+                            continue;
+                        }
+                        set_due(slot, &mut queue, Some(now));
+                        paused.forced.insert(id);
+                    }
+                    None
+                }
+                Some(Control::Pause { all, ids }) => {
+                    paused.all = all;
+                    paused.ids = ids;
+                    None
+                }
+                Some(Control::Status(reply)) => {
+                    let _ = reply.send(status(&slots, &paused));
+                    None
+                }
                 None => {
                     control_open = false;
                     None
@@ -177,6 +245,30 @@ async fn sleep_until(due: Option<Instant>) {
         Some(due) => tokio::time::sleep_until(due).await,
         None => std::future::pending().await,
     }
+}
+
+/// The schedule, soonest first; running jobs first, then those without a
+/// deadline.
+fn status(slots: &HashMap<String, Slot>, paused: &Paused) -> Vec<Scheduled> {
+    let (now, wall) = (Instant::now(), SystemTime::now());
+    let mut out: Vec<Scheduled> = slots
+        .values()
+        .map(|slot| Scheduled {
+            id: slot.job.id.clone(),
+            next: match slot.running {
+                true => None,
+                false => slot.due.map(|d| wall + d.saturating_duration_since(now)),
+            },
+            running: slot.running,
+            passive: slot.job.command.is_none(),
+            paused: slot.job.command.is_some() && paused.skips(&slot.job.id),
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        let key = |s: &Scheduled| (!s.running, s.next.is_none(), s.next);
+        key(a).cmp(&key(b)).then_with(|| a.id.cmp(&b.id))
+    });
+    out
 }
 
 /// Applies a result to a slot's state.
@@ -510,6 +602,52 @@ mod tests {
             events[1].result.message,
             "UNKNOWN - no result received for 200ms"
         );
+    }
+
+    #[tokio::test]
+    async fn pause_skips_runs_and_run_now_overrides_it() {
+        let (control, control_rx) = mpsc::channel(4);
+        let (tx, mut rx) = mpsc::channel(16);
+        tokio::spawn(schedule(
+            vec![job("h/a", "exit 0", 200), job("h/b", "exit 0", 60_000)],
+            HashMap::new(),
+            4,
+            control_rx,
+            tx,
+        ));
+        control
+            .send(Control::Pause {
+                all: true,
+                ids: HashSet::new(),
+            })
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(600), rx.recv())
+                .await
+                .is_err()
+        );
+        let (reply, status_rx) = oneshot::channel();
+        control.send(Control::Status(reply)).await.unwrap();
+        let status = status_rx.await.unwrap();
+        assert_eq!(status.len(), 2);
+        assert!(status.iter().all(|s| s.paused && !s.passive));
+        assert_eq!(status[0].id, "h/a", "soonest first");
+
+        control
+            .send(Control::RunNow(vec!["h/b".into()]))
+            .await
+            .unwrap();
+        assert_eq!(collect(&mut rx, 1).await[0].id, "h/b");
+
+        control
+            .send(Control::Pause {
+                all: false,
+                ids: HashSet::from(["h/b".to_string()]),
+            })
+            .await
+            .unwrap();
+        assert_eq!(collect(&mut rx, 1).await[0].id, "h/a");
     }
 
     #[test]

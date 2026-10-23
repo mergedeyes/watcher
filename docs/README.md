@@ -12,9 +12,10 @@ marked *not yet*.
 ## Guides
 
 - [Checks](guides/checks.md): commands, scripts, output formats, thresholds, passive checks
-- [Hosts and roles](guides/hosts-and-roles.md): assigning services, vars, overrides, `for_each`
+- [Hosts and services](guides/hosts-and-services.md): assigning services, vars, overrides, `for_each`
 - [Groups](guides/groups.md): host groups, service groups, contact groups
 - [Notifications](guides/notifications.md): SMTP, contacts, notify rules, webhooks
+- [Operations](guides/operations.md): acknowledgements, downtimes, mute, disabled checks
 - [Web UI](guides/web-ui.md): status pages, configuration, Config Tree
 - [Data](guides/data.md): database, SQL, Grafana, sinks
 

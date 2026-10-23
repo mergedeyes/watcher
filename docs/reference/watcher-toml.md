@@ -10,6 +10,7 @@ file. Unknown keys are errors.
 ```toml
 role = "standalone"
 instance_name = "msp-hub"
+timezone = "Europe/Berlin"
 listen = "0.0.0.0:8443"
 public_url = "https://watcher.example.com:8443"
 conf_dir = "conf.d"
@@ -39,6 +40,7 @@ from = "Watcher <watcher@example.com>"
 |---|---|---|
 | `role` | `standalone` | `standalone`, `hub`, `node` (*not yet*: hub/node behave as standalone) |
 | `instance_name` | | shown in the sidebar, page title, mail subject |
+| `timezone` | the system's | IANA name; downtime group windows |
 | `listen` | `127.0.0.1:8080` | HTTP API and web UI. Non-loopback needs a database (logins) |
 | `public_url` | | links in notifications; `https://` marks cookies Secure |
 | `conf_dir` | `conf.d` | object files, every `*.toml` below |

@@ -28,6 +28,24 @@ function uniq(values: string[]): string[] {
 	return [...new Set(values.filter((v) => v.trim() !== ''))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
 
+const UNIT_SECS: Record<string, number> = { ms: 0.001, s: 1, m: 60, h: 3600, d: 86400, w: 604800 };
+
+/** Seconds in a duration like `90s`, `1h30m`; NaN if it isn't one. */
+export function durationSecs(text: string): number {
+	const parts = [...text.trim().matchAll(/(\d+(?:\.\d+)?)\s*(ms|s|m|h|d|w)/g)];
+	if (parts.length === 0 || parts.map((p) => p[0]).join('') !== text.replace(/\s+/g, '')) return NaN;
+	return parts.reduce((sum, [, n, unit]) => sum + Number(n) * UNIT_SECS[unit!]!, 0);
+}
+
+/** Durations, shortest first; other text after them. */
+function byDuration(values: string[]): string[] {
+	const secs = (v: string) => {
+		const n = durationSecs(v);
+		return Number.isNaN(n) ? Infinity : n;
+	};
+	return [...values].sort((a, b) => secs(a) - secs(b) || a.localeCompare(b));
+}
+
 /** Suggestions for one config form, built from all objects. */
 export class Suggest {
 	constructor(
@@ -53,32 +71,42 @@ export class Suggest {
 		return uniq(this.of(kind).flatMap((o) => scalars(o.fields[key])));
 	}
 
-	tags(): string[] {
-		return this.used('host', 'tags');
-	}
-
 	nodes(): string[] {
-		return uniq([...this.used('host', 'node'), ...this.used('role', 'node')]);
+		return this.used('host', 'node');
 	}
 
-	/** Service names: checks, role and host service entries, live services. */
+	/** Service names: services on hosts, service objects, host services, checks. */
 	serviceNames(): Option[] {
 		const out = new Map<string, string>();
-		for (const s of this.services) out.set(s, 'service');
-		for (const o of [...this.of('role'), ...this.of('host')]) {
-			if (isTable(o.fields.service)) for (const s of Object.keys(o.fields.service)) out.set(s, `${o.kind} ${o.name}`);
+		for (const s of this.services) out.set(s, 'on hosts');
+		for (const o of this.of('service')) out.set(o.name, 'service');
+		for (const o of this.of('host')) {
+			if (isTable(o.fields.service)) for (const s of Object.keys(o.fields.service)) if (!out.has(s)) out.set(s, `host ${o.name}`);
 		}
 		for (const c of this.of('check')) if (!out.has(c.name)) out.set(c.name, 'check');
 		return [...out].sort(([a], [b]) => a.localeCompare(b)).map(([value, hint]) => ({ value, hint }));
 	}
 
-	/** Var names (all kinds), or only those holding tables (`for_each` data). */
-	varNames(tables = false): string[] {
+	/** Names of scalar vars. */
+	varNames(): string[] {
 		return uniq(
 			this.objects.flatMap((o) =>
-				isTable(o.fields.vars) ? Object.entries(o.fields.vars).filter(([, v]) => isTable(v) === tables).map(([k]) => k) : []
+				isTable(o.fields.vars) ? Object.entries(o.fields.vars).filter(([, v]) => !isTable(v)).map(([k]) => k) : []
 			)
 		);
+	}
+
+	/** Dotted paths of vars holding a table per item (`for_each` data), nested ones too. */
+	forEachPaths(): string[] {
+		const paths = (t: Record<string, unknown>, prefix: string): string[] =>
+			Object.entries(t).flatMap(([k, v]) => {
+				if (!isTable(v)) return [];
+				const path = prefix + k;
+				const items = Object.values(v);
+				const here = items.length > 0 && items.every(isTable) ? [path] : [];
+				return [...here, ...paths(v, path + '.')];
+			});
+		return uniq(this.objects.flatMap((o) => (isTable(o.fields.vars) ? paths(o.fields.vars, '') : [])));
 	}
 
 	/** Values written for var `name` anywhere. */
@@ -117,8 +145,8 @@ export class Suggest {
 				return [];
 			case 'command':
 				return this.commands(kind);
-			case 'tags':
-				return this.tags().map((value) => ({ value }));
+			case 'for_each':
+				return this.forEachPaths().map((value) => ({ value }));
 			case 'node':
 				return this.nodes().map((value) => ({ value }));
 			case 'host_check':
@@ -132,7 +160,7 @@ export class Suggest {
 			case 'retry_interval':
 			case 'timeout':
 			case 'freshness':
-				return uniq([...used, ...DURATIONS]).map((value) => ({ value }));
+				return byDuration(uniq([...used, ...DURATIONS])).map((value) => ({ value }));
 			case 'email':
 				return this.used('contact', 'email').map((value) => ({ value }));
 			default:
@@ -140,7 +168,7 @@ export class Suggest {
 		}
 	}
 
-	/** Options for a selector input, by its key (`hosts.tags`, ...). */
+	/** Options for a selector input, by its key (`hosts.groups`, ...). */
 	selector(selects: 'host' | 'service', key: string): Option[] {
 		const hosts = () => this.names('host');
 		switch (key) {
@@ -148,15 +176,12 @@ export class Suggest {
 				return selects === 'host' ? hosts() : this.serviceNames();
 			case 'address':
 				return this.used('host', 'address').map((value) => ({ value }));
-			case 'tags':
-			case 'hosts.tags':
-				return this.tags().map((value) => ({ value }));
 			case 'node':
 				return this.nodes().map((value) => ({ value }));
-			case 'roles':
-				return this.names('role');
 			case 'groups':
 				return this.names(selects === 'host' ? 'hostgroup' : 'servicegroup');
+			case 'hosts.groups':
+				return this.names('hostgroup');
 			case 'checks':
 				return this.names('check');
 			case 'hosts.name':

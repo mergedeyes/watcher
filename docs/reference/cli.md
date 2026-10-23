@@ -104,7 +104,7 @@ watcher config check [PATH] [--services]
 ```
 
 ```
-OK: 4 files, 2 hosts, 2 roles, 4 checks, 5 services, 1 contact
+OK: 4 files, 2 hosts, 4 checks, 5 services, 5 on hosts, 1 contact
 
   localhost/disk_root  every 30s    check_disk -w '20%' -c '10%' -p /
   localhost/backup     fresh 1day 2h  (passive)
@@ -113,7 +113,7 @@ OK: 4 files, 2 hosts, 2 roles, 4 checks, 5 services, 1 contact
 Errors with file and line, exit code 1:
 
 ```
-hosts.toml:4: error: host "h1": unknown role "b"
+hosts.toml:4: error: host "h1": unknown hostgroup "b"
 ```
 
 ## config explain
@@ -125,13 +125,15 @@ watcher config explain <host>[/<service>] [-c PATH]
 watcher config explain <kind> <name> [-c PATH]
 ```
 
-Kinds: `host`, `service`, `role`, `check`, `hostgroup`, `servicegroup`,
-`contact`, `contactgroup`, `notify`.
+Kinds: `host`, `service`, `check`, `hostgroup`, `servicegroup`,
+`contact`, `contactgroup`, `notify`. `service <name>` is a service as
+defined, `<host>/<service>` a service on a host.
 
 ```sh
 watcher config explain web01
 watcher config explain web01/http
-watcher config explain role linux
+watcher config explain service disk
+watcher config explain hostgroup linux
 watcher config explain notify dba-critical
 ```
 

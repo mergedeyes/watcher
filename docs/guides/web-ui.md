@@ -13,6 +13,9 @@ watcher user add admin --admin      # may edit the configuration
 watcher user passwd alice
 ```
 
+Or in the web UI: Settings → Users (admins); everyone changes their own
+password under Account.
+
 Five failed logins lock a username for a minute. Sessions last 14 days
 from the last use.
 
@@ -25,40 +28,62 @@ login with a database, loopback only.
 |---|---|
 | Tactical Overview | Hosts DOWN, service problems, totals |
 | Hosts | host list, state, services per state |
-| Host | services, graphs, alert history |
+| Host | services, commands, graphs, alert history |
 | Services | all services, filter by state |
-| Service | state, output, performance data with thresholds, graphs, alert history |
+| Service | state, output, commands, performance data with thresholds, graphs, alert history |
 | Problems | non-OK services |
 | Host Groups, Service Groups | totals per group |
 | Alerts | alert history: host, type, state, SOFT/HARD, time range |
+| Downtimes | schedule and end downtimes; acknowledged, muted, checks off |
+| Process Info | uptime, results/min; notifications and active checks on/off |
+| Scheduling Queue | next check of every service |
 | Configuration | forms and file editor (admins) |
-| Account | user, API tokens |
+| Account | user, password, API tokens |
+| Users | add, admin, disable, password, delete (admins) |
 
 Status totals are links to the filtered lists. Columns sort on click.
+The Problems badge counts unhandled problems (not acknowledged, not in a
+downtime).
+
+**Commands:** right-click a host or service row, or use the Commands
+panel on its page: Re-Check Now, Acknowledge Problem, Schedule Downtime,
+Mute Notifications, Disable Active Checks, Submit Result (passive), and
+their undo. Badges: ACK, DOWNTIME, MUTED, CHECKS OFF.
+[Operations](operations.md).
 
 **Live / Paused** (top bar): live updates over Server-Sent Events. Paused:
 pages hold still; Refresh loads once.
 
-**Graphs:** ranges from 30 s; drag to zoom, double-click to reset. Host
-page: the `graph` service, or the host check, with a picker.
+**Graphs:** 15 min by default, ranges from 30 s; drag to zoom,
+double-click to reset. Host page: the `graph` service, or the host check,
+with a picker. `graphs = false` on a check or service: no graphs.
 
 ## Configuration
 
-Admins. Menu: Hosts, Roles, Checks, Host Groups, Service Groups, Contacts,
-Contact Groups, Notifications, Files.
+Admins. Menu: Checks, Services, Hosts, Host Groups, Service Groups,
+Contacts, Contact Groups, Downtime Groups, Notifications, Files.
 
 - Lists show file and line of every object.
 - Forms show the known fields; other keys in the file are kept. An empty
   field removes the key.
-- Text fields suggest values (objects, tags, scripts, vars, metrics,
-  durations); any value can be typed.
-- Host form: roles, groups, own services, overrides of role services.
+- Text fields suggest values (objects, scripts, vars, metrics, durations);
+  any value can be typed.
+- Host form: host groups, services, service groups, overrides of
+  assigned services, one-off services.
+- Group membership shows on both sides: the host form lists host groups
+  that list the host (`Also: dc1 · pattern web*`), the host group form
+  hosts that list the group; the same for service and contact groups.
+  × removes it there on save. Deleting an object takes it out of those
+  lists too. Lists show it muted.
+- Selectors, host group members and downtime groups show what they
+  match now: `3 hosts: web01 (name web*), …`; errors (e.g. in `expr`)
+  at once.
 - **Config Tree:** where the object and each value come from, where it is
   used. Each entry links to its form or file line.
 - **Save** → preview of the effective changes (+ added, ~ changed,
   − removed) and problems → **Apply**. Nothing is written before Apply.
-- New objects go to `conf.d/ui/` (`hosts.toml`, `roles.toml`,
-  `checks.toml`, `groups.toml`, `contacts.toml`, `notify.toml`). Edits of existing objects
+- New objects go to `conf.d/ui/` (`checks.toml`, `services.toml`,
+  `hosts.toml`, `groups.toml`, `contacts.toml`, `notify.toml`). Edits of existing objects
   stay in their file; comments and formatting are kept.
 - Objects written as inline arrays can't be edited in forms; use Files.
 
@@ -66,8 +91,8 @@ Contact Groups, Notifications, Files.
 `web03, web[04-10]` (8 clones, in the original's file). Cloned hosts get
 their address from the name.
 
-**Edit Config** (status pages): host → host form; service → role entry,
-host override or check; group → group form.
+**Edit Config** (status pages): host → host form or its host groups;
+service → service, host override or check; group → group form.
 
 **Files:** list, new file, editor with live validation (markers at the
 line, summary of the effective changes).

@@ -108,6 +108,11 @@ pub(crate) fn body(n: &Notification) -> String {
             "{id} is flapping ({state}); notifications are held back until it settles"
         ),
         (Kind::FlappingStop, _) => writeln!(b, "{id} stopped flapping ({state})"),
+        (Kind::DowntimeStart, _) => writeln!(
+            b,
+            "{id} is in a downtime ({state}); no notifications until it ends"
+        ),
+        (Kind::DowntimeEnd, _) => writeln!(b, "{id}: downtime ended ({state})"),
         (_, Some(prev)) => writeln!(b, "{id} is {state} (was {prev})"),
         (_, None) => writeln!(b, "{id} is {state}"),
     };
@@ -131,9 +136,10 @@ pub(crate) fn body(n: &Notification) -> String {
         state.to_string()
     };
     let _ = writeln!(b, "Host:     {host}");
-    let _ = match n.host_check {
-        true => writeln!(b, "Check:    {} (host check, {})", n.service, n.state),
-        false => writeln!(b, "Service:  {}", n.service),
+    let _ = match (n.host_check, n.service.is_empty()) {
+        (true, true) => Ok(()),
+        (true, false) => writeln!(b, "Check:    {} (host check, {})", n.service, n.state),
+        (false, _) => writeln!(b, "Service:  {}", n.service),
     };
     let _ = writeln!(b, "State:    {state}");
     let _ = writeln!(b, "Time:     {}", humantime::format_rfc3339_seconds(n.time));

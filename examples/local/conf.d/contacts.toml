@@ -5,4 +5,4 @@ email = "oncall@example.com"
 # Every matching rule notifies.
 [[notify]]
 contacts = ["oncall"]
-hosts = { tags = ["local", "web"] }
+hosts = { groups = ["linux", "web"] }

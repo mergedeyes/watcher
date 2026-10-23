@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { api, ApiError, HISTORY_DELAY, serviceHref, type StateEvent } from '#lib/api.ts';
+	import { api, ApiError, HISTORY_DELAY, serviceHref, type Flag, type StateEvent } from '#lib/api.ts';
 	import AlertTable from '#lib/AlertTable.svelte';
 	import { auth } from '#lib/auth.svelte.ts';
 	import { editHref } from '#lib/config.svelte.ts';
+	import Commands from '#lib/Commands.svelte';
+	import Flags from '#lib/Flags.svelte';
 	import ConfigTree from '#lib/ConfigTree.svelte';
 	import EditMenu from '#lib/EditMenu.svelte';
 	import Graphs from '#lib/Graphs.svelte';
@@ -18,7 +20,9 @@
 	let services = $derived(live.services.filter((s) => s.host === name));
 
 	/** The service whose graphs show: picked (`?graph=`), or the host's `graph`. */
-	let graph = $derived(page.url.searchParams.get('graph') ?? host?.graph ?? null);
+	let picked = $derived(page.url.searchParams.get('graph') ?? host?.graph ?? null);
+	/** Null when that service has graphs turned off. */
+	let graph = $derived(picked && live.find(name, picked)?.graphs !== false ? picked : null);
 	let graphCheck = $derived(graph ? (live.find(name, graph)?.last_check ?? null) : null);
 
 	function pick(service: string) {
@@ -30,6 +34,7 @@
 	}
 
 	let origin = $state<string | null>(null);
+	let flags = $state<Flag[]>([]);
 	let missing = $state(false);
 	let events = $state<StateEvent[]>([]);
 	/** Set when the hub has no database: there is no history to show. */
@@ -41,8 +46,9 @@
 	$effect(() => {
 		const [current, _] = [name, lastChange];
 		const load = () =>
-			api.events({ host: current, type: 'host', limit: 20 }).then(
-				(ev) => (events = ev),
+			// Host UP/DOWN, and acknowledgements and downtimes of the host itself.
+			api.events({ host: current, type: 'host,ack,downtime', limit: 40 }).then(
+				(ev) => (events = ev.filter((e) => e.kind === 'host' || e.service === '' || e.service === host?.check).slice(0, 20)),
 				(e) => (noHistory = e instanceof ApiError && e.noDatabase)
 			);
 		load();
@@ -51,10 +57,13 @@
 	});
 
 	$effect(() => {
-		const current = name;
+		const [current, _] = [name, live.reloads];
 		missing = false;
 		api.host(current).then(
-			(r) => (origin = r.origin),
+			(r) => {
+				origin = r.origin;
+				flags = r.flags;
+			},
 			(e) => {
 				if (e instanceof ApiError && e.status === 404) missing = true;
 			}
@@ -75,7 +84,7 @@
 					<EditMenu
 						targets={[
 							{ label: `Host ${host.name}`, href: editHref('hosts', host.name) },
-							...host.roles.map((r) => ({ label: `Role ${r}`, href: editHref('roles', r), hint: 'all hosts with the role' }))
+							...host.groups.map((g) => ({ label: `Host Group ${g}`, href: editHref('hostgroups', g), hint: 'all hosts in the group' }))
 						]}
 					/>
 					<ConfigTree kind="host" name={host.name} />
@@ -93,6 +102,7 @@
 						<td>
 							<Status state={host.state} />
 							{#if host.flapping}<span class="tag flap">FLAPPING</span>{/if}
+							<Flags v={host} />
 							{#if host.last_change}<span class="muted">&nbsp;for {since(host.last_change, live.now)}</span>{/if}
 						</td>
 					</tr>
@@ -119,12 +129,10 @@
 				<tbody>
 					<tr><th>Address</th><td class="mono">{host.address}</td></tr>
 					{#if host.node}<tr><th>Node</th><td>{host.node}</td></tr>{/if}
-					{#if host.roles.length}<tr><th>Roles</th><td>{host.roles.join(', ')}</td></tr>{/if}
-					<tr><th>Tags</th><td>{#each host.tags as t (t)}<span class="tag">{t}</span> {/each}</td></tr>
 					{#if host.groups.length}
 						<tr>
 							<th>Host Groups</th>
-							<td>{#each host.groups as g, i (g)}{i ? ', ' : ''}<a href="/hosts?group={encodeURIComponent(g)}">{g}</a>{/each}</td>
+							<td>{#each host.groups as g, i (i)}{i ? ', ' : ''}<a href="/hosts?group={encodeURIComponent(g)}">{g}</a>{/each}</td>
 						</tr>
 					{/if}
 					{#each Object.entries(host.vars) as [k, v] (k)}
@@ -136,6 +144,8 @@
 			</table>
 		</section>
 
+		<Commands target={{ host }} {flags} />
+
 		<section class="panel">
 			<div class="panel-title">Services <span class="muted">{services.length}</span></div>
 			<ServiceTable rows={services} showHost={false} sort="service" />
@@ -144,7 +154,7 @@
 		{#snippet picker()}
 			<select class="pick" aria-label="Service" value={graph ?? ''} onchange={(e) => pick(e.currentTarget.value)}>
 				{#if !graph}<option value="">–</option>{/if}
-				{#each services.map((s) => s.service).sort() as s (s)}<option value={s}>{s}</option>{/each}
+				{#each services.filter((s) => s.graphs).map((s) => s.service).sort() as s (s)}<option value={s}>{s}</option>{/each}
 			</select>
 		{/snippet}
 		{#if graph}

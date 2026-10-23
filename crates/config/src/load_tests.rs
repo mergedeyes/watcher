@@ -53,55 +53,64 @@ vars.url = "/"
 thresholds.time = { warn = "> 500ms", crit = "> 2s" }
 "#;
 
-const ROLES: &str = r#"
-[role.linux]
-host_check = "ping"
-interval = "1m"
-groups = ["linux-servers"]
-service.ping = {}
-service.load = { check = "load" }
-service.disk = { check = "disk", for_each = "disks", groups = ["storage"] }
+const SERVICES: &str = r#"
+[service.ping]
 
-[role.web]
-hosts = { tags = ["web"] }
-service.http = { check = "http" }
+[service.load]
+check = "load"
+
+[service.disk]
+check = "disk"
+for_each = "disks"
+groups = ["storage"]
+
+[service.http]
+check = "http"
+interval = "2m"
+
+[service.backup]
+passive = true
+freshness = "26h"
 "#;
 
 const HOSTS: &str = r#"
 [[host]]
 name = "web01"
 address = "10.0.0.5"
-roles = ["linux"]
-tags = ["web", "prod"]
+groups = ["web"]
 vars.disks = { root = { path = "/" } }
 
 [[host]]
 name = "db01"
-roles = ["linux"]
-tags = ["prod"]
 groups = ["dc1"]
+services = ["backup"]
 vars.disks.root = { path = "/" }
 vars.disks.pgdata = { path = "/var/lib/postgresql", warn = "10%", crit = "5%" }
-
-  [host.service.backup]
-  passive = true
-  freshness = "26h"
 
   [host.service.load]
   enabled = false
 "#;
 
 const GROUPS: &str = r#"
+[hostgroup.linux]
+members = ["*"]
+host_check = "ping"
+servicegroups = ["basics"]
+
+[hostgroup.web]
+services = ["http"]
+
 [hostgroup.dc1]
 title = "Datacenter 1"
 
-[hostgroup.linux-servers]
+[servicegroup.basics]
+services = ["ping", "load", "disk"]
 
 [servicegroup.storage]
 
 [servicegroup.webshop]
 title = "Webshop"
-members = ["web01/http", "db01/disk_pgdata"]
+services = ["http", "backup"]
 
 [contactgroup.dba]
 members = ["alice", "bob"]
@@ -118,7 +127,7 @@ groups = ["dba"]
 
 [[notify]]
 contacts = ["oncall"]
-hosts = { tags = ["prod"] }
+hosts = { groups = ["dc1", "web"] }
 
 [[notify]]
 name = "dba-critical"
@@ -127,23 +136,26 @@ services = { groups = ["webshop"] }
 states = ["critical"]
 "#;
 
-fn example() -> Config {
-    ok(&[
+fn files() -> [(&'static str, &'static str); 4] {
+    [
         ("checks.toml", CHECKS),
-        ("roles.toml", ROLES),
+        ("services.toml", SERVICES),
         ("hosts.toml", HOSTS),
         ("groups.toml", GROUPS),
-    ])
+    ]
+}
+
+fn example() -> Config {
+    ok(&files())
+}
+
+fn names(list: &[Assigned]) -> Vec<&str> {
+    list.iter().map(|a| a.name.as_str()).collect()
 }
 
 #[test]
 fn compiles_the_design_example() {
-    let (_, diags) = compile(&[
-        ("checks.toml", CHECKS),
-        ("roles.toml", ROLES),
-        ("hosts.toml", HOSTS),
-        ("groups.toml", GROUPS),
-    ]);
+    let (_, diags) = compile(&files());
     assert_eq!(messages(&diags), Vec::<String>::new());
     let config = example();
     let ids: Vec<_> = config.services.iter().map(|s| s.id.as_str()).collect();
@@ -154,10 +166,10 @@ fn compiles_the_design_example() {
             "web01/http",
             "web01/load",
             "web01/ping",
+            "db01/backup",
             "db01/disk_pgdata",
             "db01/disk_root",
             "db01/ping",
-            "db01/backup",
         ]
     );
 
@@ -176,18 +188,20 @@ fn compiles_the_design_example() {
     );
     assert_eq!(pgdata.settings.interval, Duration::from_secs(60));
     assert_eq!(pgdata.check.as_deref(), Some("disk"));
-    assert_eq!(pgdata.role.as_deref(), Some("linux"));
+    assert_eq!(pgdata.object.as_deref(), Some("disk"));
     assert_eq!(
         pgdata.for_each,
         Some(("disks".to_string(), "pgdata".to_string()))
     );
     // Where values came from.
     assert_eq!(pgdata.sources["vars.warn"].layer, Layer::ForEach);
-    assert_eq!(pgdata.sources["interval"].layer, Layer::Role);
     assert_eq!(pgdata.sources["command"].layer, Layer::Check);
-    assert_eq!(pgdata.origin.line, 8);
-    let groups: Vec<_> = pgdata.groups.iter().map(|g| g.name.as_str()).collect();
-    assert_eq!(groups, ["storage", "webshop"]);
+    assert_eq!(pgdata.origin.line, 7);
+    assert_eq!(names(&pgdata.groups), ["basics", "storage"]);
+    assert!(matches!(
+        &pgdata.assigned[0].reason,
+        Reason::Listed { by, .. } if by == "servicegroup basics on hostgroup linux"
+    ));
 
     let root = config.service("web01/disk_root").unwrap();
     assert_eq!(
@@ -198,27 +212,32 @@ fn compiles_the_design_example() {
     let http = config.service("web01/http").unwrap();
     assert_eq!(argv(http), ["check_http", "-H", "10.0.0.5", "-u", "/"]);
     assert!(http.settings.thresholds["time"].warn.is_some());
+    assert_eq!(http.settings.interval, Duration::from_secs(120));
+    assert_eq!(http.sources["interval"].layer, Layer::Service);
+    assert_eq!(names(&http.groups), ["webshop"]);
 
     let backup = config.service("db01/backup").unwrap();
     assert!(backup.settings.passive);
     assert_eq!(backup.settings.max_attempts, 1);
-    assert_eq!(backup.origin.line, 17);
+    assert!(matches!(
+        &backup.assigned[0].reason,
+        Reason::Listed { by, .. } if by == "host db01"
+    ));
 
-    // Roles: listed and by selector.
+    // Host groups: listed on the host, or by the group's members.
     let web = &config.hosts[0];
-    let roles: Vec<_> = web.roles.iter().map(|r| r.name.as_str()).collect();
-    assert_eq!(roles, ["linux", "web"]);
-    assert!(
-        matches!(&web.roles[1].reason, Reason::Selector { matched, .. } if matched == "tag web")
-    );
+    assert_eq!(names(&web.groups), ["web", "linux"]);
+    assert!(matches!(
+        &web.groups[1].reason,
+        Reason::Selector { matched, .. } if matched == "members *"
+    ));
     assert_eq!(web.host_check.as_deref(), Some("ping"));
-    assert_eq!(web.sources["host_check"].name, "linux");
+    assert_eq!(web.sources["host_check"].layer, Layer::HostGroup);
     let db = &config.hosts[1];
-    let groups: Vec<_> = db.groups.iter().map(|g| g.name.as_str()).collect();
-    assert_eq!(groups, ["dc1", "linux-servers"]);
+    assert_eq!(names(&db.groups), ["dc1", "linux"]);
     assert_eq!(config.host_check(db).unwrap().id, "db01/ping");
+    assert!(config.service("db01/load").is_none());
 
-    // Contacts: a group lists alice, bob lists the group.
     let dba: Vec<_> = config
         .group_contacts("dba")
         .iter()
@@ -240,18 +259,12 @@ fn notify_rules_add_up() {
             .collect()
     };
     assert_eq!(
-        names("db01/disk_pgdata", Alert::Problem, "critical"),
+        names("db01/backup", Alert::Problem, "critical"),
         ["oncall", "alice", "bob"]
     );
-    assert_eq!(
-        names("db01/disk_pgdata", Alert::Problem, "warning"),
-        ["oncall"]
-    );
+    assert_eq!(names("db01/backup", Alert::Problem, "warning"), ["oncall"]);
     // A recovery from WARNING doesn't reach the critical-only rule.
-    assert_eq!(
-        names("db01/disk_pgdata", Alert::Recovery, "warning"),
-        ["oncall"]
-    );
+    assert_eq!(names("db01/backup", Alert::Recovery, "warning"), ["oncall"]);
     assert_eq!(
         names("web01/http", Alert::Problem, "critical"),
         ["oncall", "alice", "bob"]
@@ -262,7 +275,7 @@ fn notify_rules_add_up() {
 }
 
 #[test]
-fn precedence_host_over_role_over_check() {
+fn precedence_host_over_group_over_service_over_check() {
     let config = ok(&[(
         "a.toml",
         r#"
@@ -272,18 +285,21 @@ vars = { url = "/", timeout_s = "10", port = "80" }
 interval = "5m"
 timeout = "20s"
 
-[role.web]
+[service.http]
 interval = "2m"
+vars.url = "/status"
+timeout = "30s"
+
+[hostgroup.web]
+members = ["a", "b"]
+services = ["http"]
 vars.port = "8080"
-service.http = { vars.url = "/status", timeout = "30s" }
 
 [[host]]
 name = "a"
-roles = ["web"]
 
 [[host]]
 name = "b"
-roles = ["web"]
 vars.url = "/health"
   [host.service.http]
   vars.timeout_s = "5"
@@ -297,9 +313,9 @@ vars.url = "/health"
     );
     assert_eq!(a.settings.interval, Duration::from_secs(120));
     assert_eq!(a.settings.timeout, Duration::from_secs(30));
-    assert_eq!(a.sources["vars.port"].layer, Layer::Role);
+    assert_eq!(a.sources["vars.port"].layer, Layer::HostGroup);
     let b = config.service("b/http").unwrap();
-    // Host vars beat the role's service entry; the host's service beats all.
+    // Host vars beat the service; the host's service beats all.
     assert_eq!(
         argv(b),
         ["check_http", "-u", "/health", "-t", "5", "-p", "8080"]
@@ -309,34 +325,143 @@ vars.url = "/health"
 }
 
 #[test]
-fn includes_merge_and_the_including_role_wins() {
+fn services_come_from_every_path_once() {
     let config = ok(&[(
         "a.toml",
         r#"
 [check.load]
-command = "check_load -w $w$"
-vars.w = "5"
+command = "check_load"
 
-[role.linux]
-host_check = "load"
-service.load = {}
+[service.load]
 
-[role.db]
-include = ["linux"]
-service.load = { vars.w = "9" }
+[servicegroup.basics]
+services = ["load"]
+
+[hostgroup.linux]
+members = ["h"]
+services = ["load"]
+servicegroups = ["basics"]
 
 [[host]]
-name = "a"
-roles = ["db", "linux"]
+name = "h"
+services = ["load"]
+servicegroups = ["basics"]
 "#,
     )]);
-    let s = config.service("a/load").unwrap();
-    assert_eq!(argv(s), ["check_load", "-w", "9"]);
-    assert_eq!(s.role.as_deref(), Some("db"));
-    let host = &config.hosts[0];
-    assert_eq!(host.host_check.as_deref(), Some("load"));
-    let roles: Vec<_> = host.roles.iter().map(|r| r.name.as_str()).collect();
-    assert_eq!(roles, ["db", "linux"]);
+    assert_eq!(config.services.len(), 1);
+    let by: Vec<String> = config.services[0]
+        .assigned
+        .iter()
+        .map(|a| match &a.reason {
+            Reason::Listed { by, .. } => by.clone(),
+            Reason::Selector { matched, .. } => matched.clone(),
+        })
+        .collect();
+    assert_eq!(
+        by,
+        [
+            "host h",
+            "servicegroup basics on host h",
+            "hostgroup linux",
+            "servicegroup basics on hostgroup linux"
+        ]
+    );
+}
+
+#[test]
+fn a_host_service_named_like_a_service_assigns_it() {
+    let config = ok(&[(
+        "a.toml",
+        r#"
+[check.disk]
+command = "check_disk -p $path$"
+
+[service.disk_root]
+check = "disk"
+vars.path = "/"
+
+[[host]]
+name = "h"
+  [host.service.disk_root]
+  vars.path = "/srv"
+"#,
+    )]);
+    let s = config.service("h/disk_root").unwrap();
+    assert_eq!(argv(s), ["check_disk", "-p", "/srv"]);
+    assert_eq!(s.object.as_deref(), Some("disk_root"));
+}
+
+#[test]
+fn for_each_over_a_nested_var() {
+    let config = ok(&[(
+        "a.toml",
+        r#"
+[check.http]
+command = "check_http -H $host.vars.site.name$.$service.key$ -u $path$"
+
+[service.web]
+check = "http"
+for_each = "site.tld"
+vars.path = "/"
+
+[hostgroup.web]
+members = ["w*"]
+services = ["web"]
+vars.site.tld.eu = {}
+
+[[host]]
+name = "w1"
+vars.site.name = "klarsocial"
+vars.site.tld.de = { path = "/de" }
+"#,
+    )]);
+    let eu = config.service("w1/web_eu").unwrap();
+    assert_eq!(argv(eu), ["check_http", "-H", "klarsocial.eu", "-u", "/"]);
+    let de = config.service("w1/web_de").unwrap();
+    assert_eq!(argv(de), ["check_http", "-H", "klarsocial.de", "-u", "/de"]);
+    assert_eq!(de.for_each, Some(("site.tld".into(), "de".into())));
+    assert_eq!(de.sources["vars.path"].layer, Layer::ForEach);
+
+    let (_, diags) = compile(&[(
+        "a.toml",
+        r#"
+[service.ping]
+command = "ping $service.key$"
+
+[[host]]
+name = "h"
+services = ["ping"]
+"#,
+    )]);
+    assert_eq!(
+        messages(&diags)[0],
+        "a.toml:2: error: host \"h\": service \"ping\": $service.key$ is not set"
+    );
+}
+
+#[test]
+fn empty_for_each_entry_from_a_host_group() {
+    let config = ok(&[(
+        "a.toml",
+        r#"
+[service.ping]
+command = "ping -p $path$"
+for_each = "paths"
+vars.path = "/"
+
+[hostgroup.all]
+members = ["*"]
+services = ["ping"]
+vars.paths.root = {}
+
+[[host]]
+name = "h"
+"#,
+    )]);
+    assert_eq!(
+        argv(config.service("h/ping_root").unwrap()),
+        ["ping", "-p", "/"]
+    );
 }
 
 #[test]
@@ -347,61 +472,28 @@ fn same_level_conflicts_are_errors() {
 [check.load]
 command = "check_load"
 
-[role.a]
+[service.load]
+
+[hostgroup.a]
 host_check = "load"
 vars.x = "1"
-service.load = { interval = "1m" }
+services = ["load"]
 
-[role.b]
+[hostgroup.b]
 vars.x = "2"
-service.load = { interval = "2m" }
 
 [[host]]
 name = "h"
-roles = ["a", "b"]
+groups = ["a", "b"]
 "#,
     )]);
     let msgs = messages(&diags);
     assert!(
-        msgs.iter().any(|m| m
-            .contains("host \"h\": roles set vars.x differently: a (a.toml:5) and b (a.toml:10)")),
+        msgs.iter().any(|m| m.contains(
+            "host \"h\": host groups set vars.x differently: a (a.toml:7) and b (a.toml:12)"
+        )),
         "{msgs:?}"
     );
-}
-
-#[test]
-fn services_from_two_roles_must_agree() {
-    let (_, diags) = compile(&[(
-        "a.toml",
-        r#"
-[check.load]
-command = "check_load"
-
-[role.a]
-service.load = { interval = "1m" }
-
-[role.b]
-service.load = { interval = "2m" }
-
-[role.c]
-service.load = { interval = "2m" }
-
-[[host]]
-name = "h"
-roles = ["a", "b"]
-
-[[host]]
-name = "same"
-roles = ["b", "c"]
-"#,
-    )]);
-    let msgs = messages(&diags);
-    assert!(
-        msgs.iter()
-            .any(|m| m.contains("service \"load\" comes from roles \"a\" and \"b\"")),
-        "{msgs:?}"
-    );
-    assert!(!msgs.iter().any(|m| m.contains("\"same\"")), "{msgs:?}");
 }
 
 #[test]
@@ -410,21 +502,20 @@ fn reports_problems_with_locations() {
         (
             "a.toml",
             r#"
-[role.a]
-include = ["b"]
+[check.ping]
+command = "check_ping"
 
-[role.b]
-include = ["a"]
-
-[role.sel]
-hosts = { roles = ["x"] }
+[hostgroup.g]
+services = ["ping"]
 
 [[host]]
 name = "web01"
-roles = ["nope"]
+groups = ["nope"]
 
 [[host]]
 name = "web01"
+
+[service.lonely]
 "#,
         ),
         (
@@ -444,10 +535,10 @@ name = "h"
     ]);
     let msgs = messages(&diags);
     for expected in [
-        "a.toml:2: error: include cycle: a -> b -> a",
-        "a.toml:8: error: role \"sel\": hosts: can't select by roles or groups",
-        "a.toml:11: error: host \"web01\": unknown role \"nope\"",
-        "a.toml:15: error: host \"web01\" is already defined at a.toml:11",
+        "a.toml:5: error: hostgroup \"g\": unknown service \"ping\" (there is a check \"ping\": add [service.ping])",
+        "a.toml:8: error: host \"web01\": unknown hostgroup \"nope\"",
+        "a.toml:12: error: host \"web01\" is already defined at a.toml:8",
+        "a.toml:15: error: service \"lonely\": no check \"lonely\"; set check, command or passive = true",
         "b.toml:1: error: check \"y\": invalid duration \"soon\"",
         "b.toml:7: error: host \"h\": service \"z\": unknown check \"missing\"",
         "b.toml:9: error: host \"h\": service \"w\": $port$ is not set",
@@ -461,61 +552,41 @@ name = "h"
 
 #[test]
 fn old_format_gets_a_hint() {
-    let (_, diags) = compile(&[(
-        "old.toml",
-        r#"
-[template.linux]
-interval = "1m"
-"#,
-    )]);
+    let hint = |text: &str| messages(&compile(&[("old.toml", text)]).1).join("\n");
+    assert!(hint("[template.linux]\ninterval = \"1m\"\n").contains("templates are gone"));
     assert!(
-        messages(&diags)[0].contains("templates are gone"),
-        "{diags:?}"
+        hint("[[check]]\nname = \"x\"\ncommand = \"true\"\n")
+            .contains("[[check]] is the old format")
     );
-    let (_, diags) = compile(&[(
-        "old.toml",
-        r#"
-[[check]]
-name = "x"
-command = "true"
-"#,
-    )]);
-    assert!(
-        messages(&diags)[0].contains("[[check]] is the old format"),
-        "{diags:?}"
-    );
+    assert!(hint("[role.linux]\nservice.ping = {}\n").contains("roles are gone"));
+    assert!(hint("[[host]]\nname = \"a\"\ntags = [\"web\"]\n").contains("tags are gone"));
 }
 
 #[test]
-fn group_selectors() {
+fn host_group_members_by_pattern() {
     let config = ok(&[(
         "a.toml",
         r#"
 [check.ping]
 command = "check_ping"
 
-[role.base]
-hosts = {}
-service.ping = {}
+[service.ping]
 
-[hostgroup.dc1]
-members = { node = "dc1" }
-
-[servicegroup.pings]
-members = { name = "ping", hosts = { groups = ["dc1"] } }
+[hostgroup.web]
+members = ["web*"]
+services = ["ping"]
 
 [[host]]
-name = "a"
-node = "dc1"
+name = "web01"
 
 [[host]]
-name = "b"
+name = "db01"
 "#,
     )]);
-    assert!(config.hosts[0].in_group("dc1"));
-    assert!(!config.hosts[1].in_group("dc1"));
-    assert!(config.service("a/ping").unwrap().in_group("pings"));
-    assert!(!config.service("b/ping").unwrap().in_group("pings"));
+    assert!(config.hosts[0].in_group("web"));
+    assert!(!config.hosts[1].in_group("web"));
+    assert!(config.service("web01/ping").is_some());
+    assert!(config.service("db01/ping").is_none());
 }
 
 #[test]
@@ -526,8 +597,17 @@ fn unused_and_unknown_names_warn() {
 [check.unused]
 command = "x"
 
-[role.lonely]
-hosts = { tags = ["no-such-tag"] }
+[service.idle]
+command = "true"
+
+[hostgroup.empty]
+
+[contact.ops]
+email = "ops@example.com"
+
+[[notify]]
+contacts = ["ops"]
+hosts = { groups = ["no-such-group"] }
 
 [[host]]
 name = "h"
@@ -536,14 +616,39 @@ name = "h"
     let msgs = messages(&diags);
     for expected in [
         "a.toml:2: warning: check \"unused\" is used by no service",
-        "a.toml:5: warning: role \"lonely\" is assigned to no host",
-        "a.toml:5: warning: selector: no tag \"no-such-tag\"",
+        "a.toml:5: warning: service \"idle\" is on no host",
+        "a.toml:8: warning: hostgroup \"empty\" has no hosts",
+        "a.toml:13: warning: selector: no hostgroup \"no-such-group\"",
     ] {
         assert!(
             msgs.contains(&expected.to_string()),
             "missing {expected:?} in {msgs:#?}"
         );
     }
+}
+
+#[test]
+fn graphs_can_be_turned_off() {
+    let config = ok(&[(
+        "a.toml",
+        r#"
+[check.x]
+command = "x"
+graphs = false
+
+[service.x]
+
+[service.y]
+check = "x"
+graphs = true
+
+[[host]]
+name = "h"
+services = ["x", "y"]
+"#,
+    )]);
+    assert!(!config.service("h/x").unwrap().settings.graphs);
+    assert!(config.service("h/y").unwrap().settings.graphs);
 }
 
 #[test]
@@ -567,4 +672,54 @@ vars.label = "two words"
         ))
     );
     assert_eq!(s.check, None);
+}
+
+#[test]
+fn downtime_groups() {
+    let (config, diags) = compile(&[(
+        "a.toml",
+        r#"
+[hostgroup.linux]
+members = ["db*"]
+
+[downtimegroup.patchday]
+title = "Patch Day"
+members = ["web01"]
+hostgroups = ["linux"]
+schedule = [{ days = ["sun"], from = "02:00", to = "04:00" }]
+
+[downtimegroup.bad]
+hostgroups = ["nope"]
+schedule = [{ from = "02:00" }]
+
+[[host]]
+name = "web01"
+
+[[host]]
+name = "db01"
+
+[[host]]
+name = "mq01"
+"#,
+    )]);
+    let msgs = messages(&diags);
+    assert!(
+        msgs.iter()
+            .any(|m| m.contains("downtimegroup \"bad\": unknown hostgroup \"nope\"")),
+        "{msgs:?}"
+    );
+    assert!(
+        msgs.iter()
+            .any(|m| m.contains("downtimegroup \"bad\": schedule 1: needs to")),
+        "{msgs:?}"
+    );
+    let g = &config.downtimegroups[0];
+    let hosts: Vec<_> = config
+        .hosts
+        .iter()
+        .filter(|h| g.has_host(h))
+        .map(|h| h.name.as_str())
+        .collect();
+    assert_eq!(hosts, ["web01", "db01"]);
+    assert_eq!(g.schedule[0].to_string(), "sun 02:00-04:00");
 }

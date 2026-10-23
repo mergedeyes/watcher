@@ -142,7 +142,11 @@ code,
 	background: var(--panel);
 	border: 1px solid var(--line);
 	border-radius: var(--radius);
-	/* Wide tables scroll inside the panel, not the page. */
+}
+
+/* Wide tables scroll inside the panel, not the page. Other panels grow
+   with their content, and dropdowns may reach past their border. */
+.panel:has(> table) {
 	overflow-x: auto;
 }
 
@@ -215,10 +219,6 @@ table.grid tbody tr[data-state='critical'] td {
 }
 table.grid tbody tr[data-state='unknown'] td {
 	background: var(--tint-unknown);
-}
-
-table.grid tbody tr:hover td {
-	filter: brightness(0.97);
 }
 
 table.grid tr:last-child td {
@@ -358,6 +358,23 @@ a.btn:hover {
 	color: var(--unknown);
 	border-color: var(--unknown);
 	font-weight: 600;
+}
+
+/* What applies to a host or service: acknowledged, downtime, muted, checks off */
+.tag.ack,
+.tag.downtime,
+.tag.muted,
+.tag.off {
+	margin-left: 4px;
+	font-weight: 600;
+}
+.tag.ack {
+	color: var(--link);
+	border-color: var(--link);
+}
+.tag.downtime {
+	color: var(--pending);
+	border-color: var(--pending);
 }
 
 /* Host rows: DOWN is tinted like CRITICAL */

@@ -1,15 +1,15 @@
 //! HTTP API, version 1. All responses are JSON; errors are
 //! `{"error": "..."}` with a matching status code.
 
-use crate::view::{Counts, HostView, ServiceDetail, ServiceView};
+use crate::view::{Counts, HostFlags, HostView, ServiceDetail, ServiceView};
 use crate::{Hub, Update};
-use crate::{auth, config};
+use crate::{auth, config, ops};
 use axum::extract::{Path, Query, State as AxState};
 use axum::http::StatusCode;
 use axum::middleware;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
@@ -22,7 +22,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use watcher_core::{RawOutput, State, Termination};
 use watcher_exec::scheduler::Control;
-use watcher_store::{EventFilter, Points, Series, StateEvent, Store};
+use watcher_store::{EventFilter, FlagKind, Points, Series, StateEvent, Store};
 
 type Shared = AxState<Arc<Hub>>;
 
@@ -35,9 +35,25 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/services", get(services))
         .route("/api/v1/services/{host}/{service}", get(service))
         .route("/api/v1/services/{host}/{service}/result", post(submit))
+        .route(
+            "/api/v1/services/{host}/{service}/run",
+            post(ops::run_service),
+        )
         .route("/api/v1/services/{host}/{service}/series", get(series))
         .route("/api/v1/series/{id}/points", get(points))
         .route("/api/v1/events", get(events))
+        .route("/api/v1/actions/{action}", post(ops::action))
+        .route("/api/v1/flags", get(ops::flags))
+        .route("/api/v1/downtimes", get(ops::downtimes))
+        .route("/api/v1/downtimes/{id}", delete(ops::cancel_downtime))
+        .route("/api/v1/process", get(ops::process).put(ops::set_process))
+        .route("/api/v1/scheduler", get(ops::scheduler))
+        .route("/api/v1/run-check", post(ops::run_check))
+        .route("/api/v1/users", get(auth::users).post(auth::create_user))
+        .route(
+            "/api/v1/users/{name}",
+            put(auth::update_user).delete(auth::delete_user),
+        )
         .route("/api/v1/groups", get(groups))
         .route("/api/v1/stream", get(stream))
         .route("/api/v1/auth/status", get(auth::status))
@@ -48,6 +64,14 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/config", get(config::overview))
         .route("/api/v1/config/files/{*path}", get(config::file))
         .route("/api/v1/config/objects", get(config::objects))
+        .route(
+            "/api/v1/config/objects/{kind}/{name}",
+            get(config::object)
+                .put(config::put_object)
+                .delete(config::delete_object),
+        )
+        .route("/api/v1/config/reload", post(config::reload))
+        .route("/api/v1/config/match", post(config::matches))
         .route("/api/v1/config/scripts", get(config::scripts))
         .route("/api/v1/config/tree/{kind}/{*name}", get(config::tree))
         .route("/api/v1/config/edit", post(config::edit))
@@ -143,28 +167,40 @@ async fn openapi() -> impl IntoResponse {
 
 /// All services as views, in config order.
 fn service_views(hub: &Hub) -> Vec<ServiceView> {
-    let live = hub.live.read().unwrap_or_else(|e| e.into_inner());
+    let live = hub.read();
+    let now = SystemTime::now();
     live.config
         .services
         .iter()
-        .map(|s| ServiceView::new(&live.config, s, live.services.get(&s.id)))
+        .map(|s| {
+            let status = live.ops.status(&live.config, s, now);
+            ServiceView::new(&live.config, s, live.services.get(&s.id), &status)
+        })
         .collect()
+}
+
+fn host_flags(hub: &Hub, host: &watcher_config::Host) -> HostFlags {
+    let live = hub.read();
+    let ops = &live.ops;
+    HostFlags {
+        acknowledged: ops.flag(FlagKind::Ack, &host.name).is_some(),
+        muted: ops.flag(FlagKind::Mute, &host.name).is_some(),
+        checks_enabled: ops.checks && ops.flag(FlagKind::NoChecks, &host.name).is_none(),
+        downtime: !ops
+            .downtimes_of(&live.config, host, None, SystemTime::now())
+            .is_empty(),
+    }
 }
 
 async fn hosts(AxState(hub): Shared) -> Json<Vec<HostView>> {
     let views = service_views(&hub);
-    let config = hub
-        .live
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .config
-        .clone();
+    let config = hub.config();
     let hosts = config
         .hosts
         .iter()
         .map(|h| {
             let own: Vec<&ServiceView> = views.iter().filter(|v| v.host == h.name).collect();
-            HostView::new(h, &own)
+            HostView::new(h, &own, &host_flags(&hub, h))
         })
         .collect();
     Json(hosts)
@@ -187,15 +223,24 @@ async fn host(AxState(hub): Shared, Path(name): Path<String>) -> ApiResult<serde
         .filter(|v| v.host == name)
         .collect();
     let refs: Vec<&ServiceView> = views.iter().collect();
+    let flags: Vec<watcher_store::Flag> = hub
+        .read()
+        .ops
+        .flags
+        .values()
+        .filter(|f| f.target == name)
+        .cloned()
+        .collect();
     Ok(Json(json!({
-        "host": HostView::new(host, &refs),
+        "host": HostView::new(host, &refs, &host_flags(&hub, host)),
+        "flags": flags,
         "services": views,
         "origin": host.origin.to_string(),
     })))
 }
 
-/// Host and service groups with their titles; members are in the host and
-/// service views (`groups`).
+/// Host, service and downtime groups with their titles; host and service
+/// group members are in the host and service views (`groups`).
 async fn groups(AxState(hub): Shared) -> Json<serde_json::Value> {
     let config = hub.config();
     let list = |groups: &[watcher_config::Group]| -> Vec<serde_json::Value> {
@@ -207,6 +252,15 @@ async fn groups(AxState(hub): Shared) -> Json<serde_json::Value> {
     Json(json!({
         "hostgroups": list(&config.hostgroups),
         "servicegroups": list(&config.servicegroups),
+        "downtimegroups": config
+            .downtimegroups
+            .iter()
+            .map(|g| json!({
+                "name": g.name,
+                "title": g.title,
+                "schedule": g.schedule.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            }))
+            .collect::<Vec<_>>(),
     }))
 }
 
@@ -258,18 +312,28 @@ async fn service(
     AxState(hub): Shared,
     Path((host, name)): Path<(String, String)>,
 ) -> ApiResult<ServiceDetail> {
-    let live = hub.live.read().unwrap_or_else(|e| e.into_inner());
     let id = format!("{host}/{name}");
-    let service = live
-        .config
-        .services
-        .iter()
-        .find(|s| s.id == id)
-        .ok_or_else(|| ApiError::NotFound(format!("no service {id:?}")))?;
-    Ok(Json(ServiceDetail::new(
+    detail(&hub, &id).ok_or_else(|| ApiError::NotFound(format!("no service {id:?}")))
+}
+
+fn detail(hub: &Hub, id: &str) -> Option<Json<ServiceDetail>> {
+    let live = hub.read();
+    let service = live.config.service(id)?;
+    let host = &live.config.host(service).name;
+    let status = live.ops.status(&live.config, service, SystemTime::now());
+    let flags = live
+        .ops
+        .flags
+        .values()
+        .filter(|f| f.target == *id || f.target == *host)
+        .cloned()
+        .collect();
+    Some(Json(ServiceDetail::new(
         &live.config,
         service,
-        live.services.get(&id),
+        live.services.get(id),
+        &status,
+        flags,
     )))
 }
 
@@ -322,18 +386,7 @@ async fn submit(
     if let Some(event) = &event {
         hub.record(event);
     }
-    let live = hub.live.read().unwrap_or_else(|e| e.into_inner());
-    let service = live
-        .config
-        .services
-        .iter()
-        .find(|s| s.id == id)
-        .ok_or_else(|| ApiError::NotFound(format!("no service {id:?}")))?;
-    Ok(Json(ServiceDetail::new(
-        &live.config,
-        service,
-        live.services.get(&id),
-    )))
+    detail(&hub, &id).ok_or_else(|| ApiError::NotFound(format!("no service {id:?}")))
 }
 
 async fn series(
@@ -388,7 +441,7 @@ struct EventsQuery {
     before: Option<String>,
     /// Only events at or after this time, like `before`.
     since: Option<String>,
-    /// Comma-separated: `service,host,flapping`.
+    /// Comma-separated: `service,host,flapping,ack,downtime`.
     #[serde(rename = "type")]
     kind: Option<String>,
     /// Comma-separated states changed to: `ok,warning,critical,unknown,up,down`.
@@ -420,9 +473,15 @@ fn list_param(name: &str, value: Option<&str>, known: &[&str]) -> Result<Vec<Str
 async fn events(AxState(hub): Shared, Query(q): Query<EventsQuery>) -> ApiResult<Vec<StateEvent>> {
     let now = SystemTime::now();
     let time = |s: &Option<String>| s.as_deref().map(|s| parse_time(s, now)).transpose();
-    let mut kinds = list_param("type", q.kind.as_deref(), &["service", "host", "flapping"])?;
-    if let Some(i) = kinds.iter().position(|k| k == "flapping") {
-        kinds.splice(i..=i, ["flap_start".into(), "flap_stop".into()]);
+    let known = ["service", "host", "flapping", "ack", "downtime"];
+    let mut kinds = list_param("type", q.kind.as_deref(), &known)?;
+    for (name, parts) in [
+        ("flapping", ["flap_start", "flap_stop"]),
+        ("downtime", ["downtime_start", "downtime_end"]),
+    ] {
+        if let Some(i) = kinds.iter().position(|k| k == name) {
+            kinds.splice(i..=i, parts.map(String::from));
+        }
     }
     let states = ["ok", "warning", "critical", "unknown", "up", "down"];
     let state_type = list_param("state_type", q.state_type.as_deref(), &["soft", "hard"])?;
@@ -462,7 +521,7 @@ async fn stream(
 }
 
 /// RFC 3339, unix seconds, `now`, or a duration back from `now` (`6h`).
-fn parse_time(s: &str, now: SystemTime) -> Result<SystemTime, ApiError> {
+pub(crate) fn parse_time(s: &str, now: SystemTime) -> Result<SystemTime, ApiError> {
     let s = s.trim();
     if s == "now" {
         return Ok(now);
@@ -494,9 +553,13 @@ mod tests {
     #[test]
     fn openapi_lists_every_route() {
         let source = include_str!("api.rs");
-        let mut routes: Vec<String> = source
-            .lines()
-            .filter_map(|l| l.trim().strip_prefix(".route(\"/api/v1"))
+        // `.route("/api/v1/...` with the path on the same or the next line,
+        // outside this test.
+        let router = source.split("#[cfg(test)]").next().unwrap();
+        let mut routes: Vec<String> = router
+            .split(".route(")
+            .skip(1)
+            .filter_map(|r| r.trim_start().strip_prefix("\"/api/v1"))
             .map(|r| r.split('"').next().unwrap().replace("{*", "{"))
             .collect();
         routes.sort();

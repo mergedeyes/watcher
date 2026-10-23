@@ -32,7 +32,7 @@
 		['7d', 604800],
 		['30d', 2592000]
 	];
-	const DEFAULT_MAX = 21600;
+	const DEFAULT_MAX = 900;
 
 	/** Range picked by the user; null means automatic. */
 	let chosen = $state<string | null>(null);
@@ -57,7 +57,7 @@
 	let range = $derived.by(() => {
 		const pick = RANGES.find(([label]) => label === chosen);
 		if (pick && enabled(pick[1])) return pick;
-		// Automatic: all data, but no more than 6h.
+		// Automatic: all data, but no more than 15m.
 		return cover[1] <= DEFAULT_MAX ? cover : RANGES.find(([, secs]) => secs === DEFAULT_MAX)!;
 	});
 

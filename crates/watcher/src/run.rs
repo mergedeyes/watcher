@@ -15,7 +15,7 @@ use watcher_config::{CheckDirs, Config, ConfigMode, Severity, files, load_dir};
 use watcher_core::StateType;
 use watcher_exec::scheduler::{Control, Event, schedule};
 use watcher_hub::{AuthSettings, ConfigFiles, Hub, jobs, specs};
-use watcher_notify::{Notifier, setup_warnings};
+use watcher_notify::{DowntimeChange, Message, Notifier, setup_warnings};
 use watcher_store::{Record, Store, StoredState, ingest};
 
 #[derive(clap::Args)]
@@ -123,6 +123,7 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
             .as_deref()
             .is_some_and(|u| u.starts_with("https://"));
     let instance = bootstrap.as_ref().and_then(|b| b.instance_name.clone());
+    let timezone = bootstrap.as_ref().and_then(|b| b.timezone.clone());
     let notifier = Arc::new(
         Notifier::new(smtp.as_ref(), public_url)
             .context("invalid [smtp] settings")?
@@ -172,6 +173,14 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
     if let Some(name) = instance {
         hub.set_instance_name(name);
     }
+    if let Some(name) = &timezone {
+        // Checked when watcher.toml was loaded.
+        hub.set_timezone(jiff::tz::TimeZone::get(name)?);
+    }
+    // Acknowledgements, downtimes, muted and disabled checks.
+    hub.load_ops()
+        .await
+        .context("cannot load acknowledgements and downtimes")?;
     let (reload_tx, mut reloads) = mpsc::channel(4);
     hub.enable_config_editing(ConfigFiles {
         dir: conf_dir.clone(),
@@ -219,11 +228,14 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
         check_dirs: &check_dirs,
         host_checks: host_checks(&config),
     };
+    // Downtimes starting and ending (windows are per minute).
+    let mut downtimes = tokio::time::interval(Duration::from_secs(15));
     let mut hangup = signal(SignalKind::hangup())?;
     let mut terminate = signal(SignalKind::terminate())?;
     loop {
         tokio::select! {
             Some(event) = events.recv() => running.record(event, args.all),
+            _ = downtimes.tick() => running.downtimes().await,
             _ = hangup.recv() => {
                 snapshot = self::snapshot(&conf_dir);
                 let _ = running.reload(&conf_dir, "SIGHUP").await;
@@ -263,7 +275,7 @@ struct Running<'a> {
     sinks: Sinks,
     control: &'a mpsc::Sender<Control>,
     notifier: &'a Notifier,
-    notify_tx: &'a mpsc::Sender<Event>,
+    notify_tx: &'a mpsc::Sender<Message>,
     config_tx: &'a watch::Sender<Arc<Config>>,
     hub: &'a Hub,
     check_dirs: &'a CheckDirs,
@@ -276,9 +288,13 @@ impl Running<'_> {
         print_event(&event, all);
         self.hub.record(&event);
         if event.change.is_some_and(|c| c.hard) || event.flap.is_some() {
-            if self.hub.host_down(&event.id) {
-                info!("no notification for {}: host is DOWN", event.id);
-            } else if self.notify_tx.try_send(event.clone()).is_err() {
+            if let Some(why) = self.hub.suppressed(&event.id, event.state.state) {
+                info!("no notification for {}: {why}", event.id);
+            } else if self
+                .notify_tx
+                .try_send(Message::Result(Box::new(event.clone())))
+                .is_err()
+            {
                 warn!(
                     "notification queue is full; dropped the notification for {}",
                     event.id
@@ -297,6 +313,33 @@ impl Running<'_> {
         self.sinks.record(&record);
         if let Some(storage) = &mut self.storage {
             storage.record(record);
+        }
+    }
+
+    /// Records and notifies downtimes that started or ended.
+    async fn downtimes(&mut self) {
+        for c in self.hub.downtime_changes().await {
+            let id = match &c.service {
+                Some(s) => format!("{}/{s}", c.host),
+                None => c.host.clone(),
+            };
+            let what = if c.started { "started" } else { "ended" };
+            info!("downtime {what}: {id} ({})", c.what);
+            if let Some(why) = self.hub.downtime_suppressed(&c.host, c.service.as_deref()) {
+                info!("no notification for {id}: {why}");
+                continue;
+            }
+            let change = DowntimeChange {
+                host: c.host,
+                service: c.service,
+                started: c.started,
+                state: c.state,
+                what: c.what,
+                time: std::time::SystemTime::now(),
+            };
+            if self.notify_tx.try_send(Message::Downtime(change)).is_err() {
+                warn!("notification queue is full; dropped the downtime notification for {id}");
+            }
         }
     }
 

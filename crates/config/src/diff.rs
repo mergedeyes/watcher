@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 pub struct Changes {
     pub hosts: Delta,
     pub services: Delta,
-    /// Host, service and contact groups, as `hostgroup x`, ...
+    /// Host, service, contact and downtime groups, as `hostgroup x`, ...
     pub groups: Delta,
     pub contacts: Delta,
     /// Notify rules, by name or place.
@@ -43,18 +43,25 @@ impl Changes {
 
 /// Compares objects by what they do; where they are defined doesn't matter.
 pub fn changes(old: &Config, new: &Config) -> Changes {
-    let groups = |c: &Config| -> Vec<(String, Option<String>)> {
+    let groups = |c: &Config| -> Vec<(String, String)> {
         let mut out = Vec::new();
         for (kind, list) in [
             ("hostgroup", &c.hostgroups),
             ("servicegroup", &c.servicegroups),
             ("contactgroup", &c.contactgroups),
         ] {
-            out.extend(
-                list.iter()
-                    .map(|g| (format!("{kind} {}", g.name), g.title.clone())),
-            );
+            // What the group does, not where it is written.
+            out.extend(list.iter().map(|g| {
+                let mut g = g.clone();
+                g.origin = Default::default();
+                (format!("{kind} {}", g.name), format!("{g:?}"))
+            }));
         }
+        out.extend(c.downtimegroups.iter().map(|g| {
+            let mut g = g.clone();
+            g.origin = Default::default();
+            (format!("downtimegroup {}", g.name), format!("{g:?}"))
+        }));
         out
     };
     Changes {
@@ -88,8 +95,6 @@ fn names(list: &[Assigned]) -> Vec<&str> {
 fn same_host(a: &Host, b: &Host) -> bool {
     a.address == b.address
         && a.node == b.node
-        && names(&a.roles) == names(&b.roles)
-        && a.tags == b.tags
         && names(&a.groups) == names(&b.groups)
         && a.vars == b.vars
         && a.host_check == b.host_check
@@ -164,9 +169,10 @@ mod tests {
             r#"
 [check.ping]
 command = "check_ping -H $host.address$"
-[role.base]
-hosts = {}
-service.ping = {}
+[service.ping]
+[hostgroup.base]
+members = ["*"]
+services = ["ping"]
 [[host]]
 name = "a"
 [[host]]
@@ -177,11 +183,12 @@ name = "b"
             r#"
 [check.ping]
 command = "check_ping -H $host.address$"
-[role.base]
-hosts = {}
-service.ping = {}
+[service.ping]
+[hostgroup.base]
+members = ["*"]
+services = ["ping"]
 [hostgroup.all]
-members = {}
+members = ["*"]
 [[host]]
 name = "a"
 address = "10.0.0.1"

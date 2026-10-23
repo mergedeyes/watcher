@@ -80,7 +80,7 @@ smtp.pass             SMTP password (0600), if given
 conf.d/contacts.toml  contact "admins"
 conf.d/notify.toml    notify rule for "admins"
 conf.d/checks.toml    checks for this machine, if chosen
-conf.d/roles.toml     role for this machine
+conf.d/services.toml  services and a service group
 conf.d/hosts.toml     host localhost
 ```
 

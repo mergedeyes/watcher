@@ -100,7 +100,7 @@ fn host(name: &str, node: Option<&str>) -> HostSpec {
         name: name.into(),
         address: format!("{name}.example"),
         node: node.map(Into::into),
-        tags: vec!["linux".into(), "web".into()],
+        groups: vec!["linux".into(), "web".into()],
         vars: serde_json::json!({ "port": "8080" }),
     }
 }
@@ -178,11 +178,11 @@ async fn sync_ingest_and_restore() {
             count(&store, "SELECT count(*) FROM hosts h JOIN nodes n ON n.id = h.node_id WHERE n.name = 'customer-a'").await,
             1
         );
-        let tags: Vec<String> = sqlx::query_scalar("SELECT tags FROM hosts WHERE name = 'web01'")
+        let groups: Vec<String> = sqlx::query_scalar("SELECT groups FROM hosts WHERE name = 'web01'")
             .fetch_one(store.pool())
             .await
             .unwrap();
-        assert_eq!(tags, ["linux", "web"]);
+        assert_eq!(groups, ["linux", "web"]);
 
         let store = Arc::new(store);
         let disk = record("web01/disk", 0, "DISK OK | /=2643MB;5948;5958;0;5968 'temp'=41", None);
@@ -432,4 +432,124 @@ async fn readers_see_monitoring_data_only() {
         .execute(&mut admin)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn flags_downtimes_and_settings() {
+    each_server(|store, _, _| async move {
+        let now = SystemTime::now();
+        let flag = watcher_store::Flag {
+            kind: watcher_store::FlagKind::Ack,
+            target: "web01/http".into(),
+            author: "alice".into(),
+            comment: "on it".into(),
+            created: now,
+        };
+        store.set_flag(&flag).await.unwrap();
+        store
+            .set_flag(&watcher_store::Flag {
+                comment: "still on it".into(),
+                ..flag.clone()
+            })
+            .await
+            .unwrap();
+        let flags = store.flags().await.unwrap();
+        assert_eq!(flags.len(), 1);
+        assert_eq!(flags[0].comment, "still on it");
+        assert!(
+            store
+                .clear_flag(watcher_store::FlagKind::Ack, "web01/http")
+                .await
+                .unwrap()
+        );
+        assert!(store.flags().await.unwrap().is_empty());
+
+        let planned = watcher_store::Downtime {
+            id: 0,
+            kind: "hostgroup".into(),
+            target: "linux".into(),
+            starts: now,
+            ends: now + Duration::from_secs(3600),
+            author: "alice".into(),
+            comment: "patch day".into(),
+            created: now,
+        };
+        let added = store.add_downtime(&planned).await.unwrap();
+        assert!(added.id > 0);
+        let past = watcher_store::Downtime {
+            starts: now - Duration::from_secs(7200),
+            ends: now - Duration::from_secs(3600),
+            ..planned.clone()
+        };
+        store.add_downtime(&past).await.unwrap();
+        let open = store.downtimes().await.unwrap();
+        assert_eq!(open.len(), 1, "ended downtimes are not listed");
+        assert_eq!(
+            (open[0].kind.as_str(), open[0].target.as_str()),
+            ("hostgroup", "linux")
+        );
+        assert!(store.cancel_downtime(added.id).await.unwrap());
+        assert!(!store.cancel_downtime(added.id).await.unwrap());
+        assert!(store.downtimes().await.unwrap().is_empty());
+
+        // Acknowledgements and downtimes go to the alert history.
+        store
+            .sync(&[host("web01", None)], &[service("web01", "http", "h1")])
+            .await
+            .unwrap();
+        let ack = watcher_store::OpsEvent {
+            host: "web01".into(),
+            service: Some("http".into()),
+            kind: "ack",
+            state: "critical".into(),
+            output: "alice: on it".into(),
+            time: now,
+        };
+        assert!(store.add_event(&ack).await.unwrap());
+        let host_dt = watcher_store::OpsEvent {
+            service: None,
+            kind: "downtime_start",
+            state: "up".into(),
+            output: "hostgroup linux: patch day".into(),
+            ..ack.clone()
+        };
+        assert!(store.add_event(&host_dt).await.unwrap());
+        let unknown = watcher_store::OpsEvent {
+            host: "nope".into(),
+            ..ack.clone()
+        };
+        assert!(!store.add_event(&unknown).await.unwrap());
+        let events = store
+            .events(&EventFilter {
+                host: Some("web01".into()),
+                service: None,
+                before: None,
+                since: None,
+                kinds: vec!["ack".into(), "downtime_start".into()],
+                states: Vec::new(),
+                state_type: None,
+                hard_only: false,
+                limit: 10,
+            })
+            .await
+            .unwrap();
+        let got: Vec<(&str, &str)> = events
+            .iter()
+            .map(|e| (e.kind.as_str(), e.service.as_str()))
+            .collect();
+        assert_eq!(got.len(), 2);
+        assert!(got.contains(&("ack", "http")));
+        assert!(got.contains(&("downtime_start", "")));
+
+        assert_eq!(store.setting("notifications").await.unwrap(), None);
+        store
+            .set_setting("notifications", &serde_json::json!(false))
+            .await
+            .unwrap();
+        assert_eq!(
+            store.setting("notifications").await.unwrap(),
+            Some(serde_json::json!(false))
+        );
+    })
+    .await;
 }

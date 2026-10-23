@@ -1,35 +1,32 @@
 [[host]]
 name = "web01"
 address = "10.0.1.11"
-tags = ["linux", "web"]
+groups = ["linux", "web-servers"]
 
 [[host]]
 name = "web02"
 address = "10.0.1.12"
-tags = ["linux", "web"]
-  [host.service.flappy]
-  [host.service.tls_expiry]
+groups = ["linux", "web-servers"]
+services = ["flappy", "tls_expiry"]
 
 [[host]]
 name = "db01"
 address = "10.0.2.21"
-tags = ["linux", "db"]
+groups = ["linux", "db-servers"]
 vars.role = "primary"
 
 [[host]]
 name = "mq-01"
 address = "10.0.3.31"
-tags = ["linux"]
+groups = ["linux"]
 
-# Results come from the backup job (passive), at least once a day.
+# DOWN: notifications for its other services are held back.
 [[host]]
 name = "backup01"
 address = "10.0.4.41"
-  [host.service.backup]
-  passive = true
-  freshness = "26h"
+services = ["backup"]
 
 [[host]]
 name = "as400-prod"
 address = "10.0.9.5"
-tags = ["ibmi"]
+groups = ["ibmi"]

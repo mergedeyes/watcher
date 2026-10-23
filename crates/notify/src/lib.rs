@@ -39,6 +39,8 @@ pub enum Kind {
     /// The state started changing too often; problems are held back.
     FlappingStart,
     FlappingStop,
+    DowntimeStart,
+    DowntimeEnd,
     /// Sent by `watcher notify test`.
     Test,
 }
@@ -50,6 +52,8 @@ impl Kind {
             Kind::Recovery => "RECOVERY",
             Kind::FlappingStart => "FLAPPINGSTART",
             Kind::FlappingStop => "FLAPPINGSTOP",
+            Kind::DowntimeStart => "DOWNTIMESTART",
+            Kind::DowntimeEnd => "DOWNTIMEEND",
             Kind::Test => "TEST",
         }
     }
@@ -180,6 +184,7 @@ pub fn decide<'a>(
         Kind::Problem => (Alert::Problem, to),
         Kind::Recovery => (Alert::Recovery, before.unwrap_or(to)),
         Kind::FlappingStart | Kind::FlappingStop | Kind::Test => (Alert::Flapping, to),
+        Kind::DowntimeStart | Kind::DowntimeEnd => (Alert::Downtime, to),
     };
     let contacts = config.recipients(
         service,
@@ -214,6 +219,78 @@ pub fn decide<'a>(
         output: event.result.message.clone(),
         long_output: event.result.long_output.clone(),
         time: event.state.last_check,
+        url,
+        instance: None,
+    };
+    Some((notification, contacts))
+}
+
+/// A downtime that started or ended for a host or one service.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DowntimeChange {
+    pub host: String,
+    /// `None`: the host and all its services.
+    pub service: Option<String>,
+    pub started: bool,
+    /// The state at the time (for a host, of its host check).
+    pub state: State,
+    /// Which downtime, e.g. `hostgroup linux: patch day`.
+    pub what: String,
+    pub time: SystemTime,
+}
+
+/// What the notifier gets: check results and downtime changes.
+#[derive(Debug, Clone)]
+pub enum Message {
+    Result(Box<Event>),
+    Downtime(DowntimeChange),
+}
+
+/// Whom a downtime change notifies.
+pub fn decide_downtime<'a>(
+    change: &DowntimeChange,
+    config: &'a Config,
+    public_url: Option<&str>,
+) -> Option<(Notification, Vec<&'a Contact>)> {
+    let host = config.hosts.iter().find(|h| h.name == change.host)?;
+    let service = match &change.service {
+        Some(name) => Some(config.service(&format!("{}/{name}", host.name))?),
+        None => None,
+    };
+    let contacts = match service {
+        Some(s) => config.recipients(s, false, Alert::Downtime, "ok"),
+        None => config.host_downtime_recipients(host),
+    };
+    if contacts.is_empty() {
+        return None;
+    }
+    let base = public_url.map(|b| b.trim_end_matches('/').to_string());
+    let url = base.map(|b| match service {
+        Some(s) => format!(
+            "{b}/services/{}/{}",
+            url_segment(&host.name),
+            url_segment(&s.name)
+        ),
+        None => format!("{b}/hosts/{}", url_segment(&host.name)),
+    });
+    let notification = Notification {
+        kind: match change.started {
+            true => Kind::DowntimeStart,
+            false => Kind::DowntimeEnd,
+        },
+        host: host.name.clone(),
+        address: host.address.clone(),
+        service: match service {
+            Some(s) => s.name.clone(),
+            None => host.host_check.clone().unwrap_or_default(),
+        },
+        host_check: service.is_none(),
+        state: change.state,
+        previous_state: None,
+        attempts: 1,
+        output: change.what.clone(),
+        long_output: String::new(),
+        time: change.time,
         url,
         instance: None,
     };
@@ -336,11 +413,15 @@ pub fn setup_warnings(config: &Config, notifier: &Notifier) -> Vec<String> {
 pub async fn run(
     notifier: Arc<Notifier>,
     config: watch::Receiver<Arc<Config>>,
-    mut events: mpsc::Receiver<Event>,
+    mut messages: mpsc::Receiver<Message>,
 ) {
-    while let Some(event) = events.recv().await {
+    while let Some(message) = messages.recv().await {
         let config = config.borrow().clone();
-        let Some((mut n, contacts)) = decide(&event, &config, notifier.public_url()) else {
+        let decided = match &message {
+            Message::Result(event) => decide(event, &config, notifier.public_url()),
+            Message::Downtime(change) => decide_downtime(change, &config, notifier.public_url()),
+        };
+        let Some((mut n, contacts)) = decided else {
             continue;
         };
         n.instance = notifier.instance.clone();
@@ -607,5 +688,35 @@ host_check = "ping"
         let config = config();
         let notifier = Notifier::new(None, None).unwrap();
         assert_eq!(setup_warnings(&config, &notifier).len(), 1);
+    }
+
+    #[test]
+    fn downtime_changes_notify_by_rules() {
+        let config = config();
+        let change = |host: &str, service: Option<&str>| DowntimeChange {
+            host: host.into(),
+            service: service.map(String::from),
+            started: true,
+            state: State::Ok,
+            what: "hostgroup linux: patch day".into(),
+            time: SystemTime::now(),
+        };
+        // A host with a host check: rules for the host.
+        let (n, contacts) =
+            decide_downtime(&change("router", None), &config, Some("https://w.example")).unwrap();
+        assert_eq!(n.kind, Kind::DowntimeStart);
+        assert_eq!(n.service_id(), "router");
+        assert_eq!(n.state_name(), "UP");
+        assert_eq!(n.url.as_deref(), Some("https://w.example/hosts/router"));
+        assert_eq!(contacts[0].name, "ops");
+        assert_eq!(
+            crate::email::subject(&n),
+            "[Watcher] DOWNTIMESTART: router is UP"
+        );
+        // Rules with services don't take host downtimes.
+        assert!(decide_downtime(&change("web 01", None), &config, None).is_none());
+        let (n, _) = decide_downtime(&change("web 01", Some("disk")), &config, None).unwrap();
+        assert_eq!(n.service_id(), "web 01/disk");
+        assert!(decide_downtime(&change("web 01", Some("quiet")), &config, None).is_none());
     }
 }

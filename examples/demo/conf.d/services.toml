@@ -1,0 +1,18 @@
+# Services: a check with its settings. Hosts and host groups list them
+# (services = [...]), directly or in a service group (servicegroups = [...]).
+
+[service.ping]
+[service.load]
+[service.http]
+[service.replication]
+[service.pg_connections]
+[service.queue_depth]
+[service.qsysopr_messages]
+[service.asp_usage]
+[service.flappy]
+[service.tls_expiry]
+
+# Results come from the backup job (passive), at least once a day.
+[service.backup]
+passive = true
+freshness = "26h"

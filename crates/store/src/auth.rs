@@ -113,6 +113,37 @@ impl Store {
         Ok(id.is_some())
     }
 
+    /// Changes the admin and disabled flags; disabling ends the user's
+    /// sessions. `None` if there is no such user.
+    pub async fn update_user(
+        &self,
+        username: &str,
+        admin: Option<bool>,
+        disabled: Option<bool>,
+    ) -> Result<Option<User>> {
+        let mut tx = self.pool.begin().await?;
+        let sql = format!(
+            "UPDATE users AS u SET admin = coalesce($2, u.admin), disabled = coalesce($3, u.disabled)
+             WHERE lower(u.username) = lower($1) RETURNING {USER_COLUMNS}"
+        );
+        let row: Option<UserRow> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .bind(username)
+            .bind(admin)
+            .bind(disabled)
+            .fetch_optional(&mut *tx)
+            .await?;
+        if let Some(row) = &row
+            && row.3
+        {
+            sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+                .bind(row.0)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(row.map(user))
+    }
+
     /// Deletes a user with their sessions and tokens.
     pub async fn delete_user(&self, username: &str) -> Result<bool> {
         let n = sqlx::query("DELETE FROM users WHERE lower(username) = lower($1)")

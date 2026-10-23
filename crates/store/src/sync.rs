@@ -17,7 +17,8 @@ pub struct HostSpec {
     pub name: String,
     pub address: String,
     pub node: Option<String>,
-    pub tags: Vec<String>,
+    /// Host groups.
+    pub groups: Vec<String>,
     /// A JSON object; values are text, or tables (`for_each` data).
     pub vars: serde_json::Value,
 }
@@ -75,27 +76,27 @@ impl Store {
         let names: Vec<&str> = hosts.iter().map(|h| h.name.as_str()).collect();
         let addresses: Vec<&str> = hosts.iter().map(|h| h.address.as_str()).collect();
         let host_nodes: Vec<Option<&str>> = hosts.iter().map(|h| h.node.as_deref()).collect();
-        // Tags go in as JSON arrays: UNNEST cannot take an array of arrays.
-        let tags: Vec<serde_json::Value> =
-            hosts.iter().map(|h| serde_json::json!(h.tags)).collect();
+        // Groups go in as JSON arrays: UNNEST cannot take an array of arrays.
+        let groups: Vec<serde_json::Value> =
+            hosts.iter().map(|h| serde_json::json!(h.groups)).collect();
         let vars: Vec<serde_json::Value> =
             hosts.iter().map(|h| serde_json::json!(h.vars)).collect();
         sqlx::query(
-            "INSERT INTO hosts (tenant_id, node_id, name, address, tags, vars)
+            "INSERT INTO hosts (tenant_id, node_id, name, address, groups, vars)
              SELECT (SELECT id FROM tenants WHERE name = 'default'),
                     (SELECT id FROM nodes WHERE name = u.node),
                     u.name, u.address,
-                    ARRAY(SELECT jsonb_array_elements_text(u.tags)), u.vars
+                    ARRAY(SELECT jsonb_array_elements_text(u.groups)), u.vars
              FROM UNNEST($1::text[], $2::text[], $3::text[], $4::jsonb[], $5::jsonb[])
-                  AS u(name, address, node, tags, vars)
+                  AS u(name, address, node, groups, vars)
              ON CONFLICT (name) DO UPDATE
              SET node_id = EXCLUDED.node_id, address = EXCLUDED.address,
-                 tags = EXCLUDED.tags, vars = EXCLUDED.vars, removed_at = NULL",
+                 groups = EXCLUDED.groups, vars = EXCLUDED.vars, removed_at = NULL",
         )
         .bind(&names)
         .bind(&addresses)
         .bind(&host_nodes)
-        .bind(&tags)
+        .bind(&groups)
         .bind(&vars)
         .execute(&mut *tx)
         .await?;

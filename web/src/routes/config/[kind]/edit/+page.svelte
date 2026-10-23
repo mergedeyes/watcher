@@ -10,7 +10,12 @@
 	import ConfigTree from '#lib/ConfigTree.svelte';
 	import { live } from '#lib/live.svelte.ts';
 	import { Suggest } from '#lib/suggest.ts';
-	import { KINDS, SCHEMAS, SELECTOR_FIELDS, expandNames, fromForm, otherKeys, toForm, type Field, type FormValues, type ServiceRow } from '#lib/schema.ts';
+	import MatchPreview from '#lib/MatchPreview.svelte';
+	import { RELATIONS, remote, without } from '#lib/membership.ts';
+	import { KINDS, SCHEMAS, SELECTOR_FIELDS, expandNames, fromForm, otherKeys, selectorFromForm, toForm, type Field, type FormValues, type ServiceRow, type WindowRow } from '#lib/schema.ts';
+
+	const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+	const TIMES = ['00:00', '01:00', '02:00', '03:00', '04:00', '05:00', '06:00', '12:00', '18:00', '20:00', '22:00', '23:00', '24:00'];
 
 	let kind = $derived(KINDS.find((k) => k.path === page.params.kind));
 	let name = $derived(page.url.searchParams.get('name'));
@@ -47,7 +52,10 @@
 		void kind;
 		void name;
 		void cloneName;
-		untrack(() => (values = null));
+		untrack(() => {
+			values = null;
+			dropped = [];
+		});
 	});
 
 	// Fill the form once the object is there; later reloads don't reset edits.
@@ -61,7 +69,7 @@
 			const filled = toForm(k, fields);
 			// From a service page: on a host, a row to override the service.
 			const rows = filled.service as ServiceRow[] | undefined;
-			if (focus && k === 'host' && rows && !rows.some((r) => r[0] === focus)) rows.push([focus, '', '', '', '', '']);
+			if (focus && k === 'host' && rows && !rows.some((r) => r[0] === focus)) rows.push([focus, '', '', '', '']);
 			values = filled;
 			requestAnimationFrame(() => document.querySelector('.row.svc.focused')?.scrollIntoView({ block: 'center' }));
 		});
@@ -69,23 +77,88 @@
 
 	let others = $derived(kind ? otherKeys(kind.kind, raw) : []);
 
+	/** Group membership kept on the other side (a host group listing this host, ...). */
+	let relation = $derived(kind ? RELATIONS[kind.kind] : undefined);
+	let otherPath = $derived(KINDS.find((k) => k.kind === relation?.other)?.path ?? '');
+	let remotes = $derived.by(() => {
+		if (!kind || !relation || !values || !object) return [];
+		return remote(config.objects, kind.kind, object.name, items(String(values[relation.field] ?? '')));
+	});
+	/** Other objects this form takes the membership out of on save. */
+	let dropped = $state<string[]>([]);
+
+	/** Edits of the other side: `drop` loses this object, the rest follow a rename. */
+	function remoteEdits(drop: string[], newName: string | null) {
+		if (!relation || !object) return [];
+		const rel = relation;
+		const old = object.name;
+		return remotes
+			.filter((r) => r.listed && (drop.includes(r.name) || (newName !== null && newName !== old)))
+			.flatMap((r) => {
+				const o = config.find(rel.other, r.name);
+				if (!o) return [];
+				const fields = without(o, rel.otherField, old);
+				if (!drop.includes(r.name) && newName) fields[rel.otherField] = [...list(fields[rel.otherField]), newName];
+				return [{ kind: rel.other, name: r.name, fields }];
+			});
+	}
+
+	function list(v: unknown): string[] {
+		return v === undefined ? [] : Array.isArray(v) ? v.map(String) : [String(v)];
+	}
+
+	/** Selectors for the match preview of a field, or null for none. */
+	function previewOf(f: Field): { kind: 'host' | 'service'; selectors: unknown[]; none?: string } | null {
+		if (!kind || !values) return null;
+		if (f.type === 'selector') {
+			const selects = f.selects ?? 'host';
+			const sel = selectorFromForm(values[f.key] as Record<string, string>, raw[f.key], selects);
+			return { kind: selects, selectors: sel === undefined ? [] : [sel], none: selects === 'host' ? 'All hosts' : 'All services' };
+		}
+		const names = (key: string) => items(String(values![key] ?? ''));
+		if (kind.kind === 'hostgroup' && f.key === 'members') {
+			return { kind: 'host', selectors: names('members').length ? [names('members')] : [] };
+		}
+		if (kind.kind === 'downtimegroup' && f.key === 'hostgroups') {
+			const sels: unknown[] = [];
+			if (names('members').length) sels.push(names('members'));
+			if (names('hostgroups').length) sels.push({ groups: names('hostgroups') });
+			return { kind: 'host', selectors: sels, none: 'No hosts' };
+		}
+		return null;
+	}
+
 	let suggest = $derived(
 		new Suggest(config.objects, [...new Set(live.services.map((s) => s.service))], scripts?.scripts ?? [])
 	);
 
-	/** Services of the host's roles (as written), by name: role. Host services with these names override them. */
-	let roleServices = $derived.by(() => {
+	/** Services the host gets (as written), by name: where from. Host services with these names override them. */
+	let assignedServices = $derived.by(() => {
 		const out = new Map<string, string>();
 		if (kind?.kind !== 'host' || !values) return out;
-		const listed = items(String(values.roles ?? ''));
-		for (const role of config.of('role')) {
-			const selected = role.fields.hosts !== undefined;
-			if (!listed.includes(role.name) && !selected) continue;
-			const svc = role.fields.service;
-			if (svc && typeof svc === 'object') for (const s of Object.keys(svc)) out.set(s, role.name);
+		const host = String(values.name ?? '');
+		const listOf = (v: unknown) => (Array.isArray(v) ? v.map(String) : typeof v === 'string' ? [v] : []);
+		const groupServices = (sg: string) => [
+			...listOf(config.find('servicegroup', sg)?.fields.services),
+			...config.of('service').filter((o) => listOf(o.fields.groups).includes(sg)).map((o) => o.name)
+		];
+		const add = (names: string[], from: string) => names.forEach((n) => out.has(n) || out.set(n, from));
+		add(items(String(values.services ?? '')), 'host');
+		for (const sg of items(String(values.servicegroups ?? ''))) add(groupServices(sg), `servicegroup ${sg}`);
+		const listed = items(String(values.groups ?? ''));
+		for (const g of config.of('hostgroup')) {
+			const member = listed.includes(g.name) || listOf(g.fields.members).some((m) => glob(m).test(host));
+			if (!member) continue;
+			add(listOf(g.fields.services), `hostgroup ${g.name}`);
+			for (const sg of listOf(g.fields.servicegroups)) add(groupServices(sg), `servicegroup ${sg} on hostgroup ${g.name}`);
 		}
 		return out;
 	});
+
+	function glob(pattern: string): RegExp {
+		const re = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+		return new RegExp(`^${re}$`);
+	}
 	/** Problems on disk that point at this object, e.g. a command not found. */
 	let own = $derived(
 		object ? (config.overview?.diagnostics ?? []).filter((p) => p.path === object.path && p.line === object.line) : []
@@ -98,8 +171,11 @@
 		error = null;
 		try {
 			const fields = fromForm(kind.kind, raw, values);
+			const extra = remoteEdits(dropped, typeof fields.name === 'string' ? fields.name : null);
 			if (source) {
 				pending = await clones(kind.kind, fields, source.path);
+			} else if (extra.length) {
+				pending = (await api.editMany([{ kind: kind.kind, name, fields }, ...extra])).changes;
 			} else {
 				pending = [await api.editObject(kind.kind, name, fields)];
 			}
@@ -113,7 +189,11 @@
 		if (!kind || name === null) return;
 		error = null;
 		try {
-			pending = [await api.editObject(kind.kind, name, null)];
+			// Lists on the other side lose it too.
+			const extra = remoteEdits(remotes.map((r) => r.name), null);
+			pending = extra.length
+				? (await api.editMany([{ kind: kind.kind, name, fields: null }, ...extra])).changes
+				: [await api.editObject(kind.kind, name, null)];
 			deleting = true;
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
@@ -245,31 +325,47 @@
 													{/each}
 												{/if}
 											</div>
+										{:else if f.type === 'windows'}
+											<div class="rows">
+												{#if rows<WindowRow>(f.key).length > 0}
+													<div class="row three head"><span>Days</span><span>From</span><span>To</span><span></span></div>
+												{/if}
+												{#each rows<WindowRow>(f.key) as row, i (i)}
+													<div class="row three">
+														<Combobox multi placeholder="daily" bind:value={row[0]} label="Days" options={WEEKDAYS} />
+														<Combobox mono placeholder="02:00" bind:value={row[1]} label="From" options={TIMES} />
+														<Combobox mono placeholder="04:00" bind:value={row[2]} label="To" options={TIMES} />
+														<button type="button" class="btn" aria-label="Remove"
+															onclick={() => (values![f.key] = rows<WindowRow>(f.key).filter((_, j) => j !== i))}>×</button>
+													</div>
+												{/each}
+												<button type="button" class="btn small"
+													onclick={() => (values![f.key] = [...rows<WindowRow>(f.key), ['', '', '']])}>Add window</button>
+											</div>
 										{:else if f.type === 'services'}
 											<div class="rows">
 												{#if rows<ServiceRow>(f.key).length > 0}
-													<div class="row svc head"><span>Service</span><span>Check</span><span>For Each</span><span>Service Groups</span><span>Enabled</span><span></span></div>
+													<div class="row svc head"><span>Service</span><span>Check</span><span>Service Groups</span><span>Enabled</span><span></span></div>
 												{/if}
 												{#each rows<ServiceRow>(f.key) as row, i (i)}
 													<div class="row svc" class:focused={focus !== null && row[0] === focus}>
 														<Combobox mono placeholder="name" bind:value={row[0]} label="Service" options={suggest.serviceNames()} />
 														<Combobox mono placeholder={row[0] || 'check'} bind:value={row[1]} label="Check" options={suggest.names('check')} />
-														<Combobox mono placeholder="host var" bind:value={row[2]} label="For each" options={suggest.varNames(true)} />
-														<Combobox multi placeholder="groups" bind:value={row[3]} label="Service groups" options={suggest.names('servicegroup')} />
-														<select bind:value={row[4]} aria-label="Enabled">
+														<Combobox multi placeholder="groups" bind:value={row[2]} label="Service groups" options={suggest.names('servicegroup')} />
+														<select bind:value={row[3]} aria-label="Enabled">
 															<option value="">—</option>
 															<option value="yes">yes</option>
 															<option value="no">no</option>
 														</select>
 														<button type="button" class="btn" aria-label="Remove"
 															onclick={() => (values![f.key] = rows<ServiceRow>(f.key).filter((_, j) => j !== i))}>×</button>
-														{#if kind.kind === 'host' && roleServices.has(row[0])}
-															<span class="override">overrides role {roleServices.get(row[0])}</span>
+														{#if kind.kind === 'host' && assignedServices.has(row[0])}
+															<span class="override">overrides service {row[0]} ({assignedServices.get(row[0])})</span>
 														{/if}
 													</div>
 												{/each}
 												<button type="button" class="btn small"
-													onclick={() => (values![f.key] = [...rows<ServiceRow>(f.key), ['', '', '', '', '', '']])}>Add service</button>
+													onclick={() => (values![f.key] = [...rows<ServiceRow>(f.key), ['', '', '', '', '']])}>Add service</button>
 											</div>
 										{:else}
 											<Combobox
@@ -284,6 +380,26 @@
 											/>
 										{/if}
 										{#if f.help}<div class="help">{f.help}</div>{/if}
+										{#if relation && f.key === relation.field && remotes.length > 0}
+											<div class="also">
+												<span class="muted">Also:</span>
+												{#each remotes as r (r.name)}
+													<span class="chip" class:gone={dropped.includes(r.name)}>
+														<a href="/config/{otherPath}/edit?name={encodeURIComponent(r.name)}">{r.name}</a>
+														<span class="muted">{r.pattern ? `pattern ${r.pattern}` : `listed on ${relation.other}`}</span>
+														{#if r.listed}
+															<button type="button" class="x" aria-label="Remove {r.name}" title={dropped.includes(r.name) ? 'Keep' : 'Remove there on save'}
+																onclick={() => (dropped = dropped.includes(r.name) ? dropped.filter((d) => d !== r.name) : [...dropped, r.name])}
+															>{dropped.includes(r.name) ? '↺' : '×'}</button>
+														{/if}
+													</span>
+												{/each}
+											</div>
+										{/if}
+										{#if previewOf(f)}
+											{@const preview = previewOf(f)!}
+											<MatchPreview kind={preview.kind} selectors={preview.selectors} none={preview.none} />
+										{/if}
 										{#if f.scripts && scripts}
 											<div class="help">Check dirs: <span class="mono">{scripts.dirs.join(', ')}</span> ({scripts.scripts.length} scripts)</div>
 										{/if}
@@ -412,7 +528,7 @@
 	}
 
 	.row.svc {
-		grid-template-columns: 1.2fr 1fr 1fr 1.2fr 70px auto;
+		grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.2fr) 70px auto;
 	}
 
 	.row.svc > * {
@@ -423,6 +539,45 @@
 		outline: 2px solid var(--link);
 		outline-offset: 3px;
 		border-radius: 2px;
+	}
+
+	.also {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px 6px;
+		align-items: center;
+		margin-top: 4px;
+		font-size: 12px;
+	}
+
+	.chip {
+		display: inline-flex;
+		gap: 5px;
+		align-items: center;
+		padding: 1px 6px;
+		border: 1px solid var(--line);
+		border-radius: 3px;
+		background: var(--panel-alt);
+	}
+
+	.chip.gone {
+		text-decoration: line-through;
+		opacity: 0.6;
+	}
+
+	.chip .x {
+		border: 0;
+		padding: 0 2px;
+		background: none;
+		color: var(--muted);
+		cursor: pointer;
+		font: inherit;
+	}
+
+	.row.head {
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--muted);
 	}
 
 	.row.svc.head {

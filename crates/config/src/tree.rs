@@ -9,9 +9,10 @@ use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Node {
-    /// `host`, `service`, `role`, `check`, `hostgroup`, `servicegroup`,
-    /// `contact`, `contactgroup` and `notify` for objects; `section` and
-    /// `value` otherwise.
+    /// `host`, `service`, `check`, `hostgroup`, `servicegroup`, `contact`,
+    /// `contactgroup`, `downtimegroup` and `notify` for objects; `section` and `value`
+    /// otherwise. A `service` named `host/service` is a service on a host,
+    /// one without `/` a service object.
     pub kind: &'static str,
     /// The object's name (`host/service` for services), to link to it.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -45,16 +46,19 @@ impl<'a> Builder<'a> {
     }
 
     /// The tree of an object: `kind` as in [`Node::kind`], `name` as there.
+    /// A `service` named `host/service` is a service on a host, otherwise
+    /// a service object.
     pub fn tree(&self, kind: &str, name: &str) -> Option<Node> {
         match kind {
             "host" => self.host(name),
-            "service" => self.service(name),
-            "role" => self.role(name),
+            "service" if name.contains('/') => self.service(name),
+            "service" => self.service_object(name),
             "check" => self.check(name),
             "hostgroup" => self.hostgroup(name),
             "servicegroup" => self.servicegroup(name),
             "contact" => self.contact(name),
             "contactgroup" => self.contactgroup(name),
+            "downtimegroup" => self.downtimegroup(name),
             "notify" => self.rule(name),
             _ => None,
         }
@@ -97,7 +101,10 @@ impl<'a> Builder<'a> {
     }
 
     /// A node for the object a value came from.
+    /// A node for the object a value came from.
     fn source(&self, source: &Source) -> Node {
+        let first = |s: &str| s.split('.').next().unwrap_or_default().to_string();
+        let rest = |s: &str| s.split_once('.').map_or("", |x| x.1).to_string();
         let (kind, name, label): (&'static str, Option<String>, String) = match source.layer {
             Layer::Default => ("value", None, "default".into()),
             Layer::Check => (
@@ -105,42 +112,27 @@ impl<'a> Builder<'a> {
                 Some(source.name.clone()),
                 format!("check {}", source.name),
             ),
-            Layer::Role => (
-                "role",
+            Layer::Service => (
+                "service",
                 Some(source.name.clone()),
-                format!("role {}", source.name),
+                format!("service {}", source.name),
             ),
-            Layer::RoleService => {
-                let role = source
-                    .name
-                    .split('.')
-                    .next()
-                    .unwrap_or_default()
-                    .to_string();
-                let label = format!(
-                    "role {role}, service {}",
-                    source.name.split_once('.').map_or("", |x| x.1)
-                );
-                ("role", Some(role), label)
+            Layer::HostGroup => (
+                "hostgroup",
+                Some(source.name.clone()),
+                format!("hostgroup {}", source.name),
+            ),
+            Layer::Host => ("host", Some(source.name.clone()), {
+                format!("host {}", source.name)
+            }),
+            Layer::ForEach => {
+                let host = first(&source.name);
+                let label = format!("host {host}, {}", rest(&source.name));
+                ("host", Some(host), label)
             }
-            Layer::Host | Layer::ForEach | Layer::HostService => {
-                let host = source
-                    .name
-                    .split('.')
-                    .next()
-                    .unwrap_or_default()
-                    .to_string();
-                let label = match source.layer {
-                    Layer::ForEach => format!(
-                        "host {host}, {}",
-                        source.name.split_once('.').map_or("", |x| x.1)
-                    ),
-                    Layer::HostService => format!(
-                        "host {host}, service {}",
-                        source.name.split_once('.').map_or("", |x| x.1)
-                    ),
-                    _ => format!("host {host}"),
-                };
+            Layer::HostService => {
+                let host = first(&source.name);
+                let label = format!("host {host}, service {}", rest(&source.name));
                 ("host", Some(host), label)
             }
         };
@@ -153,8 +145,34 @@ impl<'a> Builder<'a> {
             Reason::Selector { origin, matched } => {
                 (format!("matched: {matched}"), Some(origin.clone()))
             }
-            Reason::Included { by } => (format!("included by role {by}"), None),
         }
+    }
+
+    /// A node for the object that lists a service: the first words of a
+    /// [`Reason::Listed`] `by` (`servicegroup basics on host web01`).
+    fn lister(&self, reason: &Reason) -> Node {
+        let (why, origin) = self.reason(reason);
+        let by = match reason {
+            Reason::Listed { by, .. } => by.as_str(),
+            Reason::Selector { .. } => "",
+        };
+        let mut words = by.split_whitespace();
+        let kind: Option<&'static str> = match words.next() {
+            Some("host") => Some("host"),
+            Some("hostgroup") => Some("hostgroup"),
+            Some("servicegroup") => Some("servicegroup"),
+            Some("service") => Some("service"),
+            _ => None,
+        };
+        let name = words.next().map(|n| n.trim_end_matches(','));
+        let mut n = match (kind, name) {
+            (Some(kind), Some(name)) => self.node(kind, Some(name), by, origin.as_ref()),
+            _ => self.node("value", None, why.clone(), origin.as_ref()),
+        };
+        if kind.is_some() {
+            n.detail = Some("listed".into());
+        }
+        n
     }
 
     fn assigned(&self, kind: &'static str, a: &Assigned) -> Node {
@@ -204,14 +222,19 @@ impl<'a> Builder<'a> {
             h.children.push(item);
         }
         from.push(h);
-        if let Some(role) = &s.role
-            && let Some(a) = host.roles.iter().find(|r| r.name == *role)
+        if let Some(object) = s
+            .object
+            .as_ref()
+            .and_then(|o| config.service_objects.iter().find(|x| x.name == *o))
         {
-            let mut r = self.assigned("role", a);
-            for layer in s.layers.iter().filter(|l| l.layer == Layer::RoleService) {
-                r.children.push(self.source(layer));
-            }
-            from.push(r);
+            let mut o = self.node(
+                "service",
+                Some(&object.name),
+                format!("service {}", object.name),
+                Some(&object.origin),
+            );
+            o.children = s.assigned.iter().map(|a| self.lister(&a.reason)).collect();
+            from.push(o);
         }
         if let Some(check) = s
             .check
@@ -336,6 +359,25 @@ impl<'a> Builder<'a> {
         out
     }
 
+    /// How a host got a service, in short: `hostgroup linux`, `host`.
+    fn how(s: &Service) -> String {
+        let mut how: Vec<String> = s
+            .assigned
+            .iter()
+            .map(|a| match &a.reason {
+                Reason::Listed { by, .. } => by.clone(),
+                Reason::Selector { matched, .. } => matched.clone(),
+            })
+            .collect();
+        if how.is_empty() {
+            how.push("host".into());
+        }
+        if let Some((var, key)) = &s.for_each {
+            how.push(format!("for_each {var}.{key}"));
+        }
+        how.join("; ")
+    }
+
     fn host(&self, name: &str) -> Option<Node> {
         let config = self.config;
         let (idx, host) = config
@@ -346,10 +388,10 @@ impl<'a> Builder<'a> {
         let mut root = self.node("host", Some(&host.name), &host.name, Some(&host.origin));
         root.children.extend(
             self.section(
-                "roles",
-                host.roles
+                "groups",
+                host.groups
                     .iter()
-                    .map(|r| self.assigned("role", r))
+                    .map(|g| self.assigned("hostgroup", g))
                     .collect(),
             ),
         );
@@ -366,24 +408,11 @@ impl<'a> Builder<'a> {
                     format!("service {}", s.name),
                     Some(&s.origin),
                 );
-                n.detail = Some(match (&s.role, &s.for_each) {
-                    (Some(r), Some((var, key))) => format!("role {r}, for_each {var}.{key}"),
-                    (Some(r), None) => format!("role {r}"),
-                    (None, _) => "host".into(),
-                });
+                n.detail = Some(Self::how(s));
                 n
             })
             .collect();
         root.children.extend(self.section("services", services));
-        root.children.extend(
-            self.section(
-                "groups",
-                host.groups
-                    .iter()
-                    .map(|g| self.assigned("hostgroup", g))
-                    .collect(),
-            ),
-        );
         let rules = match config.host_check(host) {
             Some(hc) => config.matching_rules(hc, true),
             None => config
@@ -416,16 +445,6 @@ impl<'a> Builder<'a> {
         if let Some(g) = host.graph_check() {
             out.push(self.value("graph", g.to_string(), src("graph").or(src("host_check"))));
         }
-        if !host.tags.is_empty() {
-            let mut n = self.value("tags", host.tags.join(", "), None);
-            n.children = vec![self.node(
-                "host",
-                Some(&host.name),
-                format!("host {}", host.name),
-                Some(&host.origin),
-            )];
-            out.push(n);
-        }
         for (k, v) in &host.vars {
             let key = format!("vars.{k}");
             let text = match v.as_text() {
@@ -437,73 +456,89 @@ impl<'a> Builder<'a> {
         out
     }
 
-    fn role(&self, name: &str) -> Option<Node> {
+    /// Services on hosts, with how each host got it.
+    fn instances<'s>(&self, list: impl Iterator<Item = &'s Service>) -> Vec<Node> {
+        list.map(|s| {
+            let mut n = self.node(
+                "service",
+                Some(&s.id),
+                format!("service {}", s.id),
+                Some(&s.origin),
+            );
+            n.detail = Some(Self::how(s));
+            n
+        })
+        .collect()
+    }
+
+    fn service_object(&self, name: &str) -> Option<Node> {
         let config = self.config;
-        let role = config.roles.iter().find(|r| r.name == name)?;
-        let mut root = self.node("role", Some(&role.name), &role.name, Some(&role.origin));
-        let link = |n: &str| {
-            let origin = config.roles.iter().find(|r| r.name == n).map(|r| &r.origin);
-            self.node("role", Some(n), format!("role {n}"), origin)
-        };
+        let object = config.service_objects.iter().find(|s| s.name == name)?;
+        let mut root = self.node(
+            "service",
+            Some(&object.name),
+            &object.name,
+            Some(&object.origin),
+        );
+        if let Some(check) = object
+            .check
+            .as_ref()
+            .and_then(|c| config.checks.iter().find(|x| x.name == *c))
+        {
+            let mut c = self.node(
+                "check",
+                Some(&check.name),
+                format!("check {}", check.name),
+                Some(&check.origin),
+            );
+            if let Some(cmd) = &check.command {
+                let mut v = self.node("value", None, "command", None);
+                v.detail = Some(cmd.clone());
+                c.children.push(v);
+            }
+            root.children.push(c);
+        }
+        let groups: Vec<Node> = config
+            .servicegroups
+            .iter()
+            .filter_map(|g| {
+                let (why, origin) = match (
+                    g.services.contains(&object.name),
+                    object.groups.contains(&g.name),
+                ) {
+                    (true, _) => (format!("listed on servicegroup {}", g.name), &g.origin),
+                    (false, true) => (format!("listed on service {}", object.name), &object.origin),
+                    (false, false) => return None,
+                };
+                let mut n = self.node(
+                    "servicegroup",
+                    Some(&g.name),
+                    format!("servicegroup {}", g.name),
+                    Some(origin),
+                );
+                n.detail = Some(why);
+                Some(n)
+            })
+            .collect();
+        root.children.extend(self.section("groups", groups));
+        let instances: Vec<&Service> = config
+            .services
+            .iter()
+            .filter(|s| s.object.as_deref() == Some(name))
+            .collect();
+        // Who assigns it, each once.
+        let mut listers: Vec<Node> = Vec::new();
+        for s in &instances {
+            for a in &s.assigned {
+                let n = self.lister(&a.reason);
+                if !listers.iter().any(|l| l.label == n.label) {
+                    listers.push(n);
+                }
+            }
+        }
+        root.children.extend(self.section("assigned by", listers));
         root.children
-            .extend(self.section("includes", role.include.iter().map(|r| link(r)).collect()));
-        root.children.extend(
-            self.section(
-                "included by",
-                config
-                    .roles
-                    .iter()
-                    .filter(|r| r.include.contains(&role.name))
-                    .map(|r| link(&r.name))
-                    .collect(),
-            ),
-        );
-        root.children.extend(
-            self.section(
-                "hosts",
-                config
-                    .hosts
-                    .iter()
-                    .filter_map(|h| {
-                        let a = h.roles.iter().find(|r| r.name == role.name)?;
-                        let (why, origin) = self.reason(&a.reason);
-                        let mut n = self.node(
-                            "host",
-                            Some(&h.name),
-                            format!("host {}", h.name),
-                            origin.as_ref().or(Some(&h.origin)),
-                        );
-                        n.detail = Some(why);
-                        Some(n)
-                    })
-                    .collect(),
-            ),
-        );
-        root.children.extend(
-            self.section(
-                "services",
-                role.services
-                    .iter()
-                    .map(|s| {
-                        let check = config.services.iter().find(|x| {
-                            x.role.as_deref() == Some(role.name.as_str())
-                                && (x.name == *s
-                                    || x.for_each.is_some() && x.name.starts_with(&format!("{s}_")))
-                        });
-                        let mut n = self.node(
-                            "value",
-                            None,
-                            format!("service {s}"),
-                            check.map(|c| &c.origin),
-                        );
-                        n.detail = check
-                            .and_then(|c| c.check.clone())
-                            .map(|c| format!("check {c}"));
-                        n
-                    })
-                    .collect(),
-            ),
-        );
+            .extend(self.section("hosts", self.instances(instances.into_iter())));
         Some(root)
     }
 
@@ -520,23 +555,58 @@ impl<'a> Builder<'a> {
             self.section(
                 "services",
                 config
-                    .services
+                    .service_objects
                     .iter()
                     .filter(|s| s.check.as_deref() == Some(name))
                     .map(|s| {
-                        let mut n = self.node(
+                        self.node(
                             "service",
-                            Some(&s.id),
-                            format!("service {}", s.id),
+                            Some(&s.name),
+                            format!("service {}", s.name),
                             Some(&s.origin),
-                        );
-                        n.detail = s.role.as_ref().map(|r| format!("role {r}"));
-                        n
+                        )
                     })
                     .collect(),
             ),
         );
+        root.children.extend(
+            self.section(
+                "hosts",
+                self.instances(
+                    config
+                        .services
+                        .iter()
+                        .filter(|s| s.check.as_deref() == Some(name)),
+                ),
+            ),
+        );
         Some(root)
+    }
+
+    /// Links to the services and service groups a group lists.
+    fn listed(&self, kind: &'static str, names: &[String], origin: &Origin) -> Vec<Node> {
+        names
+            .iter()
+            .map(|n| {
+                let at = match kind {
+                    "service" => self
+                        .config
+                        .service_objects
+                        .iter()
+                        .find(|s| s.name == *n)
+                        .map(|s| &s.origin),
+                    _ => self
+                        .config
+                        .servicegroups
+                        .iter()
+                        .find(|g| g.name == *n)
+                        .map(|g| &g.origin),
+                };
+                let mut node = self.node(kind, Some(n), format!("{kind} {n}"), at.or(Some(origin)));
+                node.detail = Some("listed".into());
+                node
+            })
+            .collect()
     }
 
     fn hostgroup(&self, name: &str) -> Option<Node> {
@@ -547,6 +617,12 @@ impl<'a> Builder<'a> {
             g.title.as_deref().unwrap_or(&g.name),
             Some(&g.origin),
         );
+        root.children
+            .extend(self.section("services", self.listed("service", &g.services, &g.origin)));
+        root.children.extend(self.section(
+            "servicegroups",
+            self.listed("servicegroup", &g.servicegroups, &g.origin),
+        ));
         root.children.extend(
             self.section(
                 "members",
@@ -572,17 +648,54 @@ impl<'a> Builder<'a> {
     }
 
     fn servicegroup(&self, name: &str) -> Option<Node> {
-        let g = self.config.servicegroups.iter().find(|g| g.name == name)?;
+        let config = self.config;
+        let g = config.servicegroups.iter().find(|g| g.name == name)?;
         let mut root = self.node(
             "servicegroup",
             Some(&g.name),
             g.title.as_deref().unwrap_or(&g.name),
             Some(&g.origin),
         );
+        let mut services = self.listed("service", &g.services, &g.origin);
+        for object in config
+            .service_objects
+            .iter()
+            .filter(|s| s.groups.contains(&g.name) && !g.services.contains(&s.name))
+        {
+            let mut n = self.node(
+                "service",
+                Some(&object.name),
+                format!("service {}", object.name),
+                Some(&object.origin),
+            );
+            n.detail = Some(format!("listed on service {}", object.name));
+            services.push(n);
+        }
+        root.children.extend(self.section("services", services));
+        // Hosts and host groups that get the group's services.
+        let prefix = format!("servicegroup {name} on ");
+        let mut listers: Vec<Node> = Vec::new();
+        for s in &config.services {
+            for a in &s.assigned {
+                if let Reason::Listed { by, origin } = &a.reason
+                    && let Some(on) = by.strip_prefix(&prefix)
+                    && !listers.iter().any(|l| l.label == on)
+                {
+                    let (kind, target) = on.split_once(' ').unwrap_or(("host", on));
+                    let kind = if kind == "hostgroup" {
+                        "hostgroup"
+                    } else {
+                        "host"
+                    };
+                    listers.push(self.node(kind, Some(target), on, Some(origin)));
+                }
+            }
+        }
+        root.children.extend(self.section("assigned to", listers));
         root.children.extend(
             self.section(
                 "members",
-                self.config
+                config
                     .services
                     .iter()
                     .filter_map(|s| {
@@ -682,6 +795,56 @@ impl<'a> Builder<'a> {
             .map(|r| self.rule_link(r))
             .collect();
         root.children.extend(self.section("notify rules", rules));
+        Some(root)
+    }
+
+    fn downtimegroup(&self, name: &str) -> Option<Node> {
+        let config = self.config;
+        let g = config.downtimegroups.iter().find(|g| g.name == name)?;
+        let mut root = self.node(
+            "downtimegroup",
+            Some(&g.name),
+            g.title.as_deref().unwrap_or(&g.name),
+            Some(&g.origin),
+        );
+        let windows: Vec<Node> = g
+            .schedule
+            .iter()
+            .map(|w| {
+                let mut n = self.node("value", None, "window", Some(&g.origin));
+                n.detail = Some(w.to_string());
+                n
+            })
+            .collect();
+        root.children.extend(self.section("schedule", windows));
+        let members = config
+            .hosts
+            .iter()
+            .filter_map(|h| {
+                let why = match g.hostgroups.iter().find(|x| h.in_group(x)) {
+                    Some(hg) => format!("in hostgroup {hg}"),
+                    None => {
+                        let m = g
+                            .members
+                            .iter()
+                            .find(|m| crate::select::Glob::new(m).is_match(&h.name))?;
+                        match m == &h.name {
+                            true => "listed".to_string(),
+                            false => format!("matched: members {m}"),
+                        }
+                    }
+                };
+                let mut n = self.node(
+                    "host",
+                    Some(&h.name),
+                    format!("host {}", h.name),
+                    Some(&h.origin),
+                );
+                n.detail = Some(why);
+                Some(n)
+            })
+            .collect();
+        root.children.extend(self.section("members", members));
         Some(root)
     }
 
@@ -791,44 +954,69 @@ mod tests {
 command = "check_disk -w $warn$ -p $path$"
 vars.warn = "20%"
 
-[role.linux]
+[service.disk]
 interval = "2m"
-service.disk = { for_each = "disks" }
+for_each = "disks"
+
+[servicegroup.basics]
+services = ["disk"]
+
+[hostgroup.linux]
+members = ["db*"]
+servicegroups = ["basics"]
 
 [contact.ops]
 email = "ops@example.com"
 
 [[notify]]
 contacts = ["ops"]
-hosts = { tags = ["prod"] }
+hosts = { groups = ["linux"] }
 
 [[host]]
 name = "db01"
-roles = ["linux"]
-tags = ["prod"]
 vars.disks.data = { path = "/srv", warn = "5%" }
 "#,
         )
         .unwrap();
         let config = load_dir(&dir).unwrap().config;
-        let tree = Builder::new(&config, Some(&dir))
-            .tree("service", "db01/disk_data")
-            .unwrap();
-        let text = render(&tree);
-        std::fs::remove_dir_all(&dir).unwrap();
+        let builder = Builder::new(&config, Some(&dir));
+        let text = render(&builder.tree("service", "db01/disk_data").unwrap());
         for expected in [
             "db01/disk_data",
-            "role linux: listed on host db01",
-            "role linux, service disk",
+            "service disk",
+            "servicegroup basics on hostgroup linux: listed",
             "check disk",
             "interval: 2m",
             "vars.warn: 5%",
             "host db01, vars.disks.data",
             "notify rule at",
-            "matched: host: tag prod",
+            "matched: host: group linux",
         ] {
             assert!(text.contains(expected), "missing {expected:?} in\n{text}");
         }
-        assert!(text.contains("a.toml:7"), "{text}");
+        assert!(text.contains("a.toml:5"), "{text}");
+
+        let text = render(&builder.tree("service", "disk").unwrap());
+        for expected in [
+            "check disk",
+            "servicegroup basics",
+            "service db01/disk_data",
+        ] {
+            assert!(text.contains(expected), "missing {expected:?} in\n{text}");
+        }
+        let text = render(&builder.tree("host", "db01").unwrap());
+        assert!(
+            text.contains("hostgroup linux: matched: members db*"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "service disk_data: servicegroup basics on hostgroup linux; for_each disks.data"
+            ),
+            "{text}"
+        );
+        let text = render(&builder.tree("servicegroup", "basics").unwrap());
+        assert!(text.contains("hostgroup linux"), "{text}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

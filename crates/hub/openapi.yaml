@@ -129,6 +129,37 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
 
+  /services/{host}/{service}/run:
+    post:
+      summary: Run the service's command once and return the result, without recording it
+      parameters:
+        - { name: host, in: path, required: true, schema: { type: string } }
+        - { name: service, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: The result, content: { application/json: { schema: { $ref: "#/components/schemas/RunResult" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /run-check:
+    post:
+      summary: Run any command as a check, with the check directories in PATH (admins)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [command]
+              properties:
+                command: { type: string }
+                shell: { type: boolean, default: false }
+                format: { type: string, enum: [auto, nagios, key_value, json], default: auto }
+                timeout: { type: string, default: 60s }
+            example: { command: "check_ping -H 10.0.0.5 -w 100,20% -c 500,60%" }
+      responses:
+        "200": { description: The result, content: { application/json: { schema: { $ref: "#/components/schemas/RunResult" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+
   /services/{host}/{service}/series:
     get:
       summary: Metric series of a service
@@ -166,7 +197,7 @@ paths:
         - { name: service, in: query, schema: { type: string } }
         - { name: before, in: query, description: For paging, like `from` of points, schema: { type: string } }
         - { name: since, in: query, description: Like `from` of points, schema: { type: string } }
-        - { name: type, in: query, description: "Comma-separated: service, host, flapping", schema: { type: string } }
+        - { name: type, in: query, description: "Comma-separated: service, host, flapping, ack, downtime", schema: { type: string } }
         - { name: state, in: query, description: "Comma-separated states changed to: ok, warning, critical, unknown, up, down", schema: { type: string } }
         - { name: state_type, in: query, schema: { $ref: "#/components/schemas/StateType" } }
         - { name: hard, in: query, description: Only hard changes, schema: { type: boolean } }
@@ -178,6 +209,163 @@ paths:
             application/json:
               schema: { type: array, items: { $ref: "#/components/schemas/StateEvent" } }
         "503": { $ref: "#/components/responses/Error" }
+
+  /actions/{action}:
+    post:
+      summary: Act on hosts and services
+      description: |
+        Actions: `recheck` (run now, also while checks are off), `ack` / `unack`
+        (acknowledge a problem; ends when OK), `mute` / `unmute` (notifications),
+        `disable-checks` / `enable-checks` (active checks), `downtime` (no
+        notifications from `start` to `end` or for `duration`).
+        Groups are expanded to their hosts or services; a downtime keeps the
+        group, so later members are covered too. A host covers its services;
+        acknowledging a host acknowledges its host check problem.
+        Any logged-in user.
+      parameters:
+        - { name: action, in: path, required: true, schema: { type: string, enum: [recheck, ack, unack, mute, unmute, disable-checks, enable-checks, downtime] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                hosts: { type: array, items: { type: string } }
+                services: { type: array, items: { type: string }, description: "host/service ids" }
+                hostgroups: { type: array, items: { type: string } }
+                servicegroups: { type: array, items: { type: string } }
+                downtimegroups: { type: array, items: { type: string } }
+                comment: { type: string }
+                start: { type: string, description: "Downtime: RFC 3339 or unix seconds; default now" }
+                end: { type: string, description: "Downtime: RFC 3339 or unix seconds" }
+                duration: { type: string, description: "Downtime: instead of end, e.g. 2h" }
+            example: { hosts: [web01], duration: 2h, comment: patching }
+      responses:
+        "200":
+          description: Done
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  action: { type: string }
+                  done: { type: array, items: { type: string } }
+                  skipped: { type: array, items: { type: object, properties: { target: { type: string }, reason: { type: string } } } }
+                  downtimes: { type: array, items: { $ref: "#/components/schemas/Downtime" } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /flags:
+    get:
+      summary: Acknowledgements, muted hosts and services, disabled checks
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Flag" } }
+
+  /downtimes:
+    get:
+      summary: Downtimes that haven't ended, and the current or next window of every downtime group
+      responses:
+        "200":
+          description: Active first, then by start
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: [integer, "null"], description: null for downtime group windows }
+                    kind: { type: string, enum: [host, service, hostgroup, servicegroup, downtimegroup] }
+                    target: { type: string }
+                    start: { $ref: "#/components/schemas/Time" }
+                    end: { $ref: "#/components/schemas/Time" }
+                    author: { type: [string, "null"] }
+                    comment: { type: string }
+                    window: { type: [string, "null"], description: "Schedule entry, e.g. sun 02:00-04:00" }
+                    active: { type: boolean }
+                    hosts: { type: integer }
+                    services: { type: integer }
+
+  /downtimes/{id}:
+    delete:
+      summary: End a downtime
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Cancelled }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /process:
+    get:
+      summary: Process info
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  pid: { type: integer }
+                  instance: { type: [string, "null"] }
+                  started: { $ref: "#/components/schemas/Time" }
+                  uptime_s: { type: integer }
+                  config_loaded: { $ref: "#/components/schemas/Time" }
+                  database: { type: [string, "null"] }
+                  notifications: { type: boolean }
+                  checks: { type: boolean, description: Active checks }
+                  hosts: { type: integer }
+                  services: { type: integer }
+                  scheduler: { type: object, properties: { jobs: { type: integer }, running: { type: integer }, paused: { type: integer }, passive: { type: integer } } }
+                  results: { type: object, description: Check results, properties: { last_1m: { type: integer }, last_5m: { type: integer }, last_15m: { type: integer } } }
+                  acknowledged: { type: integer }
+                  muted: { type: integer }
+                  checks_off: { type: integer }
+                  in_downtime: { type: integer, description: Services }
+    put:
+      summary: Turn notifications or active checks on or off (admins)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notifications: { type: boolean }
+                checks: { type: boolean }
+      responses:
+        "200": { description: The switches now }
+        "403": { $ref: "#/components/responses/Error" }
+
+  /scheduler:
+    get:
+      summary: Scheduling queue, soonest first
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 500 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    host: { type: string }
+                    service: { type: string }
+                    next_check: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+                    last_check: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+                    running: { type: boolean }
+                    passive: { type: boolean }
+                    paused: { type: boolean }
+                    interval_s: { type: number }
 
   /groups:
     get:
@@ -192,6 +380,7 @@ paths:
                 properties:
                   hostgroups: { type: array, items: { $ref: "#/components/schemas/Group" } }
                   servicegroups: { type: array, items: { $ref: "#/components/schemas/Group" } }
+                  downtimegroups: { type: array, items: { type: object, properties: { name: { type: string }, title: { type: [string, "null"] }, schedule: { type: array, items: { type: string } } } } }
 
   /stream:
     get:
@@ -293,6 +482,54 @@ paths:
         "204": { description: Revoked }
         "404": { $ref: "#/components/responses/Error" }
 
+  /users:
+    get:
+      summary: User accounts (admins)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/User" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+    post:
+      summary: Create a user (admins)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, minLength: 10 }
+                admin: { type: boolean, default: false }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /users/{name}:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+    put:
+      summary: Change a user (admins), or your own password
+      description: A new password or disabling ends the user's sessions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                password: { type: string, minLength: 10 }
+                admin: { type: boolean }
+                disabled: { type: boolean }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      summary: Delete a user with their sessions and tokens (admins; not yourself)
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Error" }
+
   /config:
     get:
       summary: Config mode, object files and problems on disk (admins)
@@ -332,7 +569,9 @@ paths:
 
   /config/objects:
     get:
-      summary: All objects as written, before templates (admins)
+      summary: All objects as written (admins)
+      parameters:
+        - { name: kind, in: query, description: Only this kind, schema: { $ref: "#/components/schemas/Kind" } }
       responses:
         "200":
           description: OK
@@ -344,11 +583,80 @@ paths:
                   objects: { type: array, items: { $ref: "#/components/schemas/ConfigObject" } }
                   diagnostics: { type: array, items: { $ref: "#/components/schemas/Problem" } }
 
+  /config/objects/{kind}/{name}:
+    parameters:
+      - { name: kind, in: path, required: true, schema: { $ref: "#/components/schemas/Kind" } }
+      - { name: name, in: path, required: true, schema: { type: string } }
+    get:
+      summary: One object as written, with file and line (admins)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ConfigObject" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      summary: Create or replace an object and apply it (admins)
+      description: |
+        One step instead of edit + apply. The body is the object's fields as
+        written; `name` comes from the path. Existing objects are edited where
+        they are (comments kept); new ones go to `path` or the kind's UI file.
+        Responses as for `config/apply` (422 with diagnostics when invalid;
+        nothing is written then).
+      parameters:
+        - { name: path, in: query, description: "New objects: file, e.g. hosts/web.toml", schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+            example: { address: 10.0.0.7, groups: [linux], services: [http] }
+      responses:
+        "200": { description: Applied; changes and warnings }
+        "422": { description: Invalid; diagnostics }
+    delete:
+      summary: Delete an object and apply it (admins)
+      responses:
+        "200": { description: Applied; changes and warnings }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { description: Invalid (something still uses it); diagnostics }
+
+  /config/match:
+    post:
+      summary: What selectors match in the running config, with why (admins)
+      description: For previews. Host group and downtime group member lists are host selectors (lists of names and patterns).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, selectors]
+              properties:
+                kind: { type: string, enum: [host, service] }
+                selectors: { type: array, items: {}, description: "Selectors; a match of any counts" }
+            example: { kind: host, selectors: [{ groups: [linux], exclude: { name: "lab*" } }] }
+      responses:
+        "200":
+          description: Matches (first 500)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  matches: { type: array, items: { type: object, properties: { name: { type: string }, why: { type: string } } } }
+        "400": { $ref: "#/components/responses/Error" }
+
+  /config/reload:
+    post:
+      summary: Read the object files again (admins)
+      responses:
+        "200": { description: Reloaded }
+        "400": { $ref: "#/components/responses/Error" }
+
   /config/tree/{kind}/{name}:
     get:
       summary: Config Tree of an object in the running config (admins)
       parameters:
-        - { name: kind, in: path, required: true, schema: { type: string, enum: [host, service, role, check, hostgroup, servicegroup, contact, contactgroup, notify] } }
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [host, service, check, hostgroup, servicegroup, contact, contactgroup, downtimegroup, notify] } }
         - { name: name, in: path, required: true, description: "host/service for services", schema: { type: string } }
       responses:
         "200":
@@ -530,8 +838,32 @@ components:
         last_change: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
         output: { type: string }
         passive: { type: boolean }
+        graphs: { type: boolean, description: Show graphs of its metrics }
         flapping: { type: boolean }
         groups: { type: array, items: { type: string }, description: Service groups }
+        acknowledged: { type: boolean }
+        muted: { type: boolean, description: Notifications off for it or its host }
+        checks_enabled: { type: boolean }
+        downtime: { type: boolean, description: In a downtime now }
+    Flag:
+      type: object
+      properties:
+        kind: { type: string, enum: [ack, mute, no_checks] }
+        target: { type: string, description: "Host or host/service" }
+        author: { type: string }
+        comment: { type: string }
+        created: { $ref: "#/components/schemas/Time" }
+    Downtime:
+      type: object
+      properties:
+        id: { type: integer }
+        kind: { type: string }
+        target: { type: string }
+        starts: { $ref: "#/components/schemas/Time" }
+        ends: { $ref: "#/components/schemas/Time" }
+        author: { type: string }
+        comment: { type: string }
+        created: { $ref: "#/components/schemas/Time" }
     ServiceDetail:
       allOf:
         - $ref: "#/components/schemas/ServiceView"
@@ -547,8 +879,8 @@ components:
               type: object
               properties:
                 name: { type: [string, "null"], description: "The check it runs; null for an inline command" }
-                role: { type: [string, "null"], description: "The role it comes from; null for a host's own service" }
-                entry: { type: [string, "null"], description: "The role's service entry (for for_each services the entry they were made from)" }
+                service: { type: [string, "null"], description: "The service object it is made from (for for_each services the one they were made from); null for a host's one-off service" }
+                assigned: { type: array, items: { type: string }, description: "Why the host has it, e.g. hostgroup linux, servicegroup basics on host web01" }
                 command: { type: [string, "null"] }
                 interval_s: { type: number }
                 retry_interval_s: { type: number }
@@ -556,7 +888,9 @@ components:
                 freshness_s: { type: [number, "null"] }
                 flap_low: { type: [number, "null"] }
                 flap_high: { type: [number, "null"] }
-                origin: { type: string, description: "file:line of the service entry (role or host)" }
+                origin: { type: string, description: "file:line of the service or host service" }
+            downtimes: { type: array, items: { type: string }, description: "Downtimes it is in, e.g. hostgroup linux" }
+            flags: { type: array, items: { $ref: "#/components/schemas/Flag" }, description: Set on it or its host }
     Metric:
       type: object
       properties:
@@ -577,9 +911,7 @@ components:
         name: { type: string }
         address: { type: string }
         node: { type: [string, "null"] }
-        tags: { type: array, items: { type: string } }
         vars: { type: object, description: "Values are strings, or objects (for_each data)" }
-        roles: { type: array, items: { type: string } }
         groups: { type: array, items: { type: string }, description: Host groups }
         enabled: { type: boolean }
         state: { oneOf: [{ $ref: "#/components/schemas/HostState" }, { type: "null" }], description: "From the host check; up without one; null while pending" }
@@ -594,6 +926,10 @@ components:
         graph: { type: [string, "null"], description: "Service whose graphs the host page shows: `graph` of the host, or the host check" }
         worst: { oneOf: [{ $ref: "#/components/schemas/State" }, { type: "null" }], description: Worst service state }
         services: { $ref: "#/components/schemas/Counts" }
+        acknowledged: { type: boolean, description: The host problem is acknowledged }
+        muted: { type: boolean }
+        checks_enabled: { type: boolean }
+        downtime: { type: boolean }
     Series:
       type: object
       properties:
@@ -623,6 +959,20 @@ components:
         state_type: { $ref: "#/components/schemas/StateType" }
         hard: { type: boolean }
         output: { type: string }
+    RunResult:
+      type: object
+      properties:
+        command: { type: string }
+        state: { $ref: "#/components/schemas/State" }
+        plugin_state: { $ref: "#/components/schemas/State" }
+        message: { type: string }
+        long_output: { type: string }
+        format: { type: [string, "null"] }
+        metrics: { type: array, items: { $ref: "#/components/schemas/Metric" } }
+        stdout: { type: string }
+        stderr: { type: string }
+        termination: { type: string }
+        duration_ms: { type: number }
     User:
       type: object
       properties:
@@ -652,10 +1002,11 @@ components:
         path: { type: string }
         hash: { type: string, description: SHA-256 }
         text: { type: string }
+    Kind: { type: string, enum: [check, service, host, hostgroup, servicegroup, contact, contactgroup, downtimegroup, notify, sink] }
     ConfigObject:
       type: object
       properties:
-        kind: { type: string, enum: [check, role, host, hostgroup, servicegroup, contact, contactgroup, notify, sink] }
+        kind: { $ref: "#/components/schemas/Kind" }
         name: { type: string }
         path: { type: string }
         line: { type: integer }
@@ -664,9 +1015,9 @@ components:
       type: object
       required: [kind]
       properties:
-        kind: { type: string, enum: [check, role, host, hostgroup, servicegroup, contact, contactgroup, notify, sink] }
+        kind: { $ref: "#/components/schemas/Kind" }
         name: { type: [string, "null"], description: The object to change; null creates one }
-        fields: { type: [object, "null"], description: The fields as written, with name; null deletes, example: { name: web01, address: 10.0.0.5, tags: [linux] } }
+        fields: { type: [object, "null"], description: The fields as written, with name; null deletes, example: { name: web01, address: 10.0.0.5, groups: [linux] } }
         path: { type: [string, "null"], description: "New objects: the file, relative to the object directory (default: the kind's ui/ file)" }
     Change:
       type: object
@@ -698,7 +1049,7 @@ components:
     TreeNode:
       type: object
       properties:
-        kind: { type: string, description: "host, service, role, check, hostgroup, servicegroup, contact, contactgroup, notify; section or value otherwise" }
+        kind: { type: string, description: "host, service (host/service: on a host, otherwise a service object), check, hostgroup, servicegroup, contact, contactgroup, notify; section or value otherwise" }
         name: { type: string, description: "Object name to link to (host/service for services)" }
         label: { type: string }
         detail: { type: string, description: A value, or why something applies }

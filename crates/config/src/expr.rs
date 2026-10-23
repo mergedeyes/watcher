@@ -1,5 +1,5 @@
 //! Selector expressions (`expr`), e.g.
-//! `host.tags contains "linux" and not host.name ~ "^test-"`.
+//! `host.groups contains "linux" and not host.name ~ "^test-"`.
 //!
 //! ```text
 //! expr    := and ( ("or" | "||") and )*
@@ -8,8 +8,8 @@
 //! compare := operand op operand
 //! op      := "==" | "!=" | "~" | "!~" | "contains" | "in"
 //! operand := path | "string" | 'string' | [ "list", ... ]
-//! path    := host.name | host.address | host.node | host.tags | host.roles
-//!          | host.groups | host.vars.<name>
+//! path    := host.name | host.address | host.node | host.groups
+//!          | host.vars.<name>[.<name>…]
 //!          | service.name | service.check | service.groups
 //! ```
 
@@ -46,8 +46,6 @@ enum Path {
     Name,
     Address,
     Node,
-    Tags,
-    Roles,
     Groups,
     Var(String),
     ServiceName,
@@ -111,18 +109,6 @@ impl Expr {
         })
     }
 
-    pub(crate) fn uses_roles_or_groups(&self) -> bool {
-        self.uses(&|p| matches!(p, Path::Roles | Path::Groups))
-    }
-
-    pub(crate) fn uses_groups(&self) -> bool {
-        self.uses(&|p| matches!(p, Path::Groups))
-    }
-
-    pub(crate) fn uses_service_groups(&self) -> bool {
-        self.uses(&|p| matches!(p, Path::ServiceGroups))
-    }
-
     fn uses(&self, f: &impl Fn(&Path) -> bool) -> bool {
         fn walk(node: &Node, f: &impl Fn(&Path) -> bool) -> bool {
             let op = |o: &Operand| matches!(o, Operand::Path(p) if f(p));
@@ -166,12 +152,8 @@ fn resolve<'a>(op: &'a Operand, subject: &'a Subject) -> Value<'a> {
         Operand::Path(Path::Name) => Value::Str(&host.name),
         Operand::Path(Path::Address) => Value::Str(&host.address),
         Operand::Path(Path::Node) => host.node.as_deref().map_or(Value::Missing, Value::Str),
-        Operand::Path(Path::Tags) => list(host.tags.iter().map(String::as_str).collect()),
-        Operand::Path(Path::Roles) => list(host.roles.iter().map(|r| r.name.as_str()).collect()),
         Operand::Path(Path::Groups) => list(host.groups.iter().map(|g| g.name.as_str()).collect()),
-        Operand::Path(Path::Var(name)) => host
-            .vars
-            .get(name)
+        Operand::Path(Path::Var(name)) => crate::var_at(&host.vars, name)
             .and_then(|v| v.as_text())
             .map_or(Value::Missing, Value::Str),
         Operand::Path(Path::ServiceName) => service.map_or(Value::Missing, |s| Value::Str(&s.name)),
@@ -475,10 +457,8 @@ impl Parser {
                     ["host", "name"] => Path::Name,
                     ["host", "address"] => Path::Address,
                     ["host", "node"] => Path::Node,
-                    ["host", "tags"] => Path::Tags,
-                    ["host", "roles"] => Path::Roles,
                     ["host", "groups"] => Path::Groups,
-                    ["host", "vars", var] => Path::Var(var.to_string()),
+                    ["host", "vars", var @ ..] if !var.is_empty() => Path::Var(var.join(".")),
                     ["service", "name"] => Path::ServiceName,
                     ["service", "check"] => Path::ServiceCheck,
                     ["service", "groups"] => Path::ServiceGroups,
@@ -486,7 +466,7 @@ impl Parser {
                         return Err(self.error_at(
                             pos,
                             format!(
-                                "unknown field {:?} (expected host.name, host.address, host.node, host.tags, host.roles, host.groups, host.vars.<name>, service.name, service.check or service.groups)",
+                                "unknown field {:?} (expected host.name, host.address, host.node, host.groups, host.vars.<name>, service.name, service.check or service.groups)",
                                 parts.join(".")
                             ),
                         ));
@@ -503,18 +483,34 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Var;
+    use crate::{Assigned, Reason, Var};
     use std::collections::BTreeMap;
 
-    fn host(name: &str, tags: &[&str]) -> Host {
+    fn host(name: &str, groups: &[&str]) -> Host {
         Host {
             name: name.into(),
             address: format!("{name}.example"),
             node: None,
-            roles: Vec::new(),
-            tags: tags.iter().map(|t| t.to_string()).collect(),
-            groups: Vec::new(),
-            vars: BTreeMap::from([("os".to_string(), Var::Text("debian".to_string()))]),
+            groups: groups
+                .iter()
+                .map(|g| Assigned {
+                    name: g.to_string(),
+                    reason: Reason::Listed {
+                        by: "x".into(),
+                        origin: Default::default(),
+                    },
+                })
+                .collect(),
+            vars: BTreeMap::from([
+                ("os".to_string(), Var::Text("debian".to_string())),
+                (
+                    "site".to_string(),
+                    Var::Table(BTreeMap::from([(
+                        "name".to_string(),
+                        Var::Text("klarsocial".to_string()),
+                    )])),
+                ),
+            ]),
             host_check: None,
             graph: None,
             enabled: true,
@@ -535,8 +531,8 @@ mod tests {
     #[test]
     fn evaluates_expressions() {
         let web = host("web01", &["linux", "web"]);
-        assert!(check(r#"host.tags contains "linux""#, &web));
-        assert!(check(r#""web" in host.tags"#, &web));
+        assert!(check(r#"host.groups contains "linux""#, &web));
+        assert!(check(r#""web" in host.groups"#, &web));
         assert!(check(r#"host.name ~ "^web""#, &web));
         assert!(check(r#"host.name !~ "^mq-""#, &web));
         assert!(check(
@@ -544,17 +540,19 @@ mod tests {
             &web
         ));
         assert!(check(r#"host.name in ["db01", "web01"]"#, &web));
-        assert!(check(r#"not host.tags contains "windows""#, &web));
+        assert!(check(r#"not host.groups contains "windows""#, &web));
         assert!(check(
-            r#"host.tags contains "db" or (host.tags contains "web" and !host.name == "x")"#,
+            r#"host.groups contains "db" or (host.groups contains "web" and !host.name == "x")"#,
             &web
         ));
         assert!(check("true", &web));
-        assert!(!check(r#"host.tags contains "db""#, &web));
+        assert!(!check(r#"host.groups contains "db""#, &web));
+        assert!(check(r#"host.vars.site.name == "klarsocial""#, &web));
+        assert!(!check(r#"host.vars.site == "klarsocial""#, &web));
         assert!(!check(r#"host.vars.missing == "x""#, &web));
         assert!(check(r#"host.vars.missing != "x""#, &web));
         assert!(!check(r#"host.node ~ ".""#, &web));
-        assert!(check(r#"host.tags ~ "^we""#, &web));
+        assert!(check(r#"host.groups ~ "^we""#, &web));
     }
 
     #[test]

@@ -6,6 +6,8 @@
 	import { editHref } from '#lib/config.svelte.ts';
 	import ConfigTree from '#lib/ConfigTree.svelte';
 	import EditMenu, { type EditTarget } from '#lib/EditMenu.svelte';
+	import Commands from '#lib/Commands.svelte';
+	import Flags from '#lib/Flags.svelte';
 	import Graphs from '#lib/Graphs.svelte';
 	import { datetime, duration, formatThreshold, formatValue, seriesName, since } from '#lib/format.ts';
 	import Status from '#lib/Status.svelte';
@@ -20,30 +22,27 @@
 	/** Set when the hub has no database: there is no history to show. */
 	let noHistory = $state(false);
 
-	/** Where the service can be edited: its role entry, the host (own service or override), its check. */
+	/** Where the service can be edited: the service, the host (override or one-off service), its check. */
 	function editTargets(d: ServiceDetail): EditTarget[] {
 		const focus = (s: string) => `&focus=${encodeURIComponent(s)}`;
 		const out: EditTarget[] = [];
-		if (d.check.role)
-			out.push({
-				label: `Role ${d.check.role}`,
-				href: editHref('roles', d.check.role) + focus(d.check.entry ?? d.service),
-				hint: 'all hosts with the role'
-			});
+		if (d.check.service)
+			out.push({ label: `Service ${d.check.service}`, href: editHref('services', d.check.service), hint: 'all hosts with it' });
 		out.push({
 			label: `Host ${d.host}`,
 			href: editHref('hosts', d.host) + focus(d.service),
-			hint: d.check.role ? 'override on this host' : 'service on this host'
+			hint: d.check.service ? 'override on this host' : 'service on this host'
 		});
 		if (d.check.name) out.push({ label: `Check ${d.check.name}`, href: editHref('checks', d.check.name), hint: 'command, thresholds' });
 		return out;
 	}
 
-	// Refetch whenever a new result for this service arrives.
+	// Refetch whenever a new result for this service arrives, and after
+	// commands (the server then sends a reload).
 	let lastCheck = $derived(live.find(host, name)?.last_check ?? null);
 
 	$effect(() => {
-		const [h, s, _] = [host, name, lastCheck];
+		const [h, s, _, __] = [host, name, lastCheck, live.reloads];
 		api.service(h, s).then(
 			(d) => {
 				detail = d;
@@ -107,6 +106,7 @@
 						<td>
 							<Status state={detail.state} />
 							{#if detail.flapping}<span class="tag flap">FLAPPING</span>{/if}
+							<Flags v={detail} />
 							{#if detail.last_change}<span class="muted">&nbsp;for {since(detail.last_change, live.now)}</span>{/if}
 						</td>
 					</tr>
@@ -144,24 +144,22 @@
 					{:else if detail.check.freshness_s !== null}
 						<tr><th>Freshness Threshold</th><td>{duration(detail.check.freshness_s)}</td></tr>
 					{/if}
-					{#if detail.check.name || detail.check.role}
-						<tr>
-							<th>Check</th>
-							<td>
-								{detail.check.name ?? 'inline command'}{#if detail.check.role}<span class="muted">&nbsp;· role {detail.check.role}</span>{/if}
-							</td>
-						</tr>
+					<tr><th>Check</th><td>{detail.check.name ?? (detail.check.command ? 'inline command' : 'passive')}</td></tr>
+					{#if detail.check.assigned.length}
+						<tr><th>Assigned By</th><td>{detail.check.assigned.join('; ')}</td></tr>
 					{/if}
 					{#if detail.groups.length}
 						<tr>
 							<th>Service Groups</th>
-							<td>{#each detail.groups as g, i (g)}{i ? ', ' : ''}<a href="/services?group={encodeURIComponent(g)}">{g}</a>{/each}</td>
+							<td>{#each detail.groups as g, i (i)}{i ? ', ' : ''}<a href="/services?group={encodeURIComponent(g)}">{g}</a>{/each}</td>
 						</tr>
 					{/if}
 					<tr><th>Source</th><td class="mono">{detail.check.origin}</td></tr>
 				</tbody>
 			</table>
 		</section>
+
+		<Commands target={{ service: detail }} flags={detail.flags} downtimes={detail.downtimes} />
 
 		{#if detail.metrics.length > 0}
 			<section class="panel">
@@ -177,7 +175,7 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each detail.metrics as m (seriesName(m.name, m.labels))}
+						{#each detail.metrics as m, i (i)}
 							<tr data-state={m.state}>
 								<td class="mono">{seriesName(m.name, m.labels)}</td>
 								<td class="mono nowrap">{formatValue(m.value, m.unit)}</td>
@@ -191,7 +189,9 @@
 			</section>
 		{/if}
 
-		<Graphs {host} service={name} tick={Date.parse(lastCheck ?? '') || 0} />
+		{#if detail.graphs}
+			<Graphs {host} service={name} tick={Date.parse(lastCheck ?? '') || 0} />
+		{/if}
 
 		{#if !noHistory}
 			<section class="panel">

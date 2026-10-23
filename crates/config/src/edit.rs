@@ -13,45 +13,48 @@ use toml_edit::{DocumentMut, Item, TableLike};
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
     Check,
-    Role,
+    Service,
     Host,
     HostGroup,
     ServiceGroup,
     Contact,
     ContactGroup,
+    DowntimeGroup,
     Notify,
     Sink,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 9] = [
+    pub const ALL: [Kind; 10] = [
         Kind::Check,
-        Kind::Role,
+        Kind::Service,
         Kind::Host,
         Kind::HostGroup,
         Kind::ServiceGroup,
         Kind::Contact,
         Kind::ContactGroup,
+        Kind::DowntimeGroup,
         Kind::Notify,
         Kind::Sink,
     ];
 
-    /// The TOML key: `[[host]]`, `[role.x]`, ...
+    /// The TOML key: `[[host]]`, `[service.x]`, ...
     pub fn key(self) -> &'static str {
         match self {
             Kind::Check => "check",
-            Kind::Role => "role",
+            Kind::Service => "service",
             Kind::Host => "host",
             Kind::HostGroup => "hostgroup",
             Kind::ServiceGroup => "servicegroup",
             Kind::Contact => "contact",
             Kind::ContactGroup => "contactgroup",
+            Kind::DowntimeGroup => "downtimegroup",
             Kind::Notify => "notify",
             Kind::Sink => "sink",
         }
     }
 
-    /// Named by their key (`[role.linux]`); hosts, notify rules and sinks
+    /// Named by their key (`[service.disk]`); hosts, notify rules and sinks
     /// by a `name` field in an array of tables.
     fn keyed(self) -> bool {
         !matches!(self, Kind::Host | Kind::Notify | Kind::Sink)
@@ -61,9 +64,11 @@ impl Kind {
     pub fn ui_file(self) -> &'static str {
         match self {
             Kind::Check => "ui/checks.toml",
-            Kind::Role => "ui/roles.toml",
+            Kind::Service => "ui/services.toml",
             Kind::Host => "ui/hosts.toml",
-            Kind::HostGroup | Kind::ServiceGroup | Kind::ContactGroup => "ui/groups.toml",
+            Kind::HostGroup | Kind::ServiceGroup | Kind::ContactGroup | Kind::DowntimeGroup => {
+                "ui/groups.toml"
+            }
             Kind::Contact => "ui/contacts.toml",
             Kind::Notify => "ui/notify.toml",
             Kind::Sink => "ui/sinks.toml",
@@ -86,28 +91,33 @@ impl Kind {
                 "max_attempts",
                 "timeout",
                 "freshness",
+                "graphs",
             ],
-            Kind::Role => &[
+            Kind::Service => &[
                 "title",
-                "include",
-                "hosts",
-                "host_check",
-                "graph",
-                "node",
+                "check",
+                "command",
+                "shell",
+                "passive",
+                "format",
+                "for_each",
                 "groups",
                 "vars",
+                "thresholds",
                 "interval",
                 "retry_interval",
                 "max_attempts",
                 "timeout",
-                "service",
+                "freshness",
+                "graphs",
+                "enabled",
             ],
             Kind::Host => &[
                 "name",
                 "address",
-                "roles",
-                "tags",
                 "groups",
+                "services",
+                "servicegroups",
                 "node",
                 "host_check",
                 "graph",
@@ -115,7 +125,18 @@ impl Kind {
                 "enabled",
                 "service",
             ],
-            Kind::HostGroup | Kind::ServiceGroup | Kind::ContactGroup => &["title", "members"],
+            Kind::HostGroup => &[
+                "title",
+                "members",
+                "services",
+                "servicegroups",
+                "host_check",
+                "graph",
+                "vars",
+            ],
+            Kind::ServiceGroup => &["title", "services"],
+            Kind::ContactGroup => &["title", "members"],
+            Kind::DowntimeGroup => &["title", "members", "hostgroups", "schedule"],
             Kind::Contact => &["email", "webhook", "groups"],
             Kind::Notify => &[
                 "name",
@@ -215,11 +236,12 @@ fn parse(path: &str, text: &str) -> Result<Vec<Object>, (usize, String)> {
     };
     let keyed = [
         (Kind::Check, file.check),
-        (Kind::Role, file.role),
+        (Kind::Service, file.service),
         (Kind::HostGroup, file.hostgroup),
         (Kind::ServiceGroup, file.servicegroup),
         (Kind::Contact, file.contact),
         (Kind::ContactGroup, file.contactgroup),
+        (Kind::DowntimeGroup, file.downtimegroup),
     ];
     for (kind, map) in keyed {
         for (name, t) in map {
@@ -618,13 +640,13 @@ mod tests {
 [[host]]
 name = "web01"
 address = "10.0.0.5"   # primary
-tags = ["linux", "web"]
+groups = ["linux", "web"]
 
 # Keep this one
 [[host]]
 name = "web02"
 
-[role.linux]
+[service.load]
 interval = "1m"
 max_attempts = 3
 
@@ -637,15 +659,15 @@ email = ["ops@example.com"]
         let new = fields(
             r#"name = "web01"
 address = "10.0.0.6"
-tags = ["linux", "web"]
+groups = ["linux", "web"]
 node = "site-a""#,
         );
         let out = edit_text(FILE, Kind::Host, Some("web01"), Some(&new)).unwrap();
         assert_eq!(
             out,
             FILE.replace(
-                "address = \"10.0.0.5\"   # primary\ntags = [\"linux\", \"web\"]\n",
-                "address = \"10.0.0.6\"   # primary\ntags = [\"linux\", \"web\"]\nnode = \"site-a\"\n"
+                "address = \"10.0.0.5\"   # primary\ngroups = [\"linux\", \"web\"]\n",
+                "address = \"10.0.0.6\"   # primary\ngroups = [\"linux\", \"web\"]\nnode = \"site-a\"\n"
             )
         );
     }
@@ -660,16 +682,16 @@ node = "site-a""#,
     #[test]
     fn create_appends_in_field_order() {
         let new = fields(
-            r#"tags = ["db"]
+            r#"groups = ["db"]
 address = "10.0.0.9"
 name = "db01""#,
         );
         let out = edit_text(FILE, Kind::Host, None, Some(&new)).unwrap();
-        assert!(out.starts_with(FILE.split("[role").next().unwrap()));
+        assert!(out.starts_with(FILE.split("[service").next().unwrap()));
         let parsed: Table = toml::from_str(&out).unwrap();
         assert_eq!(parsed["host"].as_array().unwrap().len(), 3);
         assert!(
-            out.contains("[[host]]\nname = \"db01\"\naddress = \"10.0.0.9\"\ntags = [\"db\"]\n")
+            out.contains("[[host]]\nname = \"db01\"\naddress = \"10.0.0.9\"\ngroups = [\"db\"]\n")
         );
 
         let out = edit_text(
@@ -692,7 +714,7 @@ name = "db01""#,
         let out = edit_text(FILE, Kind::Host, Some("web02"), None).unwrap();
         assert!(!out.contains("web02"));
         assert!(out.contains("web01"));
-        assert!(out.contains("[role.linux]"));
+        assert!(out.contains("[service.load]"));
         let out = edit_text(FILE, Kind::Contact, Some("oncall"), None).unwrap();
         assert!(!out.contains("oncall"));
         assert!(matches!(
@@ -703,18 +725,18 @@ name = "db01""#,
 
     #[test]
     fn keyed_objects_update_and_rename() {
-        let new = fields("name = \"linux\"\ninterval = \"5m\"\nmax_attempts = 3");
-        let out = edit_text(FILE, Kind::Role, Some("linux"), Some(&new)).unwrap();
-        assert!(out.contains("[role.linux]\ninterval = \"5m\"\nmax_attempts = 3\n"));
+        let new = fields("name = \"load\"\ninterval = \"5m\"\nmax_attempts = 3");
+        let out = edit_text(FILE, Kind::Service, Some("load"), Some(&new)).unwrap();
+        assert!(out.contains("[service.load]\ninterval = \"5m\"\nmax_attempts = 3\n"));
 
         let new = fields("name = \"admins\"\nemail = [\"ops@example.com\"]");
         let out = edit_text(FILE, Kind::Contact, Some("oncall"), Some(&new)).unwrap();
         assert!(out.contains("[contact.admins]\nemail = [\"ops@example.com\"]"));
         assert!(!out.contains("oncall"));
 
-        let new = fields("name = \"linux\"");
+        let new = fields("name = \"load\"");
         assert!(matches!(
-            edit_text(FILE, Kind::Role, None, Some(&new)),
+            edit_text(FILE, Kind::Service, None, Some(&new)),
             Err(EditError::Exists(..))
         ));
         let out = edit_text(
@@ -745,12 +767,12 @@ name = "db01""#,
     #[test]
     fn new_tables_of_tables_use_dotted_keys_or_match_headers() {
         let new = fields(
-            "name = \"web\"\nservice.http = { check = \"http\" }\nservice.ping = {}\nthresholds.time = { warn = \"> 1s\" }",
+            "name = \"web\"\nservice.http = { check = \"http\" }\nservice.ping = {}\nvars.disks.root = { path = \"/\" }",
         );
-        let out = edit_text("", Kind::Role, None, Some(&new)).unwrap();
+        let out = edit_text("", Kind::Host, None, Some(&new)).unwrap();
         assert_eq!(
             out,
-            "[role.web]\nservice.http = { check = \"http\" }\nservice.ping = {}\nthresholds.time = { warn = \"> 1s\" }\n"
+            "[[host]]\nname = \"web\"\nvars.disks = { root = { path = \"/\" } }\nservice.http = { check = \"http\" }\nservice.ping = {}\n"
         );
 
         let file =
@@ -774,7 +796,7 @@ name = "db01""#,
         let clone = |name: &str| Edit {
             kind: Kind::Host,
             name: None,
-            fields: Some(fields(&format!("name = \"{name}\"\nroles = [\"web\"]"))),
+            fields: Some(fields(&format!("name = \"{name}\"\ngroups = [\"web\"]"))),
             path: Some("hosts/web.toml".into()),
         };
         let changes = edit_many(&dir, &[clone("web02"), clone("web03")]).unwrap();
@@ -819,11 +841,11 @@ name = "db01""#,
             [
                 (Kind::Host, "web01", 2),
                 (Kind::Host, "web02", 8),
-                (Kind::Role, "linux", 11),
+                (Kind::Service, "load", 11),
                 (Kind::Contact, "oncall", 15)
             ]
         );
-        assert_eq!(found[2].fields["name"].as_str(), Some("linux"));
+        assert_eq!(found[2].fields["name"].as_str(), Some("load"));
         assert!(found[0].fields.get("use").is_none());
     }
 }

@@ -1,9 +1,50 @@
+# Every host is pinged; the ping gives it UP/DOWN.
+[hostgroup.all]
+title = "All Hosts"
+members = ["*"]
+services = ["ping"]
+host_check = "ping"
+
+[hostgroup.linux]
+title = "Linux Servers"
+services = ["load"]
+
 [hostgroup.web-servers]
 title = "Web Servers"
+services = ["http"]
+
+[hostgroup.db-servers]
+title = "Database Servers"
+servicegroups = ["postgres"]
+
+[hostgroup.mq]
+title = "Message Queues"
+members = ["mq-*"]
+services = ["queue_depth"]
+
+[hostgroup.ibmi]
+title = "IBM i"
+servicegroups = ["ibmi"]
 
 [hostgroup.dc1]
 title = "Datacenter 1"
-members = { address = "10.0.1.*" }
+members = ["web*", "db*"]
 
+[servicegroup.postgres]
+title = "PostgreSQL"
+services = ["replication", "pg_connections"]
+
+[servicegroup.ibmi]
+title = "IBM i"
+services = ["qsysopr_messages", "asp_usage"]
+
+# Only for the status views: assigned to no host.
 [servicegroup.webshop]
 title = "Webshop"
+services = ["http", "replication"]
+
+# No notifications for Linux servers on Sunday nights.
+[downtimegroup.patchday]
+title = "Patch Day"
+hostgroups = ["linux"]
+schedule = [{ days = ["sun"], from = "02:00", to = "04:00" }]

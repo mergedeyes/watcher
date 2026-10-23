@@ -16,10 +16,18 @@ export interface ServiceView {
 	last_change: string | null;
 	output: string;
 	passive: boolean;
+	/** Show graphs of its metrics. */
+	graphs: boolean;
 	/** The state changes too often; problem notifications are held back. */
 	flapping: boolean;
 	/** Service groups. */
 	groups: string[];
+	acknowledged: boolean;
+	/** Notifications off for it or its host. */
+	muted: boolean;
+	checks_enabled: boolean;
+	/** In a downtime now. */
+	downtime: boolean;
 }
 
 export interface Counts {
@@ -34,10 +42,8 @@ export interface HostView {
 	name: string;
 	address: string;
 	node: string | null;
-	tags: string[];
 	/** Text, or tables (for_each data). */
 	vars: Record<string, unknown>;
-	roles: string[];
 	/** Host groups. */
 	groups: string[];
 	enabled: boolean;
@@ -57,6 +63,90 @@ export interface HostView {
 	/** Worst service state; null if all are pending. */
 	worst: State | null;
 	services: Counts;
+	/** The host problem is acknowledged. */
+	acknowledged: boolean;
+	muted: boolean;
+	checks_enabled: boolean;
+	downtime: boolean;
+}
+
+/** Acknowledgement, mute or disabled checks on a host or service. */
+export interface Flag {
+	kind: 'ack' | 'mute' | 'no_checks';
+	/** `host` or `host/service`. */
+	target: string;
+	author: string;
+	comment: string;
+	created: string;
+}
+
+export interface Downtime {
+	/** null: a window of a downtime group's schedule. */
+	id: number | null;
+	kind: 'host' | 'service' | 'hostgroup' | 'servicegroup' | 'downtimegroup';
+	target: string;
+	start: string;
+	end: string;
+	author: string | null;
+	comment: string;
+	/** Schedule entry, e.g. `sun 02:00-04:00`. */
+	window: string | null;
+	active: boolean;
+	hosts: number;
+	services: number;
+}
+
+export type Action = 'recheck' | 'ack' | 'unack' | 'mute' | 'unmute' | 'disable-checks' | 'enable-checks' | 'downtime';
+
+/** What an action applies to, and its options. */
+export interface ActionBody {
+	hosts?: string[];
+	/** `host/service` ids. */
+	services?: string[];
+	hostgroups?: string[];
+	servicegroups?: string[];
+	downtimegroups?: string[];
+	comment?: string;
+	start?: string;
+	end?: string;
+	duration?: string;
+}
+
+export interface ActionResult {
+	action: Action;
+	done: string[];
+	skipped: { target: string; reason: string }[];
+}
+
+export interface ProcessInfo {
+	version: string;
+	pid: number;
+	instance: string | null;
+	started: string;
+	uptime_s: number;
+	config_loaded: string;
+	database: string | null;
+	notifications: boolean;
+	checks: boolean;
+	hosts: number;
+	services: number;
+	scheduler: { jobs: number; running: number; paused: number; passive: number };
+	results: { last_1m: number; last_5m: number; last_15m: number };
+	acknowledged: number;
+	muted: number;
+	checks_off: number;
+	in_downtime: number;
+}
+
+export interface Scheduled {
+	host: string;
+	service: string;
+	next_check: string | null;
+	last_check: string | null;
+	running: boolean;
+	passive: boolean;
+	paused: boolean;
+	interval_s: number;
 }
 
 export interface Metric {
@@ -88,10 +178,10 @@ export interface ServiceDetail extends ServiceView {
 	check: {
 		/** The check it runs; null for an inline command. */
 		name: string | null;
-		/** The role it comes from; null for a host's own service. */
-		role: string | null;
-		/** The role's service entry (`disk` for the for_each service `disk_root`). */
-		entry: string | null;
+		/** The service object it is made from (`disk` for the for_each service `disk_root`); null for a host's one-off service. */
+		service: string | null;
+		/** Why the host has it: `hostgroup linux`, `servicegroup basics on host web01`, ... */
+		assigned: string[];
 		command: string | null;
 		interval_s: number;
 		retry_interval_s: number;
@@ -102,6 +192,10 @@ export interface ServiceDetail extends ServiceView {
 		flap_high: number | null;
 		origin: string;
 	};
+	/** Downtimes it is in, e.g. `hostgroup linux`. */
+	downtimes: string[];
+	/** Set on it or its host. */
+	flags: Flag[];
 }
 
 export interface Series {
@@ -124,7 +218,7 @@ export interface Points {
 export const HISTORY_DELAY = 1500;
 
 /** `host`: UP/DOWN of the host, from its host check. */
-export type EventKind = 'service' | 'host' | 'flap_start' | 'flap_stop';
+export type EventKind = 'service' | 'host' | 'flap_start' | 'flap_stop' | 'ack' | 'downtime_start' | 'downtime_end';
 
 /** An entry of the alert history. */
 export interface StateEvent {
@@ -182,23 +276,24 @@ export interface ApiToken {
 
 export type Kind =
 	| 'check'
-	| 'role'
+	| 'service'
 	| 'host'
 	| 'hostgroup'
 	| 'servicegroup'
 	| 'contact'
 	| 'contactgroup'
+	| 'downtimegroup'
 	| 'notify'
 	| 'sink';
 
-/** Kinds with a Config Tree: the config kinds plus services. */
-export type TreeKind = Exclude<Kind, 'sink'> | 'service';
+/** Kinds with a Config Tree. A `service` named `host/service` is a service on a host, otherwise a service object. */
+export type TreeKind = Exclude<Kind, 'sink'>;
 
 /** A node of a Config Tree: where an object and its values come from. */
 export interface TreeNode {
 	/** An object kind, or `section` / `value`. */
 	kind: TreeKind | 'section' | 'value';
-	/** Object name to link to (`host/service` for services). */
+	/** Object name to link to (`host/service` for services on hosts). */
 	name?: string;
 	label: string;
 	/** A value, or why something applies. */
@@ -330,7 +425,7 @@ export const api = {
 	services: () => get<{ counts: Counts; services: ServiceView[] }>('/services'),
 	hosts: () => get<HostView[]>('/hosts'),
 	host: (name: string) =>
-		get<{ host: HostView; services: ServiceView[]; origin: string }>(`/hosts/${seg(name)}`),
+		get<{ host: HostView; services: ServiceView[]; origin: string; flags: Flag[] }>(`/hosts/${seg(name)}`),
 	service: (host: string, service: string) =>
 		get<ServiceDetail>(`/services/${seg(host)}/${seg(service)}`),
 	series: (host: string, service: string) =>
@@ -343,6 +438,18 @@ export const api = {
 		return get<StateEvent[]>(`/events?${params}`);
 	},
 
+	action: (action: Action, body: ActionBody) => send<ActionResult>('POST', `/actions/${action}`, body),
+	/** A passive result, e.g. from the Submit Result dialog. */
+	submit: (host: string, service: string, state: State, output: string) =>
+		send<ServiceDetail>('POST', `/services/${seg(host)}/${seg(service)}/result`, { state, output }),
+	flags: () => get<Flag[]>('/flags'),
+	downtimes: () => get<Downtime[]>('/downtimes'),
+	cancelDowntime: (id: number) => send<void>('DELETE', `/downtimes/${id}`),
+	process: () => get<ProcessInfo>('/process'),
+	setProcess: (switches: { notifications?: boolean; checks?: boolean }) =>
+		send<{ notifications: boolean; checks: boolean }>('PUT', '/process', switches),
+	scheduler: (limit = 500) => get<Scheduled[]>(`/scheduler?limit=${limit}`),
+
 	authStatus: () => get<AuthStatus>('/auth/status'),
 	login: (username: string, password: string) =>
 		send<{ user: User }>('POST', '/auth/login', { username, password }),
@@ -350,12 +457,23 @@ export const api = {
 	tokens: () => get<ApiToken[]>('/tokens'),
 	createToken: (name: string) => send<{ token: string; info: ApiToken }>('POST', '/tokens', { name }),
 	deleteToken: (id: number) => send<void>('DELETE', `/tokens/${id}`),
+	users: () => get<User[]>('/users'),
+	createUser: (username: string, password: string, admin: boolean) =>
+		send<User>('POST', '/users', { username, password, admin }),
+	/** Admins: anything; everyone: their own password. */
+	updateUser: (name: string, change: { password?: string; admin?: boolean; disabled?: boolean }) =>
+		send<User>('PUT', `/users/${seg(name)}`, change),
+	deleteUser: (name: string) => send<void>('DELETE', `/users/${seg(name)}`),
 
 	config: () => get<ConfigOverview>('/config'),
 	configFile: (path: string) => get<ConfigFile>(`/config/files/${path.split('/').map(seg).join('/')}`),
 	configObjects: () => get<{ objects: ConfigObject[]; diagnostics: Problem[] }>('/config/objects'),
 	groups: () =>
-		get<{ hostgroups: { name: string; title: string | null }[]; servicegroups: { name: string; title: string | null }[] }>('/groups'),
+		get<{
+			hostgroups: { name: string; title: string | null }[];
+			servicegroups: { name: string; title: string | null }[];
+			downtimegroups: { name: string; title: string | null; schedule: string[] }[];
+		}>('/groups'),
 	configTree: (kind: TreeKind, name: string) =>
 		get<TreeNode>(`/config/tree/${kind}/${name.split('/').map(seg).join('/')}`),
 	/** Executables in the check directories, where bare command names are looked up. */
@@ -367,6 +485,9 @@ export const api = {
 	editMany: (
 		edits: { kind: Kind; name: string | null; fields: Record<string, unknown> | null; path?: string }[]
 	) => send<{ changes: Change[] }>('POST', '/config/edit-many', { edits }),
+	/** What selectors match in the running config, with why. */
+	match: (kind: 'host' | 'service', selectors: unknown[]) =>
+		send<{ total: number; matches: { name: string; why: string }[] }>('POST', '/config/match', { kind, selectors }),
 	preview: (changes: Change[]) => send<Preview>('POST', '/config/preview', { changes }),
 	apply: (changes: Change[]) =>
 		send<{ changes: Changes; diagnostics: Problem[] }>('POST', '/config/apply', { changes })

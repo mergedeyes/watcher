@@ -6,6 +6,7 @@
 	import { api, setUnauthorizedHandler } from '#lib/api.ts';
 	import { auth } from '#lib/auth.svelte.ts';
 	import { live } from '#lib/live.svelte.ts';
+	import ActionLayer from '#lib/ActionLayer.svelte';
 	import { KINDS } from '#lib/schema.ts';
 
 	let { children } = $props();
@@ -53,9 +54,10 @@
 		auth.expire();
 	}
 
+	/** Unhandled problems: not acknowledged, not in a downtime. */
 	let problems = $derived(
-		live.services.filter((s) => s.state !== null && s.state !== 'ok').length +
-			live.hosts.filter((h) => h.state === 'down').length
+		live.services.filter((s) => s.state !== null && s.state !== 'ok' && !s.acknowledged && !s.downtime).length +
+			live.hosts.filter((h) => h.state === 'down' && !h.acknowledged && !h.downtime).length
 	);
 	let bare = $derived(page.url.pathname === '/login' || page.url.pathname === '/setup' || !auth.allowed);
 
@@ -73,6 +75,14 @@
 				{ href: '/hostgroups', label: 'Host Groups' },
 				{ href: '/servicegroups', label: 'Service Groups' },
 				{ href: '/alerts', label: 'Alerts' }
+			]
+		},
+		{
+			title: 'System',
+			items: [
+				{ href: '/downtimes', label: 'Downtimes' },
+				{ href: '/process', label: 'Process Info' },
+				{ href: '/scheduler', label: 'Scheduling Queue' }
 			]
 		}
 	];
@@ -125,6 +135,7 @@
 				{#if auth.status?.required}
 					<div class="group">Settings</div>
 					<a href="/account" class:active={active('/account')}>Account</a>
+					{#if admin}<a href="/users" class:active={active('/users')}>Users</a>{/if}
 				{/if}
 			</nav>
 		</aside>
@@ -158,6 +169,7 @@
 			{/if}
 		</div>
 	</div>
+	<ActionLayer />
 {/if}
 
 <style>

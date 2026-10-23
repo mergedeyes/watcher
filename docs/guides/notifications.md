@@ -17,10 +17,12 @@ Not sent:
 - other services of a host that is HARD DOWN
 - problems while flapping
 - host check WARNING (host stays UP), CRITICAL ↔ UNKNOWN on a host check
+- muted hosts and services, downtimes, acknowledged problems, and
+  everything while notifications are off ([Operations](operations.md))
 
 The host check notifies as the host: `web01 is DOWN`.
 
-*Not yet:* re-notification, acknowledgements, downtimes, escalations.
+*Not yet:* re-notification, escalations.
 
 ## SMTP
 
@@ -86,7 +88,7 @@ By host:
 ```toml
 [[notify]]
 contacts = ["oncall"]
-hosts = { tags = ["prod"] }
+hosts = { groups = ["prod"] }
 ```
 
 By service:
@@ -120,7 +122,7 @@ Except:
 ```toml
 [[notify]]
 contacts = ["oncall"]
-hosts = { tags = ["prod"], exclude = { name = "lab*" } }
+hosts = { groups = ["prod"], exclude = { name = "lab*" } }
 ```
 
 Off:
@@ -138,7 +140,7 @@ enabled = false
 | `hosts` | all | [host selector](../reference/selectors.md#host-selector) |
 | `services` | all | [service selector](../reference/selectors.md#service-selector) |
 | `states` | all | `warning`, `critical`, `unknown`, `down` |
-| `on` | all | `problem`, `recovery`, `flapping` |
+| `on` | all | `problem`, `recovery`, `flapping`, `downtime` |
 | `enabled` | `true` | |
 
 `hosts` and `services` both set: both must match.
@@ -157,7 +159,7 @@ watcher config explain web01/http
 
 ```
 └─ notifications
-   └─ notify rule at conf.d/notify.toml:1: matched: host: tag prod  notify.toml:1
+   └─ notify rule at conf.d/notify.toml:1: matched: host: group prod  notify.toml:1
       └─ contact oncall                                             contacts.toml:1
 ```
 

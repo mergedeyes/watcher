@@ -1,7 +1,7 @@
 # Checks
 
 A check is what to run and how to judge it. Services on hosts use checks
-([Hosts and roles](hosts-and-roles.md)). Fields:
+([Hosts and services](hosts-and-services.md)). Fields:
 [reference](../reference/objects.md#check).
 
 ## Command
@@ -44,12 +44,13 @@ command = 'echo "uptime=$(cut -d" " -f1 /proc/uptime)s"'
 
 | Macro | Value |
 |---|---|
-| `$name$` | var `name` ([vars](hosts-and-roles.md#vars)) |
+| `$name$` | var `name` ([vars](hosts-and-services.md#vars)) |
 | `$host.name$`, `$HOSTNAME$` | host name |
 | `$host.address$`, `$HOSTADDRESS$` | host address (default: the name) |
 | `$host.node$` | host `node` |
-| `$host.vars.x$` | host var `x` |
+| `$host.vars.x$`, `$host.vars.x.y$` | host var `x`, nested `x.y` |
 | `$service.name$` | service name |
+| `$service.key$` | `for_each` entry key |
 | `$check.name$` | check name |
 
 ```toml
@@ -176,8 +177,8 @@ retry_interval = "30s"
 max_attempts = 5
 ```
 
-Durations: `30s`, `5m`, `1h`, `1day`. Roles can set the same fields for
-all their services.
+Durations: `30s`, `5m`, `1h`, `1day`. Services can set the same fields,
+over the check's.
 
 A problem is SOFT 1/3, 2/3, then HARD 3/3. Only HARD changes notify.
 

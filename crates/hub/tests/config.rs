@@ -15,14 +15,15 @@ use watcher_hub::{AuthSettings, ConfigFiles, Hub, Reload};
 const HOSTS: &str = r#"# Web servers
 [[host]]
 name = "web01"   # primary
-tags = ["web"]
+groups = ["web"]
 
 [check.http]
 command = "check_http -H $host.address$"
 
-[role.web]
-hosts = { tags = ["web"] }
-service.http = {}
+[service.http]
+
+[hostgroup.web]
+services = ["http"]
 "#;
 
 struct Setup {
@@ -115,7 +116,7 @@ async fn lists_files_and_objects() {
     assert_eq!(host["kind"], "host");
     assert_eq!(host["name"], "web01");
     assert_eq!(host["line"], 2);
-    assert_eq!(host["fields"]["tags"], json!(["web"]));
+    assert_eq!(host["fields"]["groups"], json!(["web"]));
 
     let (_, scripts) = call(&s.hub, "GET", "/api/v1/config/scripts", None).await;
     assert_eq!(scripts["scripts"][0]["name"], "check_http");
@@ -140,7 +141,7 @@ async fn create_preview_apply() {
         &s.hub,
         "POST",
         "/api/v1/config/edit",
-        Some(json!({ "kind": "host", "fields": { "name": "web02", "tags": ["web"] } })),
+        Some(json!({ "kind": "host", "fields": { "name": "web02", "groups": ["web"] } })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{change}");
@@ -190,7 +191,7 @@ async fn update_keeps_comments() {
         Some(json!({
             "kind": "host",
             "name": "web01",
-            "fields": { "name": "web01", "address": "10.0.0.5", "tags": ["web"] }
+            "fields": { "name": "web01", "address": "10.0.0.5", "groups": ["web"] }
         })),
     )
     .await;
@@ -232,7 +233,7 @@ async fn invalid_changes_are_not_written() {
         HOSTS
     );
 
-    // Deleting the host would leave the role without hosts: a warning only.
+    // Deleting the host would leave the host group without hosts: a warning only.
     let (_, change) = call(
         &s.hub,
         "POST",
@@ -281,7 +282,7 @@ async fn files_mode_is_read_only() {
 #[tokio::test]
 async fn clones_in_one_file() {
     let s = setup("clones", ConfigMode::Hybrid);
-    let clone = |name: &str| json!({ "kind": "host", "path": "hosts.toml", "fields": { "name": name, "tags": ["web"] } });
+    let clone = |name: &str| json!({ "kind": "host", "path": "hosts.toml", "fields": { "name": name, "groups": ["web"] } });
     let (status, body) = call(
         &s.hub,
         "POST",
@@ -318,4 +319,92 @@ async fn clones_in_one_file() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn objects_in_one_step() {
+    let mut s = setup("onestep", ConfigMode::Hybrid);
+    let (status, applied) = call(
+        &s.hub,
+        "PUT",
+        "/api/v1/config/objects/host/web02",
+        Some(json!({ "address": "10.0.0.6", "groups": ["web"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(
+        applied["changes"]["services"]["added"],
+        json!(["web02/http"])
+    );
+    assert_eq!(s.reloads.recv().await.unwrap(), "local user");
+    let (_, host) = call(&s.hub, "GET", "/api/v1/config/objects/host/web02", None).await;
+    assert_eq!(host["path"], "ui/hosts.toml");
+    assert_eq!(host["fields"]["address"], "10.0.0.6");
+
+    // Update in place, then an invalid change is refused.
+    let (status, _) = call(
+        &s.hub,
+        "PUT",
+        "/api/v1/config/objects/host/web02",
+        Some(json!({ "address": "10.0.0.7", "groups": ["web"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, err) = call(
+        &s.hub,
+        "PUT",
+        "/api/v1/config/objects/host/web02",
+        Some(json!({ "groups": ["nope"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{err}");
+    let (_, objects) = call(&s.hub, "GET", "/api/v1/config/objects?kind=host", None).await;
+    assert_eq!(objects["objects"].as_array().unwrap().len(), 2);
+
+    let (status, applied) = call(&s.hub, "DELETE", "/api/v1/config/objects/host/web02", None).await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(applied["changes"]["hosts"]["removed"], json!(["web02"]));
+    let (status, _) = call(&s.hub, "GET", "/api/v1/config/objects/host/web02", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = call(&s.hub, "POST", "/api/v1/config/reload", None).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn selector_preview() {
+    let s = setup("match", ConfigMode::Hybrid);
+    let (status, m) = call(
+        &s.hub,
+        "POST",
+        "/api/v1/config/match",
+        Some(json!({ "kind": "host", "selectors": [["web*"]] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{m}");
+    assert_eq!(m["total"], 1);
+    assert_eq!(
+        m["matches"][0],
+        json!({ "name": "web01", "why": "name web*" })
+    );
+    let (_, m) = call(
+        &s.hub,
+        "POST",
+        "/api/v1/config/match",
+        Some(json!({ "kind": "service", "selectors": [{ "expr": "service.check == \"http\"" }] })),
+    )
+    .await;
+    assert_eq!(m["matches"][0]["name"], "web01/http");
+    let (status, err) = call(
+        &s.hub,
+        "POST",
+        "/api/v1/config/match",
+        Some(json!({ "kind": "host", "selectors": [{ "expr": "host.nme == \"x\"" }] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        err["error"].as_str().unwrap().contains("unknown field"),
+        "{err}"
+    );
 }

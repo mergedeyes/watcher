@@ -18,13 +18,14 @@ const CONFIG: &str = r#"
 command = "check_http -H $host.address$"
 interval = "1h"
 
-[role.web]
-hosts = { tags = ["web"] }
-service.http = {}
+[service.http]
+
+[hostgroup.web]
+services = ["http"]
 
 [[host]]
 name = "web01"
-tags = ["web"]
+groups = ["web"]
 
 [[host]]
 name = "db01"
@@ -286,4 +287,243 @@ async fn serves_the_web_ui_for_app_routes() {
     let (status, err) = call(&hub, "GET", "/api/v1/nope", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(err["error"], "no such endpoint");
+}
+
+#[tokio::test]
+async fn actions_flags_and_downtimes() {
+    let hub = hub();
+    hub.record(&event("web01/http", 2, "HTTP CRITICAL - down"));
+
+    // Acknowledge: only problems.
+    let (status, ack) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/ack",
+        Some(json!({ "services": ["web01/http", "db01/dump"], "comment": "on it" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(ack["done"], json!(["web01/http"]));
+    assert_eq!(ack["skipped"][0]["target"], "db01/dump");
+    let (_, svc) = call(&hub, "GET", "/api/v1/services/web01/http", None).await;
+    assert_eq!(svc["acknowledged"], true);
+    assert_eq!(svc["flags"][0]["comment"], "on it");
+    assert_eq!(
+        hub.suppressed("web01/http", watcher_core::State::Critical)
+            .as_deref(),
+        Some("acknowledged")
+    );
+    // OK again: the acknowledgement ends, the recovery notifies.
+    hub.record(&event("web01/http", 0, "HTTP OK"));
+    let (_, svc) = call(&hub, "GET", "/api/v1/services/web01/http", None).await;
+    assert_eq!(svc["acknowledged"], false);
+    assert_eq!(hub.suppressed("web01/http", watcher_core::State::Ok), None);
+
+    // Mute a host: its services are muted.
+    let (_, mute) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/mute",
+        Some(json!({ "hosts": ["db01"] })),
+    )
+    .await;
+    assert_eq!(mute["done"], json!(["db01"]));
+    let (_, list) = call(&hub, "GET", "/api/v1/services?host=db01", None).await;
+    assert!(
+        list["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["muted"] == true)
+    );
+    assert_eq!(
+        hub.suppressed("db01/dump", watcher_core::State::Critical)
+            .as_deref(),
+        Some("muted")
+    );
+    let (_, unmute) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/unmute",
+        Some(json!({ "hosts": ["db01"] })),
+    )
+    .await;
+    assert_eq!(unmute["done"], json!(["db01"]));
+
+    // A downtime for an hour, by duration.
+    let (status, dt) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/downtime",
+        Some(json!({ "hosts": ["web01"], "duration": "1h", "comment": "patching" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{dt}");
+    let id = dt["downtimes"][0]["id"].as_i64().unwrap();
+    let (_, list) = call(&hub, "GET", "/api/v1/downtimes", None).await;
+    assert_eq!(list[0]["active"], true);
+    assert_eq!(list[0]["services"], 1);
+    let (_, hosts) = call(&hub, "GET", "/api/v1/hosts", None).await;
+    let web = hosts
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["name"] == "web01")
+        .unwrap();
+    assert_eq!(web["downtime"], true);
+    assert!(
+        hub.suppressed("web01/http", watcher_core::State::Critical)
+            .unwrap()
+            .starts_with("in downtime")
+    );
+    let (status, _) = call(&hub, "DELETE", &format!("/api/v1/downtimes/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, list) = call(&hub, "GET", "/api/v1/downtimes", None).await;
+    assert_eq!(list, json!([]));
+
+    // Errors.
+    let (status, err) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/mute",
+        Some(json!({ "hosts": ["nope"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{err}");
+    let (status, _) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/explode",
+        Some(json!({ "hosts": ["web01"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/downtime",
+        Some(json!({ "hosts": ["web01"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn recheck_process_and_schedule() {
+    let hub = hub();
+    // The http check runs hourly; recheck runs it now.
+    let (status, done) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/recheck",
+        Some(json!({ "hosts": ["web01"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["done"], json!(["web01/http"]));
+    let mut ran = false;
+    for _ in 0..50 {
+        let (_, svc) = call(&hub, "GET", "/api/v1/services/web01/http", None).await;
+        if !svc["last_check"].is_null() {
+            ran = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ran, "recheck didn't run the check");
+
+    let (_, process) = call(&hub, "GET", "/api/v1/process", None).await;
+    assert_eq!(process["notifications"], true);
+    assert_eq!(process["scheduler"]["jobs"], 3);
+    assert_eq!(process["scheduler"]["passive"], 2);
+    assert!(process["results"]["last_1m"].as_u64().unwrap() >= 1);
+
+    let (status, _) = call(
+        &hub,
+        "PUT",
+        "/api/v1/process",
+        Some(json!({ "checks": false, "notifications": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        hub.suppressed("web01/http", watcher_core::State::Critical)
+            .as_deref(),
+        Some("notifications are off")
+    );
+    let (_, schedule) = call(&hub, "GET", "/api/v1/scheduler", None).await;
+    let http = schedule
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|j| j["service"] == "http")
+        .unwrap();
+    assert_eq!(http["paused"], true);
+    assert_eq!(http["host"], "web01");
+}
+
+#[tokio::test]
+async fn run_without_recording() {
+    let hub = hub();
+    let (status, run) = call(
+        &hub,
+        "POST",
+        "/api/v1/run-check",
+        Some(json!({ "command": "echo 'DISK OK | used=42%;80;90'", "shell": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{run}");
+    assert_eq!(run["state"], "ok");
+    assert_eq!(run["message"], "DISK OK");
+    assert_eq!(run["metrics"][0]["name"], "used");
+    assert_eq!(run["termination"], "check exited with code 0");
+
+    // A configured service: its command runs, nothing is recorded.
+    let (status, run) = call(&hub, "POST", "/api/v1/services/web01/http/run", None).await;
+    assert_eq!(status, StatusCode::OK, "{run}");
+    assert!(run["command"].as_str().unwrap().starts_with("check_http"));
+    let (_, svc) = call(&hub, "GET", "/api/v1/services/web01/http", None).await;
+    assert_eq!(svc["last_check"], Value::Null);
+    let (status, _) = call(&hub, "POST", "/api/v1/services/db01/dump/run", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn downtime_changes_start_and_end() {
+    let hub = hub();
+    // The first call only takes note.
+    assert!(hub.downtime_changes().await.is_empty());
+    let (_, dt) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/downtime",
+        Some(json!({ "hosts": ["web01"], "services": ["db01/dump"], "duration": "1h", "comment": "patch" })),
+    )
+    .await;
+    let changes = hub.downtime_changes().await;
+    let got: Vec<(String, Option<String>, bool, String)> = changes
+        .iter()
+        .map(|c| (c.host.clone(), c.service.clone(), c.started, c.what.clone()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (
+                "db01".into(),
+                Some("dump".into()),
+                true,
+                "service db01/dump: patch".into()
+            ),
+            ("web01".into(), None, true, "host web01: patch".into()),
+        ]
+    );
+    assert!(hub.downtime_changes().await.is_empty());
+    for d in dt["downtimes"].as_array().unwrap() {
+        let uri = format!("/api/v1/downtimes/{}", d["id"]);
+        call(&hub, "DELETE", &uri, None).await;
+    }
+    let ended = hub.downtime_changes().await;
+    assert_eq!(ended.len(), 2);
+    assert!(ended.iter().all(|c| !c.started));
+    assert_eq!(hub.downtime_suppressed("web01", None), None);
 }

@@ -28,7 +28,8 @@
 	/** Where an object node links to. */
 	function href(node: TreeNode): string | undefined {
 		if (!node.name) return undefined;
-		if (node.kind === 'service') {
+		// `host/service`: a service on a host; without `/` a service object.
+		if (node.kind === 'service' && node.name.includes('/')) {
 			const [host, ...rest] = node.name.split('/');
 			return serviceHref(host ?? '', rest.join('/'));
 		}
