@@ -44,21 +44,22 @@ page: the `graph` service, or the host check, with a picker.
 
 ## Configuration
 
-Admins. Menu: Hosts, Roles, Checks, Host Groups, Service Groups, Contacts,
-Contact Groups, Notifications, Files.
+Admins. Menu: Checks, Services, Hosts, Host Groups, Service Groups,
+Contacts, Contact Groups, Notifications, Files.
 
 - Lists show file and line of every object.
 - Forms show the known fields; other keys in the file are kept. An empty
   field removes the key.
-- Text fields suggest values (objects, tags, scripts, vars, metrics,
-  durations); any value can be typed.
-- Host form: roles, groups, own services, overrides of role services.
+- Text fields suggest values (objects, scripts, vars, metrics, durations);
+  any value can be typed.
+- Host form: host groups, services, service groups, overrides of
+  assigned services, one-off services.
 - **Config Tree:** where the object and each value come from, where it is
   used. Each entry links to its form or file line.
 - **Save** → preview of the effective changes (+ added, ~ changed,
   − removed) and problems → **Apply**. Nothing is written before Apply.
-- New objects go to `conf.d/ui/` (`hosts.toml`, `roles.toml`,
-  `checks.toml`, `groups.toml`, `contacts.toml`, `notify.toml`). Edits of existing objects
+- New objects go to `conf.d/ui/` (`checks.toml`, `services.toml`,
+  `hosts.toml`, `groups.toml`, `contacts.toml`, `notify.toml`). Edits of existing objects
   stay in their file; comments and formatting are kept.
 - Objects written as inline arrays can't be edited in forms; use Files.
 
@@ -66,8 +67,8 @@ Contact Groups, Notifications, Files.
 `web03, web[04-10]` (8 clones, in the original's file). Cloned hosts get
 their address from the name.
 
-**Edit Config** (status pages): host → host form; service → role entry,
-host override or check; group → group form.
+**Edit Config** (status pages): host → host form or its host groups;
+service → service, host override or check; group → group form.
 
 **Files:** list, new file, editor with live validation (markers at the
 line, summary of the effective changes).

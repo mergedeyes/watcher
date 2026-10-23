@@ -1,7 +1,7 @@
 # Selectors
 
-Which hosts or services. Used by role `hosts`, group `members` and notify
-rules.
+Which hosts or services a [notify rule](objects.md#notify) takes
+(`hosts`, `services`).
 
 - Every field present must match (AND).
 - A list matches any of its values (OR).
@@ -14,16 +14,11 @@ rules.
 |---|---|
 | `name` | host name, glob(s) |
 | `address` | address, glob(s) |
-| `tags` | any of the tags |
 | `node` | node label(s) |
-| `roles` | any of the roles |
 | `groups` | any of the host groups |
 | `vars.<x>` | var value, or any of a list |
 | `exclude` | host selector; its matches are removed |
 | `expr` | [expression](#expressions) |
-
-Not allowed: role `hosts`: `roles`, `groups` (they depend on roles).
-Host group `members`: `groups`.
 
 By name:
 
@@ -40,19 +35,19 @@ hosts = ["web01", "db*"]
 By address:
 
 ```toml
-members = { address = "10.0.1.*" }
+hosts = { address = "10.0.1.*" }
 ```
 
-By tag:
+By host group:
 
 ```toml
-hosts = { tags = ["prod"] }
+hosts = { groups = ["prod"] }
 ```
 
-Tag and name (AND):
+Host group and name (AND):
 
 ```toml
-hosts = { tags = ["prod"], name = "db*" }
+hosts = { groups = ["prod"], name = "db*" }
 ```
 
 By var:
@@ -61,22 +56,10 @@ By var:
 hosts = { vars.os = ["debian", "ubuntu"] }
 ```
 
-By role (not in role `hosts`):
-
-```toml
-hosts = { roles = ["db"] }
-```
-
-By host group (not in host group `members`):
-
-```toml
-hosts = { groups = ["dc1"] }
-```
-
 Except:
 
 ```toml
-hosts = { tags = ["prod"], exclude = { name = "lab*" } }
+hosts = { groups = ["prod"], exclude = { name = "lab*" } }
 ```
 
 All:
@@ -99,7 +82,7 @@ hosts = {}
 Shorthand, list of `host/service` ids or service names, globs allowed:
 
 ```toml
-members = ["web01/http", "db*/pgsql", "backup"]
+services = ["web01/http", "db*/pgsql", "backup"]
 ```
 
 By check:
@@ -123,7 +106,7 @@ services = { groups = ["webshop"] }
 On some hosts:
 
 ```toml
-services = { checks = ["http"], hosts = { tags = ["prod"] } }
+services = { checks = ["http"], hosts = { groups = ["prod"] } }
 ```
 
 ## Expressions
@@ -131,13 +114,13 @@ services = { checks = ["http"], hosts = { tags = ["prod"] } }
 For what the fields can't express, e.g. OR across fields.
 
 ```toml
-hosts = { expr = 'host.tags contains "db" or host.name ~ "^pg"' }
+hosts = { expr = 'host.groups contains "db" or host.name ~ "^pg"' }
 ```
 
 | Operand | |
 |---|---|
 | `host.name`, `host.address`, `host.node` | text |
-| `host.tags`, `host.roles`, `host.groups` | lists |
+| `host.groups` | list |
 | `host.vars.<x>` | var |
 | `service.name`, `service.check`, `service.groups` | services only |
 
@@ -162,15 +145,13 @@ hosts = { expr = 'host.name in ["db01", "web01"]' }
 ```
 
 ```toml
-services = { expr = 'service.check == "disk" and not host.tags contains "test"' }
+services = { expr = 'service.check == "disk" and not host.groups contains "test"' }
 ```
 
 ## Checking a selector
 
-Unknown tags, roles, groups or nodes in a selector: warning. Empty match
-for a role or group: warning.
+Unknown hosts, groups, checks or nodes in a selector: warning.
 
 ```sh
-watcher config explain hostgroup dc1       # members and why
 watcher config explain notify dba-critical # what a rule matches
 ```

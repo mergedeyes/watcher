@@ -8,7 +8,7 @@ Layout by convention:
 
 ```
 conf.d/
-  checks.toml  roles.toml  hosts.toml
+  checks.toml  services.toml  hosts.toml
   groups.toml  contacts.toml  notify.toml  sinks.toml
   ui/          objects created in the web UI
 ```
@@ -16,15 +16,26 @@ conf.d/
 | Kind | TOML |
 |---|---|
 | [check](#check) | `[check.<name>]` |
-| [role](#role) | `[role.<name>]` |
+| [service](#service) | `[service.<name>]` |
 | [host](#host) | `[[host]]` |
-| [service](#service) | `role.<r>.service.<name>`, `host.service.<name>` |
+| [host service](#host-service) | `[host.service.<name>]` |
 | [hostgroup](#hostgroup) | `[hostgroup.<name>]` |
 | [servicegroup](#servicegroup) | `[servicegroup.<name>]` |
 | [contact](#contact) | `[contact.<name>]` |
 | [contactgroup](#contactgroup) | `[contactgroup.<name>]` |
 | [notify](#notify) | `[[notify]]` |
 | [sink](#sink) | `[[sink]]` |
+
+How a host gets a service:
+
+```
+check ─▶ service ─▶ host
+            │         ▲
+            ▼         │
+     servicegroup ─▶ hostgroup
+```
+
+`services = [...]` and `servicegroups = [...]` on a host or host group.
 
 **Names:** not empty, no `/`, no control characters, no leading or
 trailing spaces. Var names and `for_each` keys: `[a-z_][a-z0-9_]*`.
@@ -59,38 +70,31 @@ interval = "1m"
 | `flap_detection` | `true` | |
 | `flap_low` | 5 | percent, stop flapping below |
 | `flap_high` | 20 | percent, start flapping at |
+| `graphs` | `true` | `false`: no graphs |
 
 A check used by nothing: warning.
 
-## role
+## service
 
 ```toml
-[role.web]
-title = "Web servers"
-include = ["linux"]
-hosts = { tags = ["web"] }
-host_check = "ping"
-graph = "http"
-vars.url = "/"
-groups = ["web-servers"]
-interval = "1m"
-service.http = {}
+[service.disk_root]
+check = "disk"
+vars.path = "/"
+groups = ["linux-basics"]
+
+[service.disk]
+for_each = "disks"
 ```
 
-| Field | |
-|---|---|
-| `title` | display name |
-| `include` | roles merged into this one; this one wins. Cycles: error |
-| `hosts` | [host selector](selectors.md#host-selector): hosts that get the role. No `roles`/`groups` |
-| `host_check` | service giving its hosts UP/DOWN |
-| `graph` | service graphed on the host page |
-| `node` | node label for its hosts |
-| `vars` | host var defaults |
-| `groups` | host groups its hosts join |
-| `interval`, `retry_interval`, `max_attempts`, `timeout` | defaults for its services |
-| `service.<name>` | [service](#service) |
+| Field | Default | |
+|---|---|---|
+| `check` | check of the same name | none with own `command` or `passive` |
+| every [check](#check) field | | overrides the check's |
+| `for_each` | | host var with a table of tables: one service `<name>_<key>` per entry |
+| `groups` | | service groups |
+| `enabled` | `true` | |
 
-A role used by no host: warning.
+A service on no host: warning.
 
 ## host
 
@@ -98,88 +102,94 @@ A role used by no host: warning.
 [[host]]
 name = "db01"
 address = "10.0.2.21"
-roles = ["linux", "db"]
-tags = ["prod"]
-groups = ["dc1"]
+groups = ["linux", "dc1"]
+services = ["backup"]
+servicegroups = ["postgres"]
 vars.disks.data = { path = "/srv" }
-  [host.service.backup]
-  passive = true
-  freshness = "26h"
 ```
 
 | Field | Default | |
 |---|---|---|
 | `name` | | required, unique |
 | `address` | the name | `$host.address$` |
-| `roles` | | roles listed on the host |
-| `tags` | | free labels for selectors; add up with roles' |
 | `groups` | | host groups |
-| `vars` | | `$name$` values, `for_each` tables |
+| `services` | | services |
+| `servicegroups` | | their services |
+| `vars` | | `$name$` values, `for_each` tables; over host group vars |
 | `node` | | node label (*not yet*: nodes) |
-| `host_check` | from roles | service giving UP/DOWN |
+| `host_check` | from host groups | service giving UP/DOWN |
 | `graph` | the host check | service graphed on the host page |
 | `enabled` | `true` | `false`: not monitored |
-| `service.<name>` | | own service or override, [service](#service) |
+| `service.<name>` | | [host service](#host-service) |
 
-## service
+## host service
 
-In `[role.<r>]` as `service.<name> = { ... }`, on a host as
-`[host.service.<name>]`.
+`[host.service.<name>]`: settings of one service on one host.
 
 ```toml
-[role.linux]
-service.disk = { check = "disk", for_each = "disks", groups = ["storage"] }
-
 [[host]]
 name = "web01"
+groups = ["linux"]
   [host.service.disk_root]
   vars.warn = "30%"
+  [host.service.load]
+  enabled = false
+  [host.service.uptime]
+  command = "uptime"
 ```
 
-| Field | Default | |
-|---|---|---|
-| `check` | the service name | check to use; none with own `command` or `passive` |
-| every [check](#check) field | | overrides the check's |
-| `for_each` | | host var with a table of tables: one service `<name>_<key>` per entry |
-| `groups` | | service groups |
-| `enabled` | `true` | `false` on a host: removes the role's service there |
+- A service the host has: overrides it (with `for_each`: `<name>_<key>`
+  one, `<name>` all).
+- A service it doesn't have: assigns it, with the overrides.
+- Neither: a one-off service on this host; `check` defaults to the check
+  of the same name.
 
-On a host, `service.<name>` overrides the role service of that name (with
-`for_each`: `<name>_<key>` one, `<name>` all), or adds a new one.
+Fields: as [service](#service); `enabled = false` removes it from the host.
 
-Precedence: host > role > included role > check > defaults, key by key.
-Tables merge per key; lists are replaced, except `tags` and `groups`.
-Two roles on a host setting the same value differently: error.
+**Precedence**, key by key: host service > host vars > host group vars >
+service > check > defaults. Tables merge per key; lists are replaced,
+except `groups`. Two host groups of a host setting a value differently:
+error.
 
 ## hostgroup
 
 ```toml
-[hostgroup.dc1]
-title = "Datacenter 1"
-members = { address = "10.0.*" }
+[hostgroup.linux]
+title = "Linux Servers"
+members = ["web*", "db01"]
+servicegroups = ["linux-basics"]
+services = ["ssh"]
+host_check = "ping"
+vars.warn = "20%"
 ```
 
 | Field | |
 |---|---|
 | `title` | display name |
-| `members` | [host selector](selectors.md#host-selector), no `groups` |
+| `members` | host names; `*` and `?` match |
+| `services` | services for every member |
+| `servicegroups` | their services, for every member |
+| `host_check` | service giving its hosts UP/DOWN |
+| `graph` | service graphed on the host page |
+| `vars` | host var defaults |
 
-Hosts also join with host `groups` and role `groups`.
+Hosts also join with host `groups`.
 
 ## servicegroup
 
 ```toml
-[servicegroup.webshop]
-title = "Webshop"
-members = ["web01/http", "db01/pgsql"]
+[servicegroup.linux-basics]
+title = "Linux Basics"
+services = ["ping", "load", "disk_root"]
 ```
 
 | Field | |
 |---|---|
 | `title` | display name |
-| `members` | [service selector](selectors.md#service-selector) |
+| `services` | its services |
 
-Services also join with service `groups`.
+Services also join with service `groups`. A host or host group listing the
+group gets all of them; the group shows all of them on every host.
 
 ## contact
 

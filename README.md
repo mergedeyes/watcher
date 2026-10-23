@@ -47,9 +47,9 @@ contact, and can add checks for this machine. They write:
 
 ```
 watcher.toml        listen address, database, SMTP
-conf.d/checks.toml  what to run
-conf.d/roles.toml   which services a kind of host gets
-conf.d/hosts.toml   the hosts
+conf.d/checks.toml    what to run
+conf.d/services.toml  checks with their settings, a service group
+conf.d/hosts.toml     the hosts and a host group
 conf.d/contacts.toml, conf.d/notify.toml   who gets alerts
 ```
 
@@ -64,13 +64,22 @@ watcher run       # reads ./watcher.toml; web UI on http://127.0.0.1:8080
 | Term | Meaning |
 |---|---|
 | check | what to run: a command and its defaults |
-| role | the services a kind of host gets |
+| service | a check with its settings |
 | host | something to monitor |
-| service | a check on a host |
+| host group | hosts that get the same services |
+| service group | services assigned together |
 
-**Web UI:** Configuration → Hosts → Add Host, pick roles; Configuration →
-Roles / Checks likewise. Every save shows what changes before Apply.
-**Clone** copies an object; `web[03-10]` as names makes eight copies.
+```
+check ─▶ service ─▶ host
+            │         ▲
+            ▼         │
+     servicegroup ─▶ hostgroup
+```
+
+**Web UI:** Configuration → Checks → Add Check; Services → Add Service;
+Hosts → Add Host, pick services, service groups or host groups. Every save
+shows what changes before Apply. **Clone** copies an object; `web[03-10]`
+as names makes eight copies.
 
 **Files:** any `*.toml` below `conf.d/`. Saved changes are loaded within a
 second; with errors, the running config stays and the log says why.
@@ -80,16 +89,6 @@ Check before saving, and see where a service's values come from:
 ```sh
 watcher config check --services
 watcher config explain web01/http
-```
-
-### A host
-
-```toml
-[[host]]
-name = "web01"
-address = "10.0.0.5"          # default: the name
-roles = ["linux"]
-tags = ["web", "prod"]
 ```
 
 ### A check
@@ -104,25 +103,38 @@ command = "check_ping -H $host.address$ -w $warn$ -c $crit$"
 vars = { warn = "100,20%", crit = "500,60%" }
 ```
 
-### A role
+### A service
 
-Services listed in a role run on every host with the role. `service.ping =
-{}` uses the check of the same name. `host_check` gives hosts UP/DOWN.
+`check` defaults to the check of the same name.
 
 ```toml
-[role.linux]
-host_check = "ping"
-interval = "1m"
-service.ping = {}
-service.load = { check = "load" }
+[service.ping]
+
+[service.load]
+interval = "5m"
 ```
 
-### Roles by tag
+### A host
 
 ```toml
-[role.web]
-hosts = { tags = ["web"] }    # every host tagged web
-service.http = {}
+[[host]]
+name = "web01"
+address = "10.0.0.5"          # default: the name
+services = ["ping", "load"]
+host_check = "ping"           # gives the host UP/DOWN
+```
+
+### Groups
+
+```toml
+[servicegroup.linux]
+services = ["ping", "load"]
+
+[hostgroup.web]
+members = ["web*"]            # or groups = ["web"] on the host
+servicegroups = ["linux"]
+services = ["http"]
+host_check = "ping"
 ```
 
 ### One service on one host
@@ -130,19 +142,19 @@ service.http = {}
 ```toml
 [[host]]
 name = "db01"
-roles = ["linux"]
+groups = ["web"]
   [host.service.backup_age]
   command = "/opt/scripts/backup_age.sh"
 ```
 
 ### Different values on one host
 
-Host values win over the role's, the role's over the check's.
+Host values win over the host group's, the service's over the check's.
 
 ```toml
 [[host]]
 name = "web02"
-roles = ["linux"]
+groups = ["web"]
 vars.warn = "200,30%"         # used by $warn$ in ping
   [host.service.load]
   enabled = false             # this host doesn't get it
@@ -155,12 +167,12 @@ vars.warn = "200,30%"         # used by $warn$ in ping
 command = "check_disk -w $warn$ -c $crit$ -p $path$"
 vars = { warn = "20%", crit = "10%" }
 
-[role.linux]
-service.disk = { for_each = "disks" }
+[service.disk]
+for_each = "disks"
 
 [[host]]
 name = "db01"
-roles = ["linux"]
+services = ["disk"]
 vars.disks.root = { path = "/" }                               # → disk_root
 vars.disks.data = { path = "/srv", warn = "10%", crit = "5%" } # → disk_data
 ```

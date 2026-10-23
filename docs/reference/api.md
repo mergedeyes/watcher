@@ -137,7 +137,7 @@ Flow: `edit` → `preview` → `apply`.
 ```sh
 # 1. file change for a new host
 curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
-  -d '{"kind": "host", "fields": {"name": "web03", "address": "10.0.0.7", "roles": ["linux"]}}' \
+  -d '{"kind": "host", "fields": {"name": "web03", "address": "10.0.0.7", "groups": ["linux"]}}' \
   .../api/v1/config/edit
 # → {"path": "ui/hosts.toml", "base": "…", "text": "…"}
 
@@ -148,7 +148,7 @@ curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
 ```
 
 Edit body: `kind`, `name` (null: create), `fields` (null: delete),
-`path` (new objects; default `ui/hosts.toml`, `ui/roles.toml`,
+`path` (new objects; default `ui/hosts.toml`, `ui/services.toml`,
 `ui/checks.toml`, `ui/groups.toml`, `ui/contacts.toml`, `ui/notify.toml`,
 `ui/sinks.toml`).
 

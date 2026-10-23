@@ -28,21 +28,25 @@ command = "check_procs -w 400 -c 600"
 ```
 
 ```toml
-# conf.d/roles.toml
-[role.linux]
-graph = "load"
-service.disk = { for_each = "disks" }
-service.load = {}
-service.swap = {}
-service.procs = { interval = "5m" }
-vars.disks.root = { path = "/" }
+# conf.d/services.toml
+[service.disk]
+for_each = "disks"
+
+[service.load]
+
+[service.swap]
+
+[service.procs]
+interval = "5m"
 ```
 
 ```toml
 # conf.d/hosts.toml
 [[host]]
 name = "localhost"
-roles = ["linux"]
+services = ["disk", "load", "swap", "procs"]
+graph = "load"
+vars.disks.root = { path = "/" }
 vars.disks.var = { path = "/var" }
 ```
 
@@ -57,8 +61,8 @@ contacts = ["admin"]
 
 ## Web and database servers
 
-Roles by tag, UP/DOWN by ping, a service group, DBAs only for database
-problems.
+Host groups by name, UP/DOWN by ping, a service group for every server, a
+"Webshop" view, DBAs only for database problems.
 
 ```toml
 # conf.d/checks.toml
@@ -83,23 +87,41 @@ vars.db = "postgres"
 ```
 
 ```toml
-# conf.d/roles.toml
-[role.server]
-hosts = {}                                    # every host
+# conf.d/services.toml
+[service.ping]
+[service.ssh]
+[service.http]
+[service.https_cert]
+[service.pgsql]
+```
+
+```toml
+# conf.d/groups.toml
+[servicegroup.server]
+title = "Server Basics"
+services = ["ping", "ssh"]
+
+[servicegroup.shop]
+title = "Webshop"
+services = ["http", "pgsql"]
+
+[hostgroup.all]
+members = ["*"]
+servicegroups = ["server"]
 host_check = "ping"
-service.ping = {}
-service.ssh = {}
 
-[role.web]
-hosts = { tags = ["web"] }
-groups = ["web-servers"]
-service.http = { groups = ["shop"] }
-service.https_cert = {}
+[hostgroup.web-servers]
+title = "Web Servers"
+members = ["web*", "test01"]
+services = ["http", "https_cert"]
 
-[role.db]
-hosts = { tags = ["db"] }
-groups = ["databases"]
-service.pgsql = { groups = ["shop"] }
+[hostgroup.databases]
+title = "Databases"
+members = ["db*"]
+services = ["pgsql"]
+
+[hostgroup.prod]
+members = ["web01", "web02", "db01"]
 ```
 
 ```toml
@@ -107,38 +129,22 @@ service.pgsql = { groups = ["shop"] }
 [[host]]
 name = "web01"
 address = "10.0.1.11"
-tags = ["web", "prod"]
 
 [[host]]
 name = "web02"
 address = "10.0.1.12"
-tags = ["web", "prod"]
 vars.url = "/health"
 
 [[host]]
 name = "db01"
 address = "10.0.2.21"
-tags = ["db", "prod"]
 vars.db = "shop"
 
 [[host]]
 name = "test01"
 address = "10.0.9.1"
-tags = ["web", "test"]
   [host.service.https_cert]
   enabled = false                             # self-signed on test
-```
-
-```toml
-# conf.d/groups.toml
-[hostgroup.web-servers]
-title = "Web Servers"
-
-[hostgroup.databases]
-title = "Databases"
-
-[servicegroup.shop]
-title = "Webshop"
 ```
 
 ```toml
@@ -163,7 +169,7 @@ title = "DBAs"
 [[notify]]
 name = "prod"
 contacts = ["oncall"]
-hosts = { tags = ["prod"] }
+hosts = { groups = ["prod"] }
 
 [[notify]]
 name = "dba"
@@ -189,17 +195,20 @@ interval = "1h"
 ```
 
 ```toml
-# conf.d/roles.toml
-[role.websites]
-service.http = { for_each = "sites", groups = ["websites"] }
-service.cert = { for_each = "sites" }
+# conf.d/services.toml
+[service.http]
+for_each = "sites"
+groups = ["websites"]
+
+[service.cert]
+for_each = "sites"
 ```
 
 ```toml
 # conf.d/hosts.toml
 [[host]]
 name = "websites"
-roles = ["websites"]
+services = ["http", "cert"]
 vars.sites.shop = { vhost = "shop.example.com" }
 vars.sites.blog = { vhost = "blog.example.com", url = "/feed" }
 vars.sites.api = { vhost = "api.example.com", url = "/v1/health" }
@@ -216,8 +225,7 @@ Services: `websites/http_shop`, `websites/http_blog`, `websites/http_api`,
 
 ## Customers (MSP)
 
-Hosts tagged by customer, a host group per customer, alerts to the
-customer and to the NOC.
+A host group per customer, alerts to the customer and to the NOC.
 
 ```toml
 # conf.d/checks.toml
@@ -232,19 +240,33 @@ command = "check_smtp -H $host.address$"
 ```
 
 ```toml
-# conf.d/roles.toml
-[role.base]
-hosts = {}
+# conf.d/services.toml
+[service.ping]
+[service.rdp]
+[service.smtp]
+```
+
+```toml
+# conf.d/groups.toml
+[hostgroup.all]
+members = ["*"]
+services = ["ping"]
 host_check = "ping"
-service.ping = {}
 
-[role.windows]
-hosts = { tags = ["windows"] }
-service.rdp = {}
+[hostgroup.windows]
+services = ["rdp"]
 
-[role.mail]
-hosts = { name = "*mail*" }
-service.smtp = {}
+[hostgroup.mail]
+members = ["*mail*"]
+services = ["smtp"]
+
+[hostgroup.acme]
+title = "ACME Corp"
+members = ["acme-*"]
+
+[hostgroup.globex]
+title = "Globex"
+members = ["globex-*"]
 ```
 
 ```toml
@@ -252,12 +274,11 @@ service.smtp = {}
 [[host]]
 name = "acme-dc01"
 address = "192.0.2.10"
-tags = ["acme", "windows"]
+groups = ["windows"]
 
 [[host]]
 name = "acme-mail"
 address = "192.0.2.25"
-tags = ["acme"]
 ```
 
 ```toml
@@ -265,18 +286,7 @@ tags = ["acme"]
 [[host]]
 name = "globex-fs01"
 address = "198.51.100.5"
-tags = ["globex", "windows"]
-```
-
-```toml
-# conf.d/groups.toml
-[hostgroup.acme]
-title = "ACME Corp"
-members = { tags = ["acme"] }
-
-[hostgroup.globex]
-title = "Globex"
-members = { tags = ["globex"] }
+groups = ["windows"]
 ```
 
 ```toml
@@ -305,21 +315,24 @@ on = ["problem", "recovery"]
 Jobs push their result after each run; no result in 26 h is UNKNOWN.
 
 ```toml
-# conf.d/roles.toml
-[role.backup]
-hosts = { tags = ["backup"] }
-service.backup = { passive = true, freshness = "26h" }
+# conf.d/services.toml
+[service.backup]
+passive = true
+freshness = "26h"
 ```
 
 ```toml
 # conf.d/hosts.toml
+[hostgroup.backup]
+services = ["backup"]
+
 [[host]]
 name = "fileserver"
-tags = ["backup"]
+groups = ["backup"]
 
 [[host]]
 name = "mailserver"
-tags = ["backup"]
+groups = ["backup"]
   [host.service.backup]
   freshness = "8h"                            # runs every 6 h
   thresholds.duration = { warn = "> 2h" }
@@ -373,14 +386,21 @@ thresholds.workers = { crit = "< 1" }
 command = "app_health $host.address$"
 format = "json"
 timeout = "10s"
+graphs = false
 ```
 
 ```toml
-# conf.d/roles.toml
-[role.app]
-hosts = { tags = ["app"] }
-service.queue = { check = "app_queue" }
-service.health = { check = "app_health", interval = "30s" }
+# conf.d/services.toml
+[service.queue]
+check = "app_queue"
+
+[service.health]
+check = "app_health"
+interval = "30s"
+
+[servicegroup.app]
+title = "App"
+services = ["queue", "health"]
 ```
 
 ```toml
@@ -388,7 +408,7 @@ service.health = { check = "app_health", interval = "30s" }
 [[host]]
 name = "app01"
 address = "10.0.5.1"
-tags = ["app"]
+servicegroups = ["app"]
 ```
 
 ## Copy to a central database

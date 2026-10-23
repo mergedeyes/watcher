@@ -29,7 +29,7 @@ Values are stored normalized: seconds, bytes, percent
 |---|---|
 | `v_metrics` | tenant, host, service, metric, labels, unit, ts, value, flags |
 | `v_service_state` | tenant, host, service, state, state_type, attempt, last_check, last_change, last_hard_change, output, flapping |
-| `hosts` | name, address, tags, vars, removed_at |
+| `hosts` | name, address, groups (host groups), vars, removed_at |
 | `services` | host_id, name, check_hash, removed_at |
 | `series` | service_id, metric, labels, unit |
 | `samples` | series_id, ts, value, flags |

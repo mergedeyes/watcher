@@ -86,7 +86,7 @@ By host:
 ```toml
 [[notify]]
 contacts = ["oncall"]
-hosts = { tags = ["prod"] }
+hosts = { groups = ["prod"] }
 ```
 
 By service:
@@ -120,7 +120,7 @@ Except:
 ```toml
 [[notify]]
 contacts = ["oncall"]
-hosts = { tags = ["prod"], exclude = { name = "lab*" } }
+hosts = { groups = ["prod"], exclude = { name = "lab*" } }
 ```
 
 Off:
@@ -157,7 +157,7 @@ watcher config explain web01/http
 
 ```
 └─ notifications
-   └─ notify rule at conf.d/notify.toml:1: matched: host: tag prod  notify.toml:1
+   └─ notify rule at conf.d/notify.toml:1: matched: host: group prod  notify.toml:1
       └─ contact oncall                                             contacts.toml:1
 ```
 

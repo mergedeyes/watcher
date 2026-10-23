@@ -1,25 +1,16 @@
 # Groups
 
-Groups only group: for status pages, filters, selectors and notify rules.
-They don't assign services (roles do) and don't pass on settings.
+| Kind | Holds | Does | Join from |
+|---|---|---|---|
+| `hostgroup` | hosts | gives its hosts services, service groups, host check, vars | `members`, host `groups` |
+| `servicegroup` | services | a bundle of services for hosts and host groups | `services`, service `groups` |
+| `contactgroup` | contacts | recipients of notify rules | `members`, contact `groups` |
 
-| Kind | Groups | Join from |
-|---|---|---|
-| `hostgroup` | hosts | `members`, host `groups`, role `groups` |
-| `servicegroup` | services | `members`, service `groups` |
-| `contactgroup` | contacts | `members`, contact `groups` |
+All of them also group for status pages, filters and notify rules.
 
 Fields: [reference](../reference/objects.md#hostgroup).
 
 ## Host groups
-
-By selector:
-
-```toml
-[hostgroup.dc1]
-title = "Datacenter 1"
-members = { address = "10.0.*" }
-```
 
 Listed on the host:
 
@@ -31,49 +22,70 @@ name = "db01"
 groups = ["databases"]
 ```
 
-Every host of a role:
+By name (`*`, `?`):
 
 ```toml
 [hostgroup.web-servers]
 title = "Web Servers"
-
-[role.web]
-hosts = { tags = ["web"] }
-groups = ["web-servers"]
-service.http = {}
+members = ["web*", "shop01"]
 ```
 
-Host group `members` can't use `groups`.
+What its hosts get:
+
+```toml
+[hostgroup.linux]
+members = ["*"]
+services = ["ssh"]
+servicegroups = ["linux-basics"]
+host_check = "ping"
+vars.disks.root = { path = "/" }
+```
+
+The host wins over its host groups. Two host groups of a host setting
+`host_check`, `graph` or a var differently: error.
 
 ## Service groups
+
+Listed on the group:
+
+```toml
+[servicegroup.linux-basics]
+title = "Linux Basics"
+services = ["ping", "load", "disk_root"]
+```
 
 Listed on the service:
 
 ```toml
+[service.http]
+groups = ["webshop"]
+```
+
+Assigned to a host or host group, a service group gives it all its
+services:
+
+```toml
+[[host]]
+name = "web01"
+servicegroups = ["linux-basics"]
+```
+
+A service group assigned to nothing only groups, e.g. a "Webshop" view
+across web and database services:
+
+```toml
 [servicegroup.webshop]
 title = "Webshop"
+services = ["http", "pgsql"]
+```
 
-[role.web]
-service.http = { groups = ["webshop"] }
+On a single host:
 
+```toml
 [[host]]
 name = "db01"
   [host.service.pgsql]
   groups = ["webshop"]
-```
-
-By id:
-
-```toml
-[servicegroup.payment]
-members = ["db01/pgsql", "web*/http"]
-```
-
-By selector:
-
-```toml
-[servicegroup.http]
-members = { checks = ["http"] }
 ```
 
 ## Contact groups
@@ -110,15 +122,20 @@ services = { groups = ["webshop"] }
 Web UI: Current Status → Host Groups / Service Groups: status totals per
 group, linked to the filtered lists.
 
-Why a member is in:
+Members and why:
 
 ```sh
-watcher config explain servicegroup webshop
+watcher config explain servicegroup linux-basics
 ```
 
 ```
-Webshop                                                     groups.toml:1
+linux-basics                                                groups.toml:5
+├─ services
+│  ├─ service ping: listed                                  services.toml:1
+│  └─ service load: listed                                  services.toml:2
+├─ assigned to
+│  └─ hostgroup linux                                       groups.toml:1
 └─ members
-   ├─ service web01/http: listed on role web, service http  roles.toml:4
-   └─ service db01/pgsql: listed on host db01, service pgsql  hosts.toml:9
+   ├─ service web01/ping: listed on servicegroup linux-basics  groups.toml:5
+   └─ service web01/load: listed on servicegroup linux-basics  groups.toml:5
 ```
