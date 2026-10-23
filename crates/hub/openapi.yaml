@@ -349,6 +349,7 @@ paths:
                 properties:
                   hostgroups: { type: array, items: { $ref: "#/components/schemas/Group" } }
                   servicegroups: { type: array, items: { $ref: "#/components/schemas/Group" } }
+                  downtimegroups: { type: array, items: { type: object, properties: { name: { type: string }, title: { type: [string, "null"] }, schedule: { type: array, items: { type: string } } } } }
 
   /stream:
     get:

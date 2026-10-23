@@ -221,8 +221,8 @@ async fn host(AxState(hub): Shared, Path(name): Path<String>) -> ApiResult<serde
     })))
 }
 
-/// Host and service groups with their titles; members are in the host and
-/// service views (`groups`).
+/// Host, service and downtime groups with their titles; host and service
+/// group members are in the host and service views (`groups`).
 async fn groups(AxState(hub): Shared) -> Json<serde_json::Value> {
     let config = hub.config();
     let list = |groups: &[watcher_config::Group]| -> Vec<serde_json::Value> {
@@ -234,6 +234,15 @@ async fn groups(AxState(hub): Shared) -> Json<serde_json::Value> {
     Json(json!({
         "hostgroups": list(&config.hostgroups),
         "servicegroups": list(&config.servicegroups),
+        "downtimegroups": config
+            .downtimegroups
+            .iter()
+            .map(|g| json!({
+                "name": g.name,
+                "title": g.title,
+                "schedule": g.schedule.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            }))
+            .collect::<Vec<_>>(),
     }))
 }
 
