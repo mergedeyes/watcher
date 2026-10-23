@@ -172,6 +172,10 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
     if let Some(name) = instance {
         hub.set_instance_name(name);
     }
+    // Acknowledgements, downtimes, muted and disabled checks.
+    hub.load_ops()
+        .await
+        .context("cannot load acknowledgements and downtimes")?;
     let (reload_tx, mut reloads) = mpsc::channel(4);
     hub.enable_config_editing(ConfigFiles {
         dir: conf_dir.clone(),
@@ -276,8 +280,8 @@ impl Running<'_> {
         print_event(&event, all);
         self.hub.record(&event);
         if event.change.is_some_and(|c| c.hard) || event.flap.is_some() {
-            if self.hub.host_down(&event.id) {
-                info!("no notification for {}: host is DOWN", event.id);
+            if let Some(why) = self.hub.suppressed(&event.id, event.state.state) {
+                info!("no notification for {}: {why}", event.id);
             } else if self.notify_tx.try_send(event.clone()).is_err() {
                 warn!(
                     "notification queue is full; dropped the notification for {}",

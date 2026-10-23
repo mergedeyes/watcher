@@ -1,6 +1,7 @@
 //! JSON shapes of the API.
 
 use crate::LiveService;
+use crate::ops::Status;
 use serde::Serialize;
 
 use std::time::SystemTime;
@@ -32,6 +33,14 @@ pub struct ServiceView {
     pub flapping: bool,
     /// Service groups.
     pub groups: Vec<String>,
+    /// The problem is acknowledged.
+    pub acknowledged: bool,
+    /// Notifications are off for it or its host.
+    pub muted: bool,
+    /// Active checks run.
+    pub checks_enabled: bool,
+    /// In a downtime now.
+    pub downtime: bool,
 }
 
 fn names(list: &[Assigned]) -> Vec<String> {
@@ -39,7 +48,12 @@ fn names(list: &[Assigned]) -> Vec<String> {
 }
 
 impl ServiceView {
-    pub fn new(config: &Config, service: &Service, live: Option<&LiveService>) -> Self {
+    pub fn new(
+        config: &Config,
+        service: &Service,
+        live: Option<&LiveService>,
+        status: &Status,
+    ) -> Self {
         ServiceView {
             host: config.host(service).name.clone(),
             service: service.name.clone(),
@@ -54,6 +68,10 @@ impl ServiceView {
             graphs: service.settings.graphs,
             flapping: live.is_some_and(|l| l.state.flapping),
             groups: names(&service.groups),
+            acknowledged: status.acknowledged,
+            muted: status.muted,
+            checks_enabled: status.checks,
+            downtime: !status.downtime.is_empty(),
         }
     }
 }
@@ -74,6 +92,10 @@ pub struct ServiceDetail {
     /// This service gives its host its UP/DOWN state.
     pub host_check: bool,
     pub check: CheckView,
+    /// The downtimes it is in, e.g. `hostgroup linux`.
+    pub downtimes: Vec<String>,
+    /// Acknowledgement, mute and disabled checks set on it or its host.
+    pub flags: Vec<watcher_store::Flag>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -100,10 +122,18 @@ pub struct CheckView {
 }
 
 impl ServiceDetail {
-    pub fn new(config: &Config, service: &Service, live: Option<&LiveService>) -> Self {
+    pub fn new(
+        config: &Config,
+        service: &Service,
+        live: Option<&LiveService>,
+        status: &Status,
+        flags: Vec<watcher_store::Flag>,
+    ) -> Self {
         let settings = &service.settings;
         ServiceDetail {
-            view: ServiceView::new(config, service, live),
+            view: ServiceView::new(config, service, live, status),
+            downtimes: status.downtime.clone(),
+            flags,
             last_hard_change: live.map(|l| time(l.state.last_hard_change)),
             long_output: live.map(|l| l.long_output.clone()).unwrap_or_default(),
             duration_ms: live
@@ -188,11 +218,28 @@ pub struct HostView {
     /// The worst state of the host's services; `None` if all are pending.
     pub worst: Option<State>,
     pub services: Counts,
+    /// The host problem (host check) is acknowledged.
+    pub acknowledged: bool,
+    /// Notifications are off for the host.
+    pub muted: bool,
+    /// Active checks of the host run.
+    pub checks_enabled: bool,
+    /// In a downtime now.
+    pub downtime: bool,
+}
+
+/// Host-level flags, for [`HostView::new`].
+#[derive(Debug, Clone, Default)]
+pub struct HostFlags {
+    pub acknowledged: bool,
+    pub muted: bool,
+    pub checks_enabled: bool,
+    pub downtime: bool,
 }
 
 impl HostView {
     /// `services` are the host's services, including its host check.
-    pub fn new(host: &Host, services: &[&ServiceView]) -> Self {
+    pub fn new(host: &Host, services: &[&ServiceView], flags: &HostFlags) -> Self {
         let mut counts = Counts::default();
         let mut worst: Option<State> = None;
         for s in services {
@@ -233,6 +280,10 @@ impl HostView {
             graph: host.graph_check().map(String::from),
             worst,
             services: counts,
+            acknowledged: flags.acknowledged || check.is_some_and(|c| c.acknowledged),
+            muted: flags.muted,
+            checks_enabled: flags.checks_enabled,
+            downtime: flags.downtime,
         }
     }
 }

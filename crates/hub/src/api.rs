@@ -1,9 +1,9 @@
 //! HTTP API, version 1. All responses are JSON; errors are
 //! `{"error": "..."}` with a matching status code.
 
-use crate::view::{Counts, HostView, ServiceDetail, ServiceView};
+use crate::view::{Counts, HostFlags, HostView, ServiceDetail, ServiceView};
 use crate::{Hub, Update};
-use crate::{auth, config};
+use crate::{auth, config, ops};
 use axum::extract::{Path, Query, State as AxState};
 use axum::http::StatusCode;
 use axum::middleware;
@@ -22,7 +22,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use watcher_core::{RawOutput, State, Termination};
 use watcher_exec::scheduler::Control;
-use watcher_store::{EventFilter, Points, Series, StateEvent, Store};
+use watcher_store::{EventFilter, FlagKind, Points, Series, StateEvent, Store};
 
 type Shared = AxState<Arc<Hub>>;
 
@@ -38,6 +38,12 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/services/{host}/{service}/series", get(series))
         .route("/api/v1/series/{id}/points", get(points))
         .route("/api/v1/events", get(events))
+        .route("/api/v1/actions/{action}", post(ops::action))
+        .route("/api/v1/flags", get(ops::flags))
+        .route("/api/v1/downtimes", get(ops::downtimes))
+        .route("/api/v1/downtimes/{id}", delete(ops::cancel_downtime))
+        .route("/api/v1/process", get(ops::process).put(ops::set_process))
+        .route("/api/v1/scheduler", get(ops::scheduler))
         .route("/api/v1/groups", get(groups))
         .route("/api/v1/stream", get(stream))
         .route("/api/v1/auth/status", get(auth::status))
@@ -143,28 +149,40 @@ async fn openapi() -> impl IntoResponse {
 
 /// All services as views, in config order.
 fn service_views(hub: &Hub) -> Vec<ServiceView> {
-    let live = hub.live.read().unwrap_or_else(|e| e.into_inner());
+    let live = hub.read();
+    let now = SystemTime::now();
     live.config
         .services
         .iter()
-        .map(|s| ServiceView::new(&live.config, s, live.services.get(&s.id)))
+        .map(|s| {
+            let status = live.ops.status(&live.config, s, now);
+            ServiceView::new(&live.config, s, live.services.get(&s.id), &status)
+        })
         .collect()
+}
+
+fn host_flags(hub: &Hub, host: &watcher_config::Host) -> HostFlags {
+    let live = hub.read();
+    let ops = &live.ops;
+    HostFlags {
+        acknowledged: ops.flag(FlagKind::Ack, &host.name).is_some(),
+        muted: ops.flag(FlagKind::Mute, &host.name).is_some(),
+        checks_enabled: ops.checks && ops.flag(FlagKind::NoChecks, &host.name).is_none(),
+        downtime: !ops
+            .downtimes_of(&live.config, host, None, SystemTime::now())
+            .is_empty(),
+    }
 }
 
 async fn hosts(AxState(hub): Shared) -> Json<Vec<HostView>> {
     let views = service_views(&hub);
-    let config = hub
-        .live
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .config
-        .clone();
+    let config = hub.config();
     let hosts = config
         .hosts
         .iter()
         .map(|h| {
             let own: Vec<&ServiceView> = views.iter().filter(|v| v.host == h.name).collect();
-            HostView::new(h, &own)
+            HostView::new(h, &own, &host_flags(&hub, h))
         })
         .collect();
     Json(hosts)
@@ -187,8 +205,17 @@ async fn host(AxState(hub): Shared, Path(name): Path<String>) -> ApiResult<serde
         .filter(|v| v.host == name)
         .collect();
     let refs: Vec<&ServiceView> = views.iter().collect();
+    let flags: Vec<watcher_store::Flag> = hub
+        .read()
+        .ops
+        .flags
+        .values()
+        .filter(|f| f.target == name)
+        .cloned()
+        .collect();
     Ok(Json(json!({
-        "host": HostView::new(host, &refs),
+        "host": HostView::new(host, &refs, &host_flags(&hub, host)),
+        "flags": flags,
         "services": views,
         "origin": host.origin.to_string(),
     })))
@@ -258,18 +285,28 @@ async fn service(
     AxState(hub): Shared,
     Path((host, name)): Path<(String, String)>,
 ) -> ApiResult<ServiceDetail> {
-    let live = hub.live.read().unwrap_or_else(|e| e.into_inner());
     let id = format!("{host}/{name}");
-    let service = live
-        .config
-        .services
-        .iter()
-        .find(|s| s.id == id)
-        .ok_or_else(|| ApiError::NotFound(format!("no service {id:?}")))?;
-    Ok(Json(ServiceDetail::new(
+    detail(&hub, &id).ok_or_else(|| ApiError::NotFound(format!("no service {id:?}")))
+}
+
+fn detail(hub: &Hub, id: &str) -> Option<Json<ServiceDetail>> {
+    let live = hub.read();
+    let service = live.config.service(id)?;
+    let host = &live.config.host(service).name;
+    let status = live.ops.status(&live.config, service, SystemTime::now());
+    let flags = live
+        .ops
+        .flags
+        .values()
+        .filter(|f| f.target == *id || f.target == *host)
+        .cloned()
+        .collect();
+    Some(Json(ServiceDetail::new(
         &live.config,
         service,
-        live.services.get(&id),
+        live.services.get(id),
+        &status,
+        flags,
     )))
 }
 
@@ -322,18 +359,7 @@ async fn submit(
     if let Some(event) = &event {
         hub.record(event);
     }
-    let live = hub.live.read().unwrap_or_else(|e| e.into_inner());
-    let service = live
-        .config
-        .services
-        .iter()
-        .find(|s| s.id == id)
-        .ok_or_else(|| ApiError::NotFound(format!("no service {id:?}")))?;
-    Ok(Json(ServiceDetail::new(
-        &live.config,
-        service,
-        live.services.get(&id),
-    )))
+    detail(&hub, &id).ok_or_else(|| ApiError::NotFound(format!("no service {id:?}")))
 }
 
 async fn series(
@@ -462,7 +488,7 @@ async fn stream(
 }
 
 /// RFC 3339, unix seconds, `now`, or a duration back from `now` (`6h`).
-fn parse_time(s: &str, now: SystemTime) -> Result<SystemTime, ApiError> {
+pub(crate) fn parse_time(s: &str, now: SystemTime) -> Result<SystemTime, ApiError> {
     let s = s.trim();
     if s == "now" {
         return Ok(now);

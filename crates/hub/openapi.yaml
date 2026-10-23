@@ -179,6 +179,163 @@ paths:
               schema: { type: array, items: { $ref: "#/components/schemas/StateEvent" } }
         "503": { $ref: "#/components/responses/Error" }
 
+  /actions/{action}:
+    post:
+      summary: Act on hosts and services
+      description: |
+        Actions: `recheck` (run now, also while checks are off), `ack` / `unack`
+        (acknowledge a problem; ends when OK), `mute` / `unmute` (notifications),
+        `disable-checks` / `enable-checks` (active checks), `downtime` (no
+        notifications from `start` to `end` or for `duration`).
+        Groups are expanded to their hosts or services; a downtime keeps the
+        group, so later members are covered too. A host covers its services;
+        acknowledging a host acknowledges its host check problem.
+        Any logged-in user.
+      parameters:
+        - { name: action, in: path, required: true, schema: { type: string, enum: [recheck, ack, unack, mute, unmute, disable-checks, enable-checks, downtime] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                hosts: { type: array, items: { type: string } }
+                services: { type: array, items: { type: string }, description: "host/service ids" }
+                hostgroups: { type: array, items: { type: string } }
+                servicegroups: { type: array, items: { type: string } }
+                downtimegroups: { type: array, items: { type: string } }
+                comment: { type: string }
+                start: { type: string, description: "Downtime: RFC 3339 or unix seconds; default now" }
+                end: { type: string, description: "Downtime: RFC 3339 or unix seconds" }
+                duration: { type: string, description: "Downtime: instead of end, e.g. 2h" }
+            example: { hosts: [web01], duration: 2h, comment: patching }
+      responses:
+        "200":
+          description: Done
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  action: { type: string }
+                  done: { type: array, items: { type: string } }
+                  skipped: { type: array, items: { type: object, properties: { target: { type: string }, reason: { type: string } } } }
+                  downtimes: { type: array, items: { $ref: "#/components/schemas/Downtime" } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /flags:
+    get:
+      summary: Acknowledgements, muted hosts and services, disabled checks
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Flag" } }
+
+  /downtimes:
+    get:
+      summary: Downtimes that haven't ended, and the current or next window of every downtime group
+      responses:
+        "200":
+          description: Active first, then by start
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: [integer, "null"], description: null for downtime group windows }
+                    kind: { type: string, enum: [host, service, hostgroup, servicegroup, downtimegroup] }
+                    target: { type: string }
+                    start: { $ref: "#/components/schemas/Time" }
+                    end: { $ref: "#/components/schemas/Time" }
+                    author: { type: [string, "null"] }
+                    comment: { type: string }
+                    window: { type: [string, "null"], description: "Schedule entry, e.g. sun 02:00-04:00" }
+                    active: { type: boolean }
+                    hosts: { type: integer }
+                    services: { type: integer }
+
+  /downtimes/{id}:
+    delete:
+      summary: End a downtime
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Cancelled }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /process:
+    get:
+      summary: Process info
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  pid: { type: integer }
+                  instance: { type: [string, "null"] }
+                  started: { $ref: "#/components/schemas/Time" }
+                  uptime_s: { type: integer }
+                  config_loaded: { $ref: "#/components/schemas/Time" }
+                  database: { type: [string, "null"] }
+                  notifications: { type: boolean }
+                  checks: { type: boolean, description: Active checks }
+                  hosts: { type: integer }
+                  services: { type: integer }
+                  scheduler: { type: object, properties: { jobs: { type: integer }, running: { type: integer }, paused: { type: integer }, passive: { type: integer } } }
+                  results: { type: object, description: Check results, properties: { last_1m: { type: integer }, last_5m: { type: integer }, last_15m: { type: integer } } }
+                  acknowledged: { type: integer }
+                  muted: { type: integer }
+                  checks_off: { type: integer }
+                  in_downtime: { type: integer, description: Services }
+    put:
+      summary: Turn notifications or active checks on or off (admins)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notifications: { type: boolean }
+                checks: { type: boolean }
+      responses:
+        "200": { description: The switches now }
+        "403": { $ref: "#/components/responses/Error" }
+
+  /scheduler:
+    get:
+      summary: Scheduling queue, soonest first
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 500 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    host: { type: string }
+                    service: { type: string }
+                    next_check: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+                    last_check: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+                    running: { type: boolean }
+                    passive: { type: boolean }
+                    paused: { type: boolean }
+                    interval_s: { type: number }
+
   /groups:
     get:
       summary: Host and service groups (members are in the host and service views)
@@ -533,6 +690,29 @@ components:
         graphs: { type: boolean, description: Show graphs of its metrics }
         flapping: { type: boolean }
         groups: { type: array, items: { type: string }, description: Service groups }
+        acknowledged: { type: boolean }
+        muted: { type: boolean, description: Notifications off for it or its host }
+        checks_enabled: { type: boolean }
+        downtime: { type: boolean, description: In a downtime now }
+    Flag:
+      type: object
+      properties:
+        kind: { type: string, enum: [ack, mute, no_checks] }
+        target: { type: string, description: "Host or host/service" }
+        author: { type: string }
+        comment: { type: string }
+        created: { $ref: "#/components/schemas/Time" }
+    Downtime:
+      type: object
+      properties:
+        id: { type: integer }
+        kind: { type: string }
+        target: { type: string }
+        starts: { $ref: "#/components/schemas/Time" }
+        ends: { $ref: "#/components/schemas/Time" }
+        author: { type: string }
+        comment: { type: string }
+        created: { $ref: "#/components/schemas/Time" }
     ServiceDetail:
       allOf:
         - $ref: "#/components/schemas/ServiceView"
@@ -558,6 +738,8 @@ components:
                 flap_low: { type: [number, "null"] }
                 flap_high: { type: [number, "null"] }
                 origin: { type: string, description: "file:line of the service or host service" }
+            downtimes: { type: array, items: { type: string }, description: "Downtimes it is in, e.g. hostgroup linux" }
+            flags: { type: array, items: { $ref: "#/components/schemas/Flag" }, description: Set on it or its host }
     Metric:
       type: object
       properties:
@@ -593,6 +775,10 @@ components:
         graph: { type: [string, "null"], description: "Service whose graphs the host page shows: `graph` of the host, or the host check" }
         worst: { oneOf: [{ $ref: "#/components/schemas/State" }, { type: "null" }], description: Worst service state }
         services: { $ref: "#/components/schemas/Counts" }
+        acknowledged: { type: boolean, description: The host problem is acknowledged }
+        muted: { type: boolean }
+        checks_enabled: { type: boolean }
+        downtime: { type: boolean }
     Series:
       type: object
       properties:

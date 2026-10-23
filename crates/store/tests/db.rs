@@ -433,3 +433,74 @@ async fn readers_see_monitoring_data_only() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn flags_downtimes_and_settings() {
+    each_server(|store, _, _| async move {
+        let now = SystemTime::now();
+        let flag = watcher_store::Flag {
+            kind: watcher_store::FlagKind::Ack,
+            target: "web01/http".into(),
+            author: "alice".into(),
+            comment: "on it".into(),
+            created: now,
+        };
+        store.set_flag(&flag).await.unwrap();
+        store
+            .set_flag(&watcher_store::Flag {
+                comment: "still on it".into(),
+                ..flag.clone()
+            })
+            .await
+            .unwrap();
+        let flags = store.flags().await.unwrap();
+        assert_eq!(flags.len(), 1);
+        assert_eq!(flags[0].comment, "still on it");
+        assert!(
+            store
+                .clear_flag(watcher_store::FlagKind::Ack, "web01/http")
+                .await
+                .unwrap()
+        );
+        assert!(store.flags().await.unwrap().is_empty());
+
+        let planned = watcher_store::Downtime {
+            id: 0,
+            kind: "hostgroup".into(),
+            target: "linux".into(),
+            starts: now,
+            ends: now + Duration::from_secs(3600),
+            author: "alice".into(),
+            comment: "patch day".into(),
+            created: now,
+        };
+        let added = store.add_downtime(&planned).await.unwrap();
+        assert!(added.id > 0);
+        let past = watcher_store::Downtime {
+            starts: now - Duration::from_secs(7200),
+            ends: now - Duration::from_secs(3600),
+            ..planned.clone()
+        };
+        store.add_downtime(&past).await.unwrap();
+        let open = store.downtimes().await.unwrap();
+        assert_eq!(open.len(), 1, "ended downtimes are not listed");
+        assert_eq!(
+            (open[0].kind.as_str(), open[0].target.as_str()),
+            ("hostgroup", "linux")
+        );
+        assert!(store.cancel_downtime(added.id).await.unwrap());
+        assert!(!store.cancel_downtime(added.id).await.unwrap());
+        assert!(store.downtimes().await.unwrap().is_empty());
+
+        assert_eq!(store.setting("notifications").await.unwrap(), None);
+        store
+            .set_setting("notifications", &serde_json::json!(false))
+            .await
+            .unwrap();
+        assert_eq!(
+            store.setting("notifications").await.unwrap(),
+            Some(serde_json::json!(false))
+        );
+    })
+    .await;
+}

@@ -288,3 +288,176 @@ async fn serves_the_web_ui_for_app_routes() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(err["error"], "no such endpoint");
 }
+
+#[tokio::test]
+async fn actions_flags_and_downtimes() {
+    let hub = hub();
+    hub.record(&event("web01/http", 2, "HTTP CRITICAL - down"));
+
+    // Acknowledge: only problems.
+    let (status, ack) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/ack",
+        Some(json!({ "services": ["web01/http", "db01/dump"], "comment": "on it" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(ack["done"], json!(["web01/http"]));
+    assert_eq!(ack["skipped"][0]["target"], "db01/dump");
+    let (_, svc) = call(&hub, "GET", "/api/v1/services/web01/http", None).await;
+    assert_eq!(svc["acknowledged"], true);
+    assert_eq!(svc["flags"][0]["comment"], "on it");
+    assert_eq!(
+        hub.suppressed("web01/http", watcher_core::State::Critical)
+            .as_deref(),
+        Some("acknowledged")
+    );
+    // OK again: the acknowledgement ends, the recovery notifies.
+    hub.record(&event("web01/http", 0, "HTTP OK"));
+    let (_, svc) = call(&hub, "GET", "/api/v1/services/web01/http", None).await;
+    assert_eq!(svc["acknowledged"], false);
+    assert_eq!(hub.suppressed("web01/http", watcher_core::State::Ok), None);
+
+    // Mute a host: its services are muted.
+    let (_, mute) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/mute",
+        Some(json!({ "hosts": ["db01"] })),
+    )
+    .await;
+    assert_eq!(mute["done"], json!(["db01"]));
+    let (_, list) = call(&hub, "GET", "/api/v1/services?host=db01", None).await;
+    assert!(
+        list["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["muted"] == true)
+    );
+    assert_eq!(
+        hub.suppressed("db01/dump", watcher_core::State::Critical)
+            .as_deref(),
+        Some("muted")
+    );
+    let (_, unmute) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/unmute",
+        Some(json!({ "hosts": ["db01"] })),
+    )
+    .await;
+    assert_eq!(unmute["done"], json!(["db01"]));
+
+    // A downtime for an hour, by duration.
+    let (status, dt) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/downtime",
+        Some(json!({ "hosts": ["web01"], "duration": "1h", "comment": "patching" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{dt}");
+    let id = dt["downtimes"][0]["id"].as_i64().unwrap();
+    let (_, list) = call(&hub, "GET", "/api/v1/downtimes", None).await;
+    assert_eq!(list[0]["active"], true);
+    assert_eq!(list[0]["services"], 1);
+    let (_, hosts) = call(&hub, "GET", "/api/v1/hosts", None).await;
+    let web = hosts
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["name"] == "web01")
+        .unwrap();
+    assert_eq!(web["downtime"], true);
+    assert!(
+        hub.suppressed("web01/http", watcher_core::State::Critical)
+            .unwrap()
+            .starts_with("in downtime")
+    );
+    let (status, _) = call(&hub, "DELETE", &format!("/api/v1/downtimes/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, list) = call(&hub, "GET", "/api/v1/downtimes", None).await;
+    assert_eq!(list, json!([]));
+
+    // Errors.
+    let (status, err) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/mute",
+        Some(json!({ "hosts": ["nope"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{err}");
+    let (status, _) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/explode",
+        Some(json!({ "hosts": ["web01"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/downtime",
+        Some(json!({ "hosts": ["web01"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn recheck_process_and_schedule() {
+    let hub = hub();
+    // The http check runs hourly; recheck runs it now.
+    let (status, done) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/recheck",
+        Some(json!({ "hosts": ["web01"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["done"], json!(["web01/http"]));
+    let mut ran = false;
+    for _ in 0..50 {
+        let (_, svc) = call(&hub, "GET", "/api/v1/services/web01/http", None).await;
+        if !svc["last_check"].is_null() {
+            ran = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ran, "recheck didn't run the check");
+
+    let (_, process) = call(&hub, "GET", "/api/v1/process", None).await;
+    assert_eq!(process["notifications"], true);
+    assert_eq!(process["scheduler"]["jobs"], 3);
+    assert_eq!(process["scheduler"]["passive"], 2);
+    assert!(process["results"]["last_1m"].as_u64().unwrap() >= 1);
+
+    let (status, _) = call(
+        &hub,
+        "PUT",
+        "/api/v1/process",
+        Some(json!({ "checks": false, "notifications": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        hub.suppressed("web01/http", watcher_core::State::Critical)
+            .as_deref(),
+        Some("notifications are off")
+    );
+    let (_, schedule) = call(&hub, "GET", "/api/v1/scheduler", None).await;
+    let http = schedule
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|j| j["service"] == "http")
+        .unwrap();
+    assert_eq!(http["paused"], true);
+    assert_eq!(http["host"], "web01");
+}

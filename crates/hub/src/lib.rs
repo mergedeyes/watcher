@@ -6,11 +6,12 @@
 mod api;
 pub mod auth;
 pub mod config;
+mod ops;
 mod ui;
 mod view;
 
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, SystemTime};
 use tokio::sync::{broadcast, mpsc};
 use watcher_config::{CheckDirs, Config};
@@ -37,8 +38,11 @@ struct LiveService {
 
 struct Live {
     config: Arc<Config>,
+    /// When `config` was loaded.
+    loaded: SystemTime,
     /// Keyed by `host/service`.
     services: HashMap<String, LiveService>,
+    ops: ops::Ops,
 }
 
 /// A change pushed to stream subscribers, already serialized.
@@ -64,6 +68,8 @@ pub struct Hub {
     config_lock: tokio::sync::Mutex<()>,
     /// `instance_name` from watcher.toml.
     instance: OnceLock<String>,
+    /// Results per minute.
+    results: Mutex<ops::Counter>,
 }
 
 impl Hub {
@@ -91,7 +97,12 @@ impl Hub {
             .collect();
         let (updates, _) = broadcast::channel(1024);
         Arc::new(Hub {
-            live: RwLock::new(Live { config, services }),
+            live: RwLock::new(Live {
+                config,
+                loaded: SystemTime::now(),
+                services,
+                ops: ops::Ops::default(),
+            }),
             updates,
             control,
             store,
@@ -101,7 +112,16 @@ impl Hub {
             config_files: OnceLock::new(),
             config_lock: tokio::sync::Mutex::new(()),
             instance: OnceLock::new(),
+            results: Mutex::new(ops::Counter::default()),
         })
+    }
+
+    fn read(&self) -> RwLockReadGuard<'_, Live> {
+        self.live.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn write(&self) -> RwLockWriteGuard<'_, Live> {
+        self.live.write().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Names this instance in the API (`health`) and so in the web UI.
@@ -132,12 +152,22 @@ impl Hub {
                 config.services.iter().map(|s| s.id.as_str()).collect();
             live.services.retain(|id, _| ids.contains(id.as_str()));
             live.config = config;
+            live.loaded = SystemTime::now();
         }
+        // Host flags may now cover other services.
+        self.sync_scheduler();
         let _ = self.updates.send(Update::Reload);
     }
 
     /// Records a check result from the scheduler.
     pub fn record(&self, event: &Event) {
+        self.results
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .add(SystemTime::now());
+        if event.state.state == watcher_core::State::Ok {
+            self.clear_acks(&event.id);
+        }
         let view = {
             let mut live = self.live.write().unwrap_or_else(|e| e.into_inner());
             live.services.insert(
@@ -151,11 +181,10 @@ impl Hub {
                 },
             );
             let config = live.config.clone();
-            config
-                .services
-                .iter()
-                .find(|s| s.id == event.id)
-                .map(|s| view::ServiceView::new(&config, s, live.services.get(&s.id)))
+            config.service(&event.id).map(|s| {
+                let status = live.ops.status(&config, s, SystemTime::now());
+                view::ServiceView::new(&config, s, live.services.get(&s.id), &status)
+            })
         };
         // Only serialize when someone listens.
         if let Some(view) = view
