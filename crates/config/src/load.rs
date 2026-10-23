@@ -406,6 +406,10 @@ fn add_into(
                 let mut t = Table::new();
                 add_into(&mut t, sources, &path, b, source);
                 into.insert(key.clone(), Value::Table(t));
+                // An empty table is a value too (a `for_each` entry `{}`).
+                if b.is_empty() {
+                    sources.insert(path, source.clone());
+                }
             }
             (_, value) => {
                 sources.retain(|p, _| !p.starts_with(&format!("{path}.")));

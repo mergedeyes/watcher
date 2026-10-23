@@ -392,6 +392,31 @@ name = "h"
 }
 
 #[test]
+fn empty_for_each_entry_from_a_host_group() {
+    let config = ok(&[(
+        "a.toml",
+        r#"
+[service.ping]
+command = "ping -p $path$"
+for_each = "paths"
+vars.path = "/"
+
+[hostgroup.all]
+members = ["*"]
+services = ["ping"]
+vars.paths.root = {}
+
+[[host]]
+name = "h"
+"#,
+    )]);
+    assert_eq!(
+        argv(config.service("h/ping_root").unwrap()),
+        ["ping", "-p", "/"]
+    );
+}
+
+#[test]
 fn same_level_conflicts_are_errors() {
     let (_, diags) = compile(&[(
         "a.toml",
