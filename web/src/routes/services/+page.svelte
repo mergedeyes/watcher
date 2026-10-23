@@ -27,7 +27,7 @@
 			(s) =>
 				(filter === null || (s.state ?? 'pending') === filter) &&
 				(!group || s.groups.includes(group)) &&
-				(!q || `${s.host} ${s.service} ${s.output}`.toLowerCase().includes(q))
+				(!q || `${s.host} ${s.service} ${s.title ?? ''} ${s.output}`.toLowerCase().includes(q))
 		);
 	});
 </script>

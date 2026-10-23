@@ -88,7 +88,7 @@
 		<p class="notice">Loading…</p>
 	{:else}
 		<div class="page-head">
-			<h1>{detail.service} <span class="muted">on <a href={hostHref(host)}>{host}</a></span></h1>
+			<h1 title={detail.title ? detail.service : undefined}>{detail.title ?? detail.service} <span class="muted">on <a href={hostHref(host)}>{host}</a></span></h1>
 			{#if auth.admin}
 				<span class="head-actions">
 					<EditMenu targets={editTargets(detail)} />

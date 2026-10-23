@@ -66,7 +66,7 @@
 					{#each shown as j (`${j.host}/${j.service}`)}
 						<tr oncontextmenu={(e) => menu(e, j)}>
 							<td class="nowrap"><a href={hostHref(j.host)}>{j.host}</a></td>
-							<td class="nowrap"><a href={serviceHref(j.host, j.service)}>{j.service}</a></td>
+							<td class="nowrap"><a href={serviceHref(j.host, j.service)}>{live.title(j.host, j.service)}</a></td>
 							<td class="nowrap">{datetime(j.last_check)}</td>
 							<td class="nowrap">{j.running ? 'running' : next(j.next_check)}</td>
 							<td class="nowrap hide-narrow">{j.passive ? '' : duration(j.interval_s)}</td>

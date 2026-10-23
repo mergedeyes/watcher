@@ -32,7 +32,7 @@
 	let sorted = $derived(
 		sorter.apply(rows, {
 			host: (a, b) => text(a.host, b.host),
-			service: (a, b) => text(a.service, b.service),
+			service: (a, b) => text(a.title ?? a.service, b.title ?? b.service),
 			status: (a, b) => severity(a.state) - severity(b.state),
 			last_check: (a, b) => time(a.last_check) - time(b.last_check),
 			// Longer duration = earlier change.
@@ -77,7 +77,7 @@
 						</td>
 					{/if}
 					<td class="nowrap">
-						<a href={serviceHref(s.host, s.service)}>{s.service}</a>
+						<a href={serviceHref(s.host, s.service)} title={s.title ? s.service : undefined}>{s.title ?? s.service}</a>
 						{#if s.passive}<span class="tag">passive</span>{/if}
 					</td>
 					<td class="nowrap">

@@ -56,7 +56,7 @@ interval = "1m"
 
 | Field | Default | |
 |---|---|---|
-| `title` | | display name |
+| `title` | | display name. [Macros](../guides/checks.md#macros) |
 | `command` | | required unless `passive`. [Macros](../guides/checks.md#macros) |
 | `shell` | `false` | run with `/bin/sh -c` |
 | `passive` | `false` | results via API, no command |
@@ -91,7 +91,7 @@ for_each = "disks"
 |---|---|---|
 | `check` | check of the same name | none with own `command` or `passive` |
 | every [check](#check) field | | overrides the check's |
-| `for_each` | | host var with a table of tables, dotted if nested (`site.tld`): one service `<name>_<key>` per entry |
+| `for_each` | | host var with a table of tables, dotted if nested (`site.tld`): one service `<name>_<key>` per entry; a `title` without macros gets ` (<key>)` |
 | `groups` | | service groups |
 | `enabled` | `true` | |
 

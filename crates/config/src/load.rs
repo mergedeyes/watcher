@@ -1349,6 +1349,24 @@ impl<'a> Compiler<'a> {
             .filter_map(|(k, v)| Some((k.clone(), v.as_text()?.to_string())))
             .collect();
 
+        let lookup = |m: &str| -> Result<String, String> {
+            let value = match macros::parse(m) {
+                Some(Ok(macros::Fixed::HostName)) => Some(host.name.clone()),
+                Some(Ok(macros::Fixed::HostAddress)) => Some(host.address.clone()),
+                Some(Ok(macros::Fixed::HostNode)) => host.node.clone(),
+                Some(Ok(macros::Fixed::HostVar(v))) => var_at(&host.vars, v)
+                    .and_then(Var::as_text)
+                    .map(String::from),
+                Some(Ok(macros::Fixed::ServiceName)) => Some(name.to_string()),
+                Some(Ok(macros::Fixed::ServiceKey)) => {
+                    plan.for_each.as_ref().map(|(_, key, _)| key.clone())
+                }
+                Some(Ok(macros::Fixed::CheckName)) => check_name.clone(),
+                Some(Err(var)) => vars.get(var).cloned(),
+                None => return Err(format!("unknown macro ${m}$")),
+            };
+            value.ok_or_else(|| format!("${m}$ is not set"))
+        };
         let command = match (&def.command, settings.passive) {
             (None, false) => {
                 let msg = match &check_name {
@@ -1370,35 +1388,35 @@ impl<'a> Compiler<'a> {
                 );
                 return None;
             }
-            (Some(text), false) => {
-                let lookup = |m: &str| -> Result<String, String> {
-                    let value = match macros::parse(m) {
-                        Some(Ok(macros::Fixed::HostName)) => Some(host.name.clone()),
-                        Some(Ok(macros::Fixed::HostAddress)) => Some(host.address.clone()),
-                        Some(Ok(macros::Fixed::HostNode)) => host.node.clone(),
-                        Some(Ok(macros::Fixed::HostVar(v))) => var_at(&host.vars, v)
-                            .and_then(Var::as_text)
-                            .map(String::from),
-                        Some(Ok(macros::Fixed::ServiceName)) => Some(name.to_string()),
-                        Some(Ok(macros::Fixed::ServiceKey)) => {
-                            plan.for_each.as_ref().map(|(_, key, _)| key.clone())
-                        }
-                        Some(Ok(macros::Fixed::CheckName)) => check_name.clone(),
-                        Some(Err(var)) => vars.get(var).cloned(),
-                        None => return Err(format!("unknown macro ${m}$")),
-                    };
-                    value.ok_or_else(|| format!("${m}$ is not set"))
-                };
-                match macros::expand(text, settings.shell, lookup) {
-                    Ok(cmd) => Some(cmd),
-                    Err(msg) => {
-                        self.sink.error(Some(&origin), format!("{what}: {msg}"));
-                        return None;
-                    }
+            (Some(text), false) => match macros::expand(text, settings.shell, lookup) {
+                Ok(cmd) => Some(cmd),
+                Err(msg) => {
+                    self.sink.error(Some(&origin), format!("{what}: {msg}"));
+                    return None;
                 }
-            }
+            },
             (None, true) => None,
         };
+
+        // Title: the service's, else its check's. Macros expand as in
+        // commands; a `for_each` service without any gets its entry key.
+        let check_title = check_name
+            .as_ref()
+            .and_then(|c| self.checks.get(c))
+            .and_then(|(t, _)| t.get("title")?.as_str().map(String::from));
+        let title = meta_def.title.clone().or(check_title).map(|t| {
+            if macros::names(&t).is_empty() {
+                return match &plan.for_each {
+                    Some((_, key, _)) => format!("{t} ({key})"),
+                    None => t,
+                };
+            }
+            macros::expand_text(&t, lookup).unwrap_or_else(|msg| {
+                self.sink
+                    .warning(Some(&origin), format!("{what}: title: {msg}"));
+                t
+            })
+        });
 
         // Service groups: those listing its service object or listed by it,
         // and those its host service lists.
@@ -1442,6 +1460,7 @@ impl<'a> Compiler<'a> {
         Some(Service {
             id: format!("{}/{name}", host.name),
             name: name.to_string(),
+            title,
             host: host_idx,
             check: check_name,
             object: plan.object.clone(),

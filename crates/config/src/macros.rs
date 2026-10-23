@@ -35,6 +35,14 @@ pub fn expand(
     }
 }
 
+/// Expands the macros in plain text, e.g. a title.
+pub fn expand_text(
+    text: &str,
+    lookup: impl Fn(&str) -> Result<String, String>,
+) -> Result<String, String> {
+    substitute(text, lookup)
+}
+
 /// A fixed macro (not a var), if `name` is one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fixed<'a> {

@@ -7,6 +7,8 @@ export type StateType = 'soft' | 'hard';
 export interface ServiceView {
 	host: string;
 	service: string;
+	/** For display; null shows the name. */
+	title: string | null;
 	/** null while pending (no result yet) */
 	state: State | null;
 	state_type: StateType | null;

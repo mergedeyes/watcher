@@ -2,6 +2,7 @@
 <script lang="ts">
 	import { hostHref, serviceHref, type StateEvent } from './api.ts';
 	import { datetime } from './format.ts';
+	import { live } from './live.svelte.ts';
 	import Status from './Status.svelte';
 
 	interface Props {
@@ -49,7 +50,7 @@
 					{#if showHost}<td class="nowrap"><a href={hostHref(e.host)}>{e.host}</a></td>{/if}
 					{#if showService}
 						<td class="nowrap">
-							{#if e.kind === 'host'}<span class="muted">{e.service}</span>{:else if e.service}<a href={serviceHref(e.host, e.service)}>{e.service}</a>{/if}
+							{#if e.kind === 'host'}<span class="muted">{e.service}</span>{:else if e.service}<a href={serviceHref(e.host, e.service)}>{live.title(e.host, e.service)}</a>{/if}
 						</td>
 					{/if}
 					<td class="nowrap">

@@ -440,6 +440,38 @@ services = ["ping"]
 }
 
 #[test]
+fn titles_with_macros_and_for_each_keys() {
+    let config = ok(&[(
+        "a.toml",
+        r#"
+[check.cert]
+title = "CERT"
+command = "check_http -H $website$ -C 30"
+
+[service.cert]
+for_each = "sites"
+
+[service.web]
+title = "WEBSITE ($website$)"
+check = "cert"
+for_each = "sites"
+
+[service.ping]
+command = "ping $host.address$"
+
+[[host]]
+name = "w1"
+services = ["cert", "web", "ping"]
+vars.sites.eu = { website = "klarsocial.eu" }
+"#,
+    )]);
+    let title = |id: &str| config.service(id).unwrap().title.as_deref();
+    assert_eq!(title("w1/cert_eu"), Some("CERT (eu)"));
+    assert_eq!(title("w1/web_eu"), Some("WEBSITE (klarsocial.eu)"));
+    assert_eq!(title("w1/ping"), None);
+}
+
+#[test]
 fn empty_for_each_entry_from_a_host_group() {
     let config = ok(&[(
         "a.toml",

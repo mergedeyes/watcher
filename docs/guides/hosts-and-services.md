@@ -184,6 +184,18 @@ Override one: `[host.service.disk_root]`. All: `[host.service.disk]`.
 
 Nested: dotted path. Entry key: `$service.key$`. Entry `{}`: no vars.
 
+Title: `title = "DISK"` shows "DISK (data)". With macros, as written:
+
+```toml
+[service.cert]
+title = "CERT ($website$)"
+for_each = "sites"
+```
+
+```
+CERT (klarsocial.eu)
+```
+
 ```toml
 [check.https]
 command = "check_http -S -H $host.vars.site.name$.$service.key$"
