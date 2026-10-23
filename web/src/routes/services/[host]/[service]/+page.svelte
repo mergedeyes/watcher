@@ -6,6 +6,8 @@
 	import { editHref } from '#lib/config.svelte.ts';
 	import ConfigTree from '#lib/ConfigTree.svelte';
 	import EditMenu, { type EditTarget } from '#lib/EditMenu.svelte';
+	import Commands from '#lib/Commands.svelte';
+	import Flags from '#lib/Flags.svelte';
 	import Graphs from '#lib/Graphs.svelte';
 	import { datetime, duration, formatThreshold, formatValue, seriesName, since } from '#lib/format.ts';
 	import Status from '#lib/Status.svelte';
@@ -35,11 +37,12 @@
 		return out;
 	}
 
-	// Refetch whenever a new result for this service arrives.
+	// Refetch whenever a new result for this service arrives, and after
+	// commands (the server then sends a reload).
 	let lastCheck = $derived(live.find(host, name)?.last_check ?? null);
 
 	$effect(() => {
-		const [h, s, _] = [host, name, lastCheck];
+		const [h, s, _, __] = [host, name, lastCheck, live.reloads];
 		api.service(h, s).then(
 			(d) => {
 				detail = d;
@@ -103,6 +106,7 @@
 						<td>
 							<Status state={detail.state} />
 							{#if detail.flapping}<span class="tag flap">FLAPPING</span>{/if}
+							<Flags v={detail} />
 							{#if detail.last_change}<span class="muted">&nbsp;for {since(detail.last_change, live.now)}</span>{/if}
 						</td>
 					</tr>
@@ -154,6 +158,8 @@
 				</tbody>
 			</table>
 		</section>
+
+		<Commands target={{ service: detail }} flags={detail.flags} downtimes={detail.downtimes} />
 
 		{#if detail.metrics.length > 0}
 			<section class="panel">

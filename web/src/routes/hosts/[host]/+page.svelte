@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { api, ApiError, HISTORY_DELAY, serviceHref, type StateEvent } from '#lib/api.ts';
+	import { api, ApiError, HISTORY_DELAY, serviceHref, type Flag, type StateEvent } from '#lib/api.ts';
 	import AlertTable from '#lib/AlertTable.svelte';
 	import { auth } from '#lib/auth.svelte.ts';
 	import { editHref } from '#lib/config.svelte.ts';
+	import Commands from '#lib/Commands.svelte';
+	import Flags from '#lib/Flags.svelte';
 	import ConfigTree from '#lib/ConfigTree.svelte';
 	import EditMenu from '#lib/EditMenu.svelte';
 	import Graphs from '#lib/Graphs.svelte';
@@ -32,6 +34,7 @@
 	}
 
 	let origin = $state<string | null>(null);
+	let flags = $state<Flag[]>([]);
 	let missing = $state(false);
 	let events = $state<StateEvent[]>([]);
 	/** Set when the hub has no database: there is no history to show. */
@@ -53,10 +56,13 @@
 	});
 
 	$effect(() => {
-		const current = name;
+		const [current, _] = [name, live.reloads];
 		missing = false;
 		api.host(current).then(
-			(r) => (origin = r.origin),
+			(r) => {
+				origin = r.origin;
+				flags = r.flags;
+			},
 			(e) => {
 				if (e instanceof ApiError && e.status === 404) missing = true;
 			}
@@ -95,6 +101,7 @@
 						<td>
 							<Status state={host.state} />
 							{#if host.flapping}<span class="tag flap">FLAPPING</span>{/if}
+							<Flags v={host} />
 							{#if host.last_change}<span class="muted">&nbsp;for {since(host.last_change, live.now)}</span>{/if}
 						</td>
 					</tr>
@@ -135,6 +142,8 @@
 				</tbody>
 			</table>
 		</section>
+
+		<Commands target={{ host }} {flags} />
 
 		<section class="panel">
 			<div class="panel-title">Services <span class="muted">{services.length}</span></div>

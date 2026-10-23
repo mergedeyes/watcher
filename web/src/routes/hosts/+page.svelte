@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { actions } from '#lib/actions.svelte.ts';
 	import { hostHref, type HostView } from '#lib/api.ts';
+	import Flags from '#lib/Flags.svelte';
 	import { datetime, hostSeverity, since } from '#lib/format.ts';
 	import { live } from '#lib/live.svelte.ts';
 	import { Sorter } from '#lib/sort.svelte.ts';
@@ -82,7 +84,7 @@
 					</thead>
 					<tbody>
 						{#each shown as h (h.name)}
-							<tr data-host={h.state}>
+							<tr data-host={h.state} oncontextmenu={(e) => actions.open(e, { host: h })}>
 								<td class="nowrap">
 									<a href={hostHref(h.name)}>{h.name}</a>
 									{#if !h.enabled}<span class="tag">disabled</span>{/if}
@@ -90,6 +92,7 @@
 								<td class="nowrap">
 									<Status state={h.state} />
 									{#if h.flapping}<span class="tag flap">FLAPPING</span>{/if}
+									<Flags v={h} />
 								</td>
 								<td class="nowrap hide-narrow mono">{h.address}</td>
 								<td class="nowrap hide-narrow">{datetime(h.last_check)}</td>

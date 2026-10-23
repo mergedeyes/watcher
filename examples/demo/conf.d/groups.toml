@@ -42,3 +42,9 @@ services = ["qsysopr_messages", "asp_usage"]
 [servicegroup.webshop]
 title = "Webshop"
 services = ["http", "replication"]
+
+# No notifications for Linux servers on Sunday nights.
+[downtimegroup.patchday]
+title = "Patch Day"
+hostgroups = ["linux"]
+schedule = [{ days = ["sun"], from = "02:00", to = "04:00" }]

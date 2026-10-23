@@ -4,7 +4,9 @@
 -->
 <script lang="ts">
 	import { untrack } from 'svelte';
+	import { actions } from './actions.svelte.ts';
 	import { hostHref, serviceHref, type ServiceView } from './api.ts';
+	import Flags from './Flags.svelte';
 	import { datetime, severity, since } from './format.ts';
 	import { live } from './live.svelte.ts';
 	import { Sorter } from './sort.svelte.ts';
@@ -66,7 +68,7 @@
 		</thead>
 		<tbody>
 			{#each sorted as s, i (`${s.host}/${s.service}`)}
-				<tr data-state={s.state}>
+				<tr data-state={s.state} oncontextmenu={(e) => actions.open(e, { service: s })}>
 					{#if showHost}
 						<td class="nowrap">
 							{#if sorter.key !== 'host' || i === 0 || sorted[i - 1]?.host !== s.host}
@@ -81,6 +83,7 @@
 					<td class="nowrap">
 						<Status state={s.state} />
 						{#if s.flapping}<span class="tag flap" title="State changes too often; notifications held back">FLAPPING</span>{/if}
+						<Flags v={s} />
 					</td>
 					<td class="nowrap hide-narrow">{datetime(s.last_check)}</td>
 					<td class="nowrap hide-narrow">{since(s.last_change, live.now)}</td>

@@ -147,6 +147,7 @@ export function timestamp(iso: string | null): string {
 }
 
 export function duration(secs: number): string {
+	if (secs === 0) return '0s';
 	if (secs % 86400 === 0) return `${secs / 86400}d`;
 	if (secs % 3600 === 0) return `${secs / 3600}h`;
 	if (secs % 60 === 0) return `${secs / 60}m`;

@@ -10,7 +10,10 @@
 	import ConfigTree from '#lib/ConfigTree.svelte';
 	import { live } from '#lib/live.svelte.ts';
 	import { Suggest } from '#lib/suggest.ts';
-	import { KINDS, SCHEMAS, SELECTOR_FIELDS, expandNames, fromForm, otherKeys, toForm, type Field, type FormValues, type ServiceRow } from '#lib/schema.ts';
+	import { KINDS, SCHEMAS, SELECTOR_FIELDS, expandNames, fromForm, otherKeys, toForm, type Field, type FormValues, type ServiceRow, type WindowRow } from '#lib/schema.ts';
+
+	const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+	const TIMES = ['00:00', '01:00', '02:00', '03:00', '04:00', '05:00', '06:00', '12:00', '18:00', '20:00', '22:00', '23:00', '24:00'];
 
 	let kind = $derived(KINDS.find((k) => k.path === page.params.kind));
 	let name = $derived(page.url.searchParams.get('name'));
@@ -259,6 +262,23 @@
 													{/each}
 												{/if}
 											</div>
+										{:else if f.type === 'windows'}
+											<div class="rows">
+												{#if rows<WindowRow>(f.key).length > 0}
+													<div class="row three head"><span>Days</span><span>From</span><span>To</span><span></span></div>
+												{/if}
+												{#each rows<WindowRow>(f.key) as row, i (i)}
+													<div class="row three">
+														<Combobox multi placeholder="daily" bind:value={row[0]} label="Days" options={WEEKDAYS} />
+														<Combobox mono placeholder="02:00" bind:value={row[1]} label="From" options={TIMES} />
+														<Combobox mono placeholder="04:00" bind:value={row[2]} label="To" options={TIMES} />
+														<button type="button" class="btn" aria-label="Remove"
+															onclick={() => (values![f.key] = rows<WindowRow>(f.key).filter((_, j) => j !== i))}>×</button>
+													</div>
+												{/each}
+												<button type="button" class="btn small"
+													onclick={() => (values![f.key] = [...rows<WindowRow>(f.key), ['', '', '']])}>Add window</button>
+											</div>
 										{:else if f.type === 'services'}
 											<div class="rows">
 												{#if rows<ServiceRow>(f.key).length > 0}
@@ -436,6 +456,12 @@
 		outline: 2px solid var(--link);
 		outline-offset: 3px;
 		border-radius: 2px;
+	}
+
+	.row.head {
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--muted);
 	}
 
 	.row.svc.head {

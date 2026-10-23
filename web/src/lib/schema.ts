@@ -15,7 +15,8 @@ export type FieldType =
 	| 'vars'
 	| 'thresholds'
 	| 'selector'
-	| 'services';
+	| 'services'
+	| 'windows';
 
 export interface Field {
 	key: string;
@@ -152,6 +153,28 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 			]
 		}
 	],
+	downtimegroup: [
+		{
+			title: 'Downtime Group',
+			fields: [
+				NAME,
+				TITLE,
+				{ key: 'members', label: 'Hosts', type: 'list', suggest: 'host', help: 'host names, * and ? match' },
+				{ key: 'hostgroups', label: 'Host Groups', type: 'list', suggest: 'hostgroup', help: 'their hosts, comma-separated' }
+			]
+		},
+		{
+			title: 'Schedule',
+			fields: [
+				{
+					key: 'schedule',
+					label: 'Windows',
+					type: 'windows',
+					help: 'local time; days empty: daily; to before from: next day; dates (2026-11-01 22:00) for once'
+				}
+			]
+		}
+	],
 	contactgroup: [
 		{
 			title: 'Contact Group',
@@ -190,6 +213,7 @@ export const KINDS: { kind: Kind; path: string; label: string; one: string; file
 	{ kind: 'servicegroup', path: 'servicegroups', label: 'Service Groups', one: 'Service Group', file: 'ui/groups.toml' },
 	{ kind: 'contact', path: 'contacts', label: 'Contacts', one: 'Contact', file: 'ui/contacts.toml' },
 	{ kind: 'contactgroup', path: 'contactgroups', label: 'Contact Groups', one: 'Contact Group', file: 'ui/groups.toml' },
+	{ kind: 'downtimegroup', path: 'downtimegroups', label: 'Downtime Groups', one: 'Downtime Group', file: 'ui/groups.toml' },
 	{ kind: 'notify', path: 'notifications', label: 'Notifications', one: 'Rule', file: 'ui/notify.toml' }
 ];
 
@@ -215,7 +239,10 @@ export const SELECTOR_FIELDS: Record<'host' | 'service', [string, string, string
 /** A host service row: name, check, groups, enabled (`yes`/`no`/``), original name. */
 export type ServiceRow = [string, string, string, string, string];
 
-/** Form state: strings for inputs, rows for vars, thresholds and services, a map for selectors. */
+/** A schedule window row: days (comma-separated), from, to. */
+export type WindowRow = [string, string, string];
+
+/** Form state: strings for inputs, rows for vars, thresholds, services and windows, a map for selectors. */
 export type FormValue =
 	| string
 	| boolean
@@ -223,6 +250,7 @@ export type FormValue =
 	| [string, string][]
 	| [string, string, string][]
 	| ServiceRow[]
+	| WindowRow[]
 	| Record<string, string>;
 export type FormValues = Record<string, FormValue>;
 
@@ -317,6 +345,12 @@ export function toForm(kind: Kind, raw: Record<string, unknown>): FormValues {
 				break;
 			case 'selector':
 				values[f.key] = selectorToForm(v, f.selects ?? 'host');
+				break;
+			case 'windows':
+				values[f.key] = (Array.isArray(v) ? v : []).map((w) => {
+					const t = isTable(w) ? w : {};
+					return [list(t.days).join(', '), str(t.from), str(t.to)] as WindowRow;
+				});
 				break;
 			case 'services':
 				values[f.key] = Object.entries(isTable(v) ? v : {}).map(([name, e]) => {
@@ -413,6 +447,20 @@ export function fromForm(kind: Kind, raw: Record<string, unknown>, values: FormV
 			case 'services':
 				next = servicesFromForm(v as ServiceRow[], raw[f.key]);
 				break;
+			case 'windows': {
+				const rows = (v as WindowRow[]).filter(([, from, to]) => from.trim() || to.trim());
+				next =
+					rows.length === 0
+						? undefined
+						: rows.map(([days, from, to]) => {
+								const w: Record<string, unknown> = {};
+								if (items(days).length) w.days = items(days);
+								w.from = from.trim();
+								w.to = to.trim();
+								return w;
+							});
+				break;
+			}
 			default: {
 				const text = String(v ?? '');
 				next = text.trim() === '' ? undefined : f.type === 'mono' ? text : text.trim();

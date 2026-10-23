@@ -34,6 +34,18 @@
 			.join(', ');
 	}
 
+	/** Schedule windows in one line: `sun 02:00-04:00; daily 12:00-12:30`. */
+	function windows(v: unknown): string {
+		if (!Array.isArray(v)) return '';
+		return v
+			.map((w) => {
+				const t = (w ?? {}) as Record<string, unknown>;
+				const days = Array.isArray(t.days) && t.days.length ? t.days.join(', ') : String(t.from ?? '').includes('-') ? '' : 'daily';
+				return `${days} ${t.from ?? ''}-${t.to ?? ''}`.trim();
+			})
+			.join('; ');
+	}
+
 	/** A selector in one line: `all`, a list, or `groups: prod; node: dc1`. */
 	function selector(v: unknown): string {
 		if (v === undefined || v === null) return '';
@@ -88,6 +100,10 @@
 							{:else if kind.kind === 'contactgroup'}
 								<th>Title</th>
 								<th>Members</th>
+							{:else if kind.kind === 'downtimegroup'}
+								<th>Title</th>
+								<th>Hosts</th>
+								<th>Schedule</th>
 							{:else if kind.kind === 'contact'}
 								<th>Email</th>
 								<th class="hide-narrow">Webhook</th>
@@ -129,6 +145,10 @@
 								{:else if kind.kind === 'contactgroup'}
 									<td>{list(f.title)}</td>
 									<td class="mono">{list(f.members)}</td>
+								{:else if kind.kind === 'downtimegroup'}
+									<td>{list(f.title)}</td>
+									<td class="mono">{[list(f.members), list(f.hostgroups)].filter(Boolean).join(' · ')}</td>
+									<td class="mono">{windows(f.schedule)}</td>
 								{:else if kind.kind === 'contact'}
 									<td>{list(f.email)}</td>
 									<td class="mono hide-narrow info">{list(f.webhook)}</td>
