@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -72,11 +73,12 @@ pub async fn run(args: Args) -> Result<ExitCode> {
     let exec = watcher_exec::run(&command, &opts).await;
     let result = evaluate(&exec.output, args.format, &thresholds);
 
-    if args.json {
-        print_json(&result, &exec)?;
+    let out = &mut io::stdout().lock();
+    crate::ignore_broken_pipe(if args.json {
+        print_json(out, &result, &exec)
     } else {
-        print_human(&result, &exec);
-    }
+        print_human(out, &result, &exec)
+    })?;
     Ok(ExitCode::from(result.state.exit_code() as u8))
 }
 
@@ -101,7 +103,7 @@ fn thresholds(warn: &[String], crit: &[String]) -> Result<BTreeMap<String, Thres
     Ok(specs)
 }
 
-fn print_json(result: &CheckResult, exec: &Execution) -> Result<()> {
+fn print_json(out: &mut impl Write, result: &CheckResult, exec: &Execution) -> io::Result<()> {
     #[derive(Serialize)]
     struct Output<'a> {
         #[serde(flatten)]
@@ -110,19 +112,18 @@ fn print_json(result: &CheckResult, exec: &Execution) -> Result<()> {
         #[serde(skip_serializing_if = "Option::is_none")]
         stderr: Option<&'a str>,
     }
-    let out = Output {
+    let output = Output {
         result,
         duration_ms: exec.duration.as_micros() as f64 / 1000.0,
         stderr: Some(exec.output.stderr.trim_end()).filter(|s| !s.is_empty()),
     };
-    println!("{}", serde_json::to_string_pretty(&out)?);
-    Ok(())
+    writeln!(out, "{}", serde_json::to_string_pretty(&output)?)
 }
 
-fn print_human(result: &CheckResult, exec: &Execution) {
-    println!("{} - {}", result.state, result.message);
+fn print_human(out: &mut impl Write, result: &CheckResult, exec: &Execution) -> io::Result<()> {
+    writeln!(out, "{} - {}", result.state, result.message)?;
     for line in result.long_output.lines() {
-        println!("  {line}");
+        writeln!(out, "  {line}")?;
     }
 
     if !result.metrics.is_empty() {
@@ -150,22 +151,22 @@ fn print_human(result: &CheckResult, exec: &Execution) {
                 *w = (*w).max(cell.chars().count());
             }
         }
-        println!();
+        writeln!(out)?;
         for row in std::iter::once(&header).chain(&rows) {
             let line: Vec<String> = row
                 .iter()
                 .zip(widths)
                 .map(|(cell, w)| format!("{cell:<w$}"))
                 .collect();
-            println!("  {}", line.join("  ").trim_end());
+            writeln!(out, "  {}", line.join("  ").trim_end())?;
         }
     }
 
     let stderr = exec.output.stderr.trim_end();
     if !stderr.is_empty() {
-        println!("\nstderr:");
+        writeln!(out, "\nstderr:")?;
         for line in stderr.lines() {
-            println!("  {line}");
+            writeln!(out, "  {line}")?;
         }
     }
 
@@ -184,5 +185,5 @@ fn print_human(result: &CheckResult, exec: &Execution) {
     if exec.stdout_truncated || exec.stderr_truncated {
         facts.push("output truncated".into());
     }
-    println!("\n{}", facts.join(" · "));
+    writeln!(out, "\n{}", facts.join(" · "))
 }

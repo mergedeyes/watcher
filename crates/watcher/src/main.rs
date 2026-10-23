@@ -80,6 +80,15 @@ enum Cmd {
     },
 }
 
+/// Output to a reader that stopped early (`watcher ... | head`) is not an
+/// error.
+pub(crate) fn ignore_broken_pipe(result: std::io::Result<()>) -> std::io::Result<()> {
+    match result {
+        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        other => other,
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let cli = Cli::parse();

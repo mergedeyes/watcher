@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use watcher_config::{Bootstrap, CheckDirs, Config, Diagnostic, load_dir};
@@ -60,7 +61,8 @@ fn explain(args: ExplainArgs) -> Result<ExitCode> {
     let builder = watcher_config::tree::Builder::new(&config, Some(&conf_dir));
     match builder.tree(kind, name) {
         Some(tree) => {
-            print!("{}", watcher_config::tree::render(&tree));
+            let out = &mut io::stdout().lock();
+            crate::ignore_broken_pipe(write!(out, "{}", watcher_config::tree::render(&tree)))?;
             Ok(ExitCode::SUCCESS)
         }
         None => bail!("no {kind} {name:?}"),
@@ -76,10 +78,15 @@ fn check(args: CheckArgs) -> Result<ExitCode> {
                 .warnings
                 .extend(check_dirs.missing_commands(&loaded.config));
             print_diagnostics(&loaded.warnings);
-            summary(&loaded.config, loaded.warnings.len());
-            if args.services {
-                print_services(&loaded.config);
-            }
+            let out = &mut io::stdout().lock();
+            crate::ignore_broken_pipe(
+                summary(out, &loaded.config, loaded.warnings.len()).and_then(|()| {
+                    if args.services {
+                        print_services(out, &loaded.config)?;
+                    }
+                    Ok(())
+                }),
+            )?;
             Ok(ExitCode::SUCCESS)
         }
         Err(diagnostics) => {
@@ -133,7 +140,7 @@ fn print_diagnostics(diagnostics: &[Diagnostic]) {
     }
 }
 
-fn summary(config: &Config, warnings: usize) {
+fn summary(out: &mut impl Write, config: &Config, warnings: usize) -> io::Result<()> {
     let mut parts = vec![
         plural(config.files.len(), "file"),
         plural(config.hosts.len(), "host"),
@@ -147,17 +154,17 @@ fn summary(config: &Config, warnings: usize) {
     if warnings > 0 {
         parts.push(plural(warnings, "warning"));
     }
-    println!("OK: {}", parts.join(", "));
+    writeln!(out, "OK: {}", parts.join(", "))
 }
 
-fn print_services(config: &Config) {
+fn print_services(out: &mut impl Write, config: &Config) -> io::Result<()> {
     let width = config
         .services
         .iter()
         .map(|s| s.id.len())
         .max()
         .unwrap_or(0);
-    println!();
+    writeln!(out)?;
     for service in &config.services {
         let settings = &service.settings;
         let (timing, command) = match &service.command {
@@ -172,8 +179,9 @@ fn print_services(config: &Config) {
                 (timing, "(passive)".to_string())
             }
         };
-        println!("  {:<width$}  {timing:<11}  {command}", service.id);
+        writeln!(out, "  {:<width$}  {timing:<11}  {command}", service.id)?;
     }
+    Ok(())
 }
 
 fn plural(n: usize, word: &str) -> String {

@@ -3,6 +3,8 @@
 Infrastructure monitoring: hosts, services, metrics, alerts. Nagios plugins
 and any script that prints a result work as checks.
 
+Documentation: [docs/](docs/README.md).
+
 ## Requirements
 
 - Rust 1.94 or later, Node.js (LTS) to build the web UI
