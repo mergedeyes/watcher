@@ -412,7 +412,7 @@
 	}
 
 	.row.svc {
-		grid-template-columns: 1.2fr 1fr 1fr 1.2fr 70px auto;
+		grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr) 70px auto;
 	}
 
 	.row.svc > * {

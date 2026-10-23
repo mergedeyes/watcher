@@ -142,7 +142,11 @@ code,
 	background: var(--panel);
 	border: 1px solid var(--line);
 	border-radius: var(--radius);
-	/* Wide tables scroll inside the panel, not the page. */
+}
+
+/* Wide tables scroll inside the panel, not the page. Other panels grow
+   with their content, and dropdowns may reach past their border. */
+.panel:has(> table) {
 	overflow-x: auto;
 }
 
