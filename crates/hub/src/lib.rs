@@ -253,6 +253,7 @@ pub fn jobs(config: &Config, check_dirs: &CheckDirs) -> Vec<Job> {
                 interval: settings.interval,
                 retry_interval: settings.retry_interval,
                 max_attempts: settings.max_attempts,
+                host_check: config.is_host_check(service),
                 freshness: settings.freshness,
                 flap: settings.flap,
             }

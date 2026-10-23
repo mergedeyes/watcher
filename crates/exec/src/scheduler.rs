@@ -40,6 +40,8 @@ pub struct Job {
     pub interval: Duration,
     pub retry_interval: Duration,
     pub max_attempts: u32,
+    /// Gives its host its UP/DOWN state: WARNING is UP and no failed attempt.
+    pub host_check: bool,
     /// Passive jobs: how long a result stays valid before the job turns
     /// UNKNOWN.
     pub freshness: Option<Duration>,
@@ -277,11 +279,12 @@ fn apply(slot: &mut Slot, id: String, result: CheckResult, duration: Duration) -
     let max_attempts = slot.job.max_attempts;
     let (state, change) = match slot.state.as_mut() {
         Some(state) => {
-            let change = state.apply(result.state, max_attempts, now);
+            let change = state.apply(result.state, max_attempts, slot.job.host_check, now);
             (state, change)
         }
         None => {
-            let (state, change) = ServiceState::first(result.state, max_attempts, now);
+            let (state, change) =
+                ServiceState::first(result.state, max_attempts, slot.job.host_check, now);
             (slot.state.insert(state), Some(change))
         }
     };
@@ -437,6 +440,7 @@ mod tests {
             interval: Duration::from_millis(interval_ms),
             retry_interval: Duration::from_millis(interval_ms / 4),
             max_attempts: 3,
+            host_check: false,
             freshness: None,
             flap: Some(FlapThresholds::DEFAULT),
         }
@@ -494,8 +498,8 @@ mod tests {
     async fn continues_from_initial_state() {
         let (_reload_tx, reload_rx) = mpsc::channel(1);
         let (tx, mut rx) = mpsc::channel(16);
-        let (mut restored, _) = ServiceState::first(State::Critical, 3, SystemTime::now());
-        restored.apply(State::Critical, 3, SystemTime::now());
+        let (mut restored, _) = ServiceState::first(State::Critical, 3, false, SystemTime::now());
+        restored.apply(State::Critical, 3, false, SystemTime::now());
         let initial = HashMap::from([("h/fail".to_string(), restored)]);
         tokio::spawn(schedule(
             vec![job("h/fail", "exit 2", 400)],

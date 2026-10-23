@@ -105,7 +105,7 @@ fn event(id: &str, exit: i32, stdout: &str) -> Event {
         stderr: String::new(),
     };
     let result = evaluate(&raw, Format::Auto, &Default::default());
-    let (state, change) = ServiceState::first(result.state, 3, SystemTime::now());
+    let (state, change) = ServiceState::first(result.state, 3, false, SystemTime::now());
     Event {
         id: id.into(),
         result,

@@ -214,6 +214,7 @@ web01/https_eu  every 1m     check_http -S -H klarsocial.eu
 | CRITICAL, UNKNOWN | DOWN |
 
 - No host check: always UP.
+- Retries (`max_attempts`) count only CRITICAL and UNKNOWN; WARNING ends them.
 - Host DOWN (HARD): its other services don't notify.
 - The host check notifies as the host: "web01 is DOWN".
 
