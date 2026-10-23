@@ -101,7 +101,7 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each rows as o (`${o.path}:${o.line}`)}
+						{#each rows as o, i (i)}
 							{@const f = o.fields}
 							<tr class:disabled={f.enabled === false}>
 								<td class="nowrap">
@@ -111,7 +111,7 @@
 									<td class="mono">{f.address ?? ''}</td>
 									<td>{list(f.roles)}</td>
 									<td class="hide-narrow">
-										{#each Array.isArray(f.tags) ? f.tags : [] as tag (tag)}<span class="tag">{tag}</span>{' '}{/each}
+										{#each Array.isArray(f.tags) ? f.tags : [] as tag, i (i)}<span class="tag">{tag}</span>{' '}{/each}
 									</td>
 								{:else if kind.kind === 'role'}
 									<td class="mono">{services(f.service)}</td>

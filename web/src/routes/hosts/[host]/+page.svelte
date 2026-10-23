@@ -120,11 +120,11 @@
 					<tr><th>Address</th><td class="mono">{host.address}</td></tr>
 					{#if host.node}<tr><th>Node</th><td>{host.node}</td></tr>{/if}
 					{#if host.roles.length}<tr><th>Roles</th><td>{host.roles.join(', ')}</td></tr>{/if}
-					<tr><th>Tags</th><td>{#each host.tags as t (t)}<span class="tag">{t}</span> {/each}</td></tr>
+					<tr><th>Tags</th><td>{#each host.tags as t, i (i)}<span class="tag">{t}</span> {/each}</td></tr>
 					{#if host.groups.length}
 						<tr>
 							<th>Host Groups</th>
-							<td>{#each host.groups as g, i (g)}{i ? ', ' : ''}<a href="/hosts?group={encodeURIComponent(g)}">{g}</a>{/each}</td>
+							<td>{#each host.groups as g, i (i)}{i ? ', ' : ''}<a href="/hosts?group={encodeURIComponent(g)}">{g}</a>{/each}</td>
 						</tr>
 					{/if}
 					{#each Object.entries(host.vars) as [k, v] (k)}

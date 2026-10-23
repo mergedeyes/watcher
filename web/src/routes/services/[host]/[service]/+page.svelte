@@ -155,7 +155,7 @@
 					{#if detail.groups.length}
 						<tr>
 							<th>Service Groups</th>
-							<td>{#each detail.groups as g, i (g)}{i ? ', ' : ''}<a href="/services?group={encodeURIComponent(g)}">{g}</a>{/each}</td>
+							<td>{#each detail.groups as g, i (i)}{i ? ', ' : ''}<a href="/services?group={encodeURIComponent(g)}">{g}</a>{/each}</td>
 						</tr>
 					{/if}
 					<tr><th>Source</th><td class="mono">{detail.check.origin}</td></tr>
@@ -177,7 +177,7 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each detail.metrics as m (seriesName(m.name, m.labels))}
+						{#each detail.metrics as m, i (i)}
 							<tr data-state={m.state}>
 								<td class="mono">{seriesName(m.name, m.labels)}</td>
 								<td class="mono nowrap">{formatValue(m.value, m.unit)}</td>
