@@ -318,9 +318,7 @@ pub async fn object(
     let (objects, _) = blocking(move || edit::objects(&dir))
         .await?
         .map_err(|e| ApiError::Internal(format!("cannot read the object files: {e}")))?;
-    objects
-        .into_iter()
-        .find(|o| o.kind == kind && o.name == name)
+    edit::find(&objects, kind, &name)
         .map(|o| Json(o).into_response())
         .ok_or_else(|| ApiError::NotFound(format!("{} {name:?} not found", kind.key())))
 }
@@ -352,7 +350,12 @@ pub async fn put_object(
     let (objects, _) = blocking(move || edit::objects(&lookup))
         .await?
         .map_err(|e| ApiError::Internal(format!("cannot read the object files: {e}")))?;
-    let exists = objects.iter().any(|o| o.kind == kind && o.name == name);
+    let found = edit::find(&objects, kind, &name);
+    // An unnamed object (`@path:line`) stays unnamed.
+    if found.is_some_and(|o| o.name.is_empty()) {
+        fields.remove("name");
+    }
+    let exists = found.is_some();
     let e = edit::Edit {
         kind,
         name: exists.then_some(name),

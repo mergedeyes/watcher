@@ -330,13 +330,7 @@ impl<'a> Builder<'a> {
         matched
             .into_iter()
             .map(|(rule, why)| {
-                let label = rule.label();
-                let mut n = self.node(
-                    "notify",
-                    Some(&label),
-                    format!("notify {label}"),
-                    Some(&rule.origin),
-                );
+                let mut n = self.rule_link(rule);
                 n.detail = Some(format!("matched: {why}"));
                 n.children = self.rule_targets(rule);
                 n
@@ -861,21 +855,29 @@ impl<'a> Builder<'a> {
         Some(root)
     }
 
+    /// The name, or `@file:line` for an unnamed rule, as the editor
+    /// addresses it.
+    fn rule_id(&self, rule: &NotifyRule) -> String {
+        match &rule.name {
+            Some(name) => name.clone(),
+            None => format!("@{}:{}", self.file(&rule.origin), rule.origin.line),
+        }
+    }
+
     fn rule_link(&self, rule: &NotifyRule) -> Node {
-        let label = rule.label();
         self.node(
             "notify",
-            Some(&label),
-            format!("notify {label}"),
+            Some(&self.rule_id(rule)),
+            format!("notify {}", rule.label()),
             Some(&rule.origin),
         )
     }
 
-    fn rule(&self, label: &str) -> Option<Node> {
+    fn rule(&self, id: &str) -> Option<Node> {
         let config = self.config;
-        let rule = config.notify.iter().find(|r| r.label() == label)?;
+        let rule = config.notify.iter().find(|r| self.rule_id(r) == id)?;
         let mut root = self.rule_link(rule);
-        root.label = label.to_string();
+        root.label = rule.label();
         root.children
             .extend(self.section("to", self.rule_targets(rule)));
         let mut matched = Vec::new();
@@ -884,7 +886,7 @@ impl<'a> Builder<'a> {
             if let Some((_, why)) = config
                 .matching_rules(s, host_alert)
                 .into_iter()
-                .find(|(r, _)| r.label() == label)
+                .find(|(r, _)| std::ptr::eq(*r, rule))
             {
                 let (kind, name, text) = match host_alert {
                     true => (
@@ -1008,6 +1010,24 @@ vars.disks.data = { path = "/srv", warn = "5%" }
             assert!(text.contains(expected), "missing {expected:?} in\n{text}");
         }
         assert!(text.contains("a.toml:5"), "{text}");
+
+        // Unnamed rules: the editor's id, `@file:line`.
+        let (objects, _) = crate::edit::objects(&dir).unwrap();
+        let rule = objects
+            .iter()
+            .find(|o| o.kind == crate::edit::Kind::Notify)
+            .unwrap();
+        assert_eq!(rule.id(), "@a.toml:19");
+        let tree = builder.tree("service", "db01/disk_data").unwrap();
+        fn names(n: &Node, out: &mut Vec<String>) {
+            out.extend(n.name.clone());
+            n.children.iter().for_each(|c| names(c, out));
+        }
+        let mut found = Vec::new();
+        names(&tree, &mut found);
+        assert!(found.contains(&rule.id()), "{found:?}");
+        let text = render(&builder.tree("notify", &rule.id()).unwrap());
+        assert!(text.contains("service db01/disk_data"), "{text}");
 
         let text = render(&builder.tree("service", "disk").unwrap());
         for expected in [

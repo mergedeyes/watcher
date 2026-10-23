@@ -1,5 +1,8 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { auth } from '#lib/auth.svelte.ts';
+	import { editHref } from '#lib/config.svelte.ts';
+	import ConfigTree from '#lib/ConfigTree.svelte';
 	import { live } from '#lib/live.svelte.ts';
 	import ServiceTable from '#lib/ServiceTable.svelte';
 	import Totals from '#lib/Totals.svelte';
@@ -35,7 +38,13 @@
 <div class="content">
 	<div class="page-head">
 		<h1>Services{group ? ` · ${group}` : ''}{filter ? ` · ${filter.toUpperCase()}` : ''}</h1>
-		<input type="search" placeholder="Search host, service, output" bind:value={query} aria-label="Search" />
+		<span class="head-actions">
+			{#if group && auth.admin}
+				<a class="btn" href={editHref('servicegroups', group)}>Edit Config</a>
+				<ConfigTree kind="servicegroup" name={group} />
+			{/if}
+			<input type="search" placeholder="Search host, service, output" bind:value={query} aria-label="Search" />
+		</span>
 	</div>
 
 	<div class="totals">

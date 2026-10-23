@@ -231,6 +231,9 @@ puts a new object into that file. Kinds: `check`, `service`, `host`,
 `hostgroup`, `servicegroup`, `contact`, `contactgroup`, `downtimegroup`,
 `notify`, `sink`.
 
+Unnamed notify rules: `{name}` is `@path:line` (`@ui/notify.toml:4`,
+URL-encoded in paths), as `GET config/objects` lists them.
+
 With a preview first: `edit` → `preview` → `apply`.
 
 ```sh
