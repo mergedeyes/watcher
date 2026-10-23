@@ -7,11 +7,13 @@ use std::time::{Duration, SystemTime};
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StateEvent {
     pub host: String,
+    /// Empty for events about the host itself (`ack` and downtimes of a
+    /// host).
     pub service: String,
     #[serde(serialize_with = "rfc3339")]
     pub ts: SystemTime,
-    /// `service`, `host` (UP/DOWN from the host check), `flap_start` or
-    /// `flap_stop`.
+    /// `service`, `host` (UP/DOWN from the host check), `flap_start`,
+    /// `flap_stop`, `ack`, `downtime_start` or `downtime_end`.
     pub kind: String,
     pub from_state: Option<String>,
     pub to_state: String,
@@ -78,11 +80,11 @@ impl Store {
             String,
         );
         let rows: Vec<Row> = sqlx::query_as(
-            "SELECT h.name, s.name, extract(epoch FROM e.ts)::float8, e.kind, e.from_state,
-                        e.to_state, e.state_type, e.hard, e.output
+            "SELECT h.name, coalesce(s.name, ''), extract(epoch FROM e.ts)::float8, e.kind,
+                        e.from_state, e.to_state, e.state_type, e.hard, e.output
                  FROM state_events e
-                 JOIN services s ON s.id = e.service_id
-                 JOIN hosts h ON h.id = s.host_id
+                 LEFT JOIN services s ON s.id = e.service_id
+                 JOIN hosts h ON h.id = coalesce(e.host_id, s.host_id)
                  WHERE ($1::text IS NULL OR h.name = $1)
                    AND ($2::text IS NULL OR s.name = $2)
                    AND ($3::float8 IS NULL OR e.ts < to_timestamp($3))

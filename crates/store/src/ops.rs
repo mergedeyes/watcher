@@ -81,7 +81,48 @@ fn downtime((id, kind, target, starts, ends, author, comment, created): Downtime
     }
 }
 
+/// An acknowledgement or a downtime starting or ending, for the alert
+/// history.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpsEvent {
+    pub host: String,
+    /// `None`: about the host.
+    pub service: Option<String>,
+    /// `ack`, `downtime_start` or `downtime_end`.
+    pub kind: &'static str,
+    /// The state at the time: `critical`, `down`, `ok`, ...
+    pub state: String,
+    /// Who and why, e.g. `alice: on it`.
+    pub output: String,
+    pub time: SystemTime,
+}
+
 impl Store {
+    /// Adds `event` to the alert history; `false` if the host or service
+    /// isn't known (yet).
+    pub async fn add_event(&self, event: &OpsEvent) -> Result<bool> {
+        let done = sqlx::query(
+            "INSERT INTO state_events
+                 (service_id, host_id, ts, kind, from_state, to_state, state_type, hard, output)
+             SELECT s.id, CASE WHEN $2::text IS NULL THEN h.id END, to_timestamp($3), $4,
+                    NULL, $5, 'hard', false, $6
+             FROM hosts h
+             LEFT JOIN services s
+                    ON s.host_id = h.id AND s.name = $2 AND s.removed_at IS NULL
+             WHERE h.name = $1 AND h.removed_at IS NULL
+               AND ($2::text IS NULL OR s.id IS NOT NULL)",
+        )
+        .bind(&event.host)
+        .bind(&event.service)
+        .bind(epoch(event.time))
+        .bind(event.kind)
+        .bind(&event.state)
+        .bind(&event.output)
+        .execute(&self.pool)
+        .await?;
+        Ok(done.rows_affected() > 0)
+    }
+
     pub async fn flags(&self) -> Result<Vec<Flag>> {
         let rows: Vec<(String, String, String, String, f64)> = sqlx::query_as(
             "SELECT kind, target, author, comment, extract(epoch FROM created)::float8

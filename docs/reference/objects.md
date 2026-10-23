@@ -259,7 +259,7 @@ on = ["problem", "recovery"]
 | `hosts` | all | [host selector](selectors.md#host-selector) |
 | `services` | all | [service selector](selectors.md#service-selector) |
 | `states` | all | `warning`, `critical`, `unknown`, `down` |
-| `on` | all | `problem`, `recovery`, `flapping` |
+| `on` | all | `problem`, `recovery`, `flapping`, `downtime` (start and end) |
 | `enabled` | `true` | |
 
 Every matching rule notifies; each contact gets one message.

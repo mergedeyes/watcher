@@ -218,7 +218,7 @@ export interface Points {
 export const HISTORY_DELAY = 1500;
 
 /** `host`: UP/DOWN of the host, from its host check. */
-export type EventKind = 'service' | 'host' | 'flap_start' | 'flap_stop';
+export type EventKind = 'service' | 'host' | 'flap_start' | 'flap_stop' | 'ack' | 'downtime_start' | 'downtime_end';
 
 /** An entry of the alert history. */
 export interface StateEvent {
@@ -457,6 +457,13 @@ export const api = {
 	tokens: () => get<ApiToken[]>('/tokens'),
 	createToken: (name: string) => send<{ token: string; info: ApiToken }>('POST', '/tokens', { name }),
 	deleteToken: (id: number) => send<void>('DELETE', `/tokens/${id}`),
+	users: () => get<User[]>('/users'),
+	createUser: (username: string, password: string, admin: boolean) =>
+		send<User>('POST', '/users', { username, password, admin }),
+	/** Admins: anything; everyone: their own password. */
+	updateUser: (name: string, change: { password?: string; admin?: boolean; disabled?: boolean }) =>
+		send<User>('PUT', `/users/${seg(name)}`, change),
+	deleteUser: (name: string) => send<void>('DELETE', `/users/${seg(name)}`),
 
 	config: () => get<ConfigOverview>('/config'),
 	configFile: (path: string) => get<ConfigFile>(`/config/files/${path.split('/').map(seg).join('/')}`),

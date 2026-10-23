@@ -140,7 +140,7 @@ enabled = false
 | `hosts` | all | [host selector](../reference/selectors.md#host-selector) |
 | `services` | all | [service selector](../reference/selectors.md#service-selector) |
 | `states` | all | `warning`, `critical`, `unknown`, `down` |
-| `on` | all | `problem`, `recovery`, `flapping` |
+| `on` | all | `problem`, `recovery`, `flapping`, `downtime` |
 | `enabled` | `true` | |
 
 `hosts` and `services` both set: both must match.

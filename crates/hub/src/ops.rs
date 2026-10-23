@@ -48,6 +48,31 @@ impl Default for Ops {
     }
 }
 
+/// `hostgroup linux: patch day`, or without a comment `hostgroup linux`.
+fn label(what: &str, comment: &str) -> String {
+    match comment.is_empty() {
+        true => what.to_string(),
+        false => format!("{what}: {comment}"),
+    }
+}
+
+/// What is in a downtime, by host or `host/service`: (host, service, which
+/// downtime, state).
+pub(crate) type InDowntime = BTreeMap<String, (String, Option<String>, String, CheckState)>;
+
+/// A downtime that started or ended for a host (all its services) or one
+/// service.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DowntimeChange {
+    pub host: String,
+    pub service: Option<String>,
+    pub started: bool,
+    /// The state then (for a host: of its host check; OK without one).
+    pub state: CheckState,
+    /// Which downtime, e.g. `hostgroup linux: patch day`.
+    pub what: String,
+}
+
 /// What applies to one service right now.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct Status {
@@ -111,16 +136,22 @@ impl Ops {
                 _ => false,
             };
             if hit {
-                out.push(format!("{} {}", d.kind, d.target));
+                out.push(label(&format!("{} {}", d.kind, d.target), &d.comment));
             }
         }
         for g in &config.downtimegroups {
             if g.schedule.iter().any(|w| w.active(now, &self.tz).is_some()) && g.has_host(host) {
-                out.push(format!("downtimegroup {}", g.name));
+                let title = g.title.as_deref().unwrap_or_default();
+                out.push(label(&format!("downtimegroup {}", g.name), title));
             }
         }
         out.dedup();
         out
+    }
+
+    /// Uses `tz` for downtime group windows.
+    pub fn set_timezone(&mut self, tz: TimeZone) {
+        self.tz = tz;
     }
 
     /// Jobs whose checks are off, for the scheduler.
@@ -142,6 +173,127 @@ impl Ops {
 }
 
 impl Hub {
+    /// Downtimes that started or ended since the last call, recorded in
+    /// the alert history. The first call only takes note of what is in a
+    /// downtime. Hosts in a downtime count once, not per service.
+    pub async fn downtime_changes(&self) -> Vec<DowntimeChange> {
+        let (now_in, changes) = {
+            let live = self.read();
+            let (config, ops) = (&live.config, &live.ops);
+            let now = SystemTime::now();
+            let mut now_in = InDowntime::new();
+            for host in &config.hosts {
+                if let Some(what) = ops.downtimes_of(config, host, None, now).into_iter().next() {
+                    let state = config
+                        .host_check(host)
+                        .and_then(|s| live.services.get(&s.id))
+                        .map_or(CheckState::Ok, |l| l.state.state);
+                    now_in.insert(host.name.clone(), (host.name.clone(), None, what, state));
+                }
+            }
+            for s in &config.services {
+                let host = config.host(s);
+                if now_in.contains_key(&host.name) {
+                    continue;
+                }
+                if let Some(what) = ops
+                    .downtimes_of(config, host, Some(s), now)
+                    .into_iter()
+                    .next()
+                {
+                    let state = live
+                        .services
+                        .get(&s.id)
+                        .map_or(CheckState::Ok, |l| l.state.state);
+                    now_in.insert(
+                        s.id.clone(),
+                        (host.name.clone(), Some(s.name.clone()), what, state),
+                    );
+                }
+            }
+            let seen = self.downtime_seen.lock().unwrap_or_else(|e| e.into_inner());
+            let changes: Vec<DowntimeChange> = match &*seen {
+                None => Vec::new(),
+                Some(before) => {
+                    let started = now_in.iter().filter(|(k, _)| !before.contains_key(*k)).map(
+                        |(_, (host, service, what, state))| DowntimeChange {
+                            host: host.clone(),
+                            service: service.clone(),
+                            started: true,
+                            state: *state,
+                            what: what.clone(),
+                        },
+                    );
+                    let ended = before.iter().filter(|(k, _)| !now_in.contains_key(*k)).map(
+                        |(_, (host, service, what, _))| {
+                            let id = match service {
+                                Some(s) => format!("{host}/{s}"),
+                                None => host.clone(),
+                            };
+                            let state = match service {
+                                Some(_) => live.services.get(&id).map(|l| l.state.state),
+                                None => config
+                                    .hosts
+                                    .iter()
+                                    .find(|h| h.name == *host)
+                                    .and_then(|h| config.host_check(h))
+                                    .and_then(|s| live.services.get(&s.id))
+                                    .map(|l| l.state.state),
+                            };
+                            DowntimeChange {
+                                host: host.clone(),
+                                service: service.clone(),
+                                started: false,
+                                state: state.unwrap_or(CheckState::Ok),
+                                what: what.clone(),
+                            }
+                        },
+                    );
+                    started.chain(ended).collect()
+                }
+            };
+            (now_in, changes)
+        };
+        *self.downtime_seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(now_in);
+        for c in &changes {
+            let kind = if c.started {
+                "downtime_start"
+            } else {
+                "downtime_end"
+            };
+            let state = match c.service {
+                Some(_) => c.state.as_str().to_lowercase(),
+                None => host_state(c.state),
+            };
+            self.history(&c.host, c.service.as_deref(), kind, state, c.what.clone())
+                .await;
+        }
+        changes
+    }
+
+    /// Adds an acknowledgement or downtime to the alert history.
+    async fn history(
+        &self,
+        host: &str,
+        service: Option<&str>,
+        kind: &'static str,
+        state: String,
+        output: String,
+    ) {
+        let Some(store) = &self.store else { return };
+        let event = watcher_store::OpsEvent {
+            host: host.into(),
+            service: service.map(String::from),
+            kind,
+            state,
+            output,
+            time: SystemTime::now(),
+        };
+        if let Err(err) = store.add_event(&event).await {
+            warn!("cannot record {kind} of {host}: {err}");
+        }
+    }
+
     /// Loads flags, downtimes and switches from the database, and tells the
     /// scheduler which checks are off.
     pub async fn load_ops(&self) -> Result<(), watcher_store::Error> {
@@ -196,6 +348,21 @@ impl Hub {
         }
         if status.acknowledged && state != CheckState::Ok {
             return Some("acknowledged".into());
+        }
+        None
+    }
+
+    /// Why a downtime notification for a host or service is held back:
+    /// notifications off, or muted.
+    pub fn downtime_suppressed(&self, host: &str, service: Option<&str>) -> Option<String> {
+        let live = self.read();
+        let ops = &live.ops;
+        if !ops.notifications {
+            return Some("notifications are off".into());
+        }
+        let id = service.map(|s| format!("{host}/{s}"));
+        if ops.has(FlagKind::Mute, host) || id.is_some_and(|id| ops.has(FlagKind::Mute, &id)) {
+            return Some("muted".into());
         }
         None
     }
@@ -457,6 +624,35 @@ pub(crate) async fn action(
                 }
             }
             result.done = set_flags(&hub, FlagKind::Ack, targets, &who, &body.comment).await?;
+            for target in &result.done {
+                let (host, service, state) = {
+                    let live = hub.read();
+                    match target.split_once('/') {
+                        Some((h, s)) => {
+                            let state = live.services.get(target).map(|l| l.state.state);
+                            (
+                                h.to_string(),
+                                Some(s.to_string()),
+                                state.map(|s| s.as_str().to_lowercase()),
+                            )
+                        }
+                        None => {
+                            let state = config
+                                .hosts
+                                .iter()
+                                .find(|h| h.name == *target)
+                                .and_then(|h| config.host_check(h))
+                                .and_then(|s| live.services.get(&s.id))
+                                .map(|l| host_state(l.state.state));
+                            (target.clone(), None, state)
+                        }
+                    }
+                };
+                let output = label(&who, &body.comment);
+                let state = state.unwrap_or_else(|| "pending".into());
+                hub.history(&host, service.as_deref(), "ack", state, output)
+                    .await;
+            }
         }
         "mute" | "disable-checks" => {
             let kind = match action.as_str() {
@@ -541,6 +737,13 @@ pub(crate) async fn action(
         hub.ops_changed();
     }
     Ok(Json(result))
+}
+
+/// `up` or `down` for a host check state.
+fn host_state(state: CheckState) -> String {
+    watcher_core::HostState::from_check(state)
+        .as_str()
+        .to_lowercase()
 }
 
 /// RFC 3339, unix seconds or `now` (not a duration back: downtimes look

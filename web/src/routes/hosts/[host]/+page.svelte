@@ -46,8 +46,9 @@
 	$effect(() => {
 		const [current, _] = [name, lastChange];
 		const load = () =>
-			api.events({ host: current, type: 'host', limit: 20 }).then(
-				(ev) => (events = ev),
+			// Host UP/DOWN, and acknowledgements and downtimes of the host itself.
+			api.events({ host: current, type: 'host,ack,downtime', limit: 40 }).then(
+				(ev) => (events = ev.filter((e) => e.kind === 'host' || e.service === '' || e.service === host?.check).slice(0, 20)),
 				(e) => (noHistory = e instanceof ApiError && e.noDatabase)
 			);
 		load();

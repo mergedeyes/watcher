@@ -1843,20 +1843,23 @@ impl<'a> Compiler<'a> {
                 problem: true,
                 recovery: true,
                 flapping: true,
+                downtime: true,
             };
             if let Some(list) = &def.on {
                 on = NotifyOn {
                     problem: false,
                     recovery: false,
                     flapping: false,
+                    downtime: false,
                 };
                 for item in list {
                     match item.as_str() {
                         "problem" => on.problem = true,
                         "recovery" => on.recovery = true,
                         "flapping" => on.flapping = true,
+                        "downtime" => on.downtime = true,
                         other => error(format!(
-                            "on: unknown {other:?} (expected problem, recovery or flapping)"
+                            "on: unknown {other:?} (expected problem, recovery, flapping or downtime)"
                         )),
                     }
                 }

@@ -30,6 +30,9 @@ pub struct Bootstrap {
     pub config_mode: ConfigMode,
     /// Name of this instance, shown in the web UI and notifications.
     pub instance_name: Option<String>,
+    /// IANA time zone of downtime windows, e.g. `Europe/Berlin`. Default:
+    /// the system's.
+    pub timezone: Option<String>,
     /// Serve HTTPS instead of HTTP.
     pub tls: Option<Tls>,
     /// Where bare command names are looked up before PATH, in order.
@@ -217,6 +220,14 @@ impl Bootstrap {
             .and_then(|s| s.password_file.as_mut())
         {
             *file = base.join(&*file);
+        }
+        if let Some(name) = &bootstrap.timezone
+            && let Err(err) = jiff::tz::TimeZone::get(name)
+        {
+            return Err(BootstrapError::Invalid {
+                path: path.into(),
+                message: format!("timezone {name:?}: {err}"),
+            });
         }
         if let Some(tls) = &mut bootstrap.tls {
             if tls.files(&bootstrap.data_dir).is_none() {

@@ -32,6 +32,28 @@
 		}
 	}
 
+	let password = $state('');
+	let repeat = $state('');
+	let passwordError = $state<string | null>(null);
+
+	async function changePassword(event: SubmitEvent) {
+		event.preventDefault();
+		passwordError = null;
+		if (password !== repeat) {
+			passwordError = 'Passwords differ';
+			return;
+		}
+		const me = auth.status?.user?.username;
+		if (!me) return;
+		try {
+			await api.updateUser(me, { password });
+			// All sessions ended: log in again.
+			auth.expire();
+		} catch (e) {
+			passwordError = e instanceof Error ? e.message : String(e);
+		}
+	}
+
 	async function revoke(token: ApiToken) {
 		if (!confirm(`Revoke token "${token.name}"?`)) return;
 		await api.deleteToken(token.id);
@@ -60,6 +82,17 @@
 					<tr><th>Admin</th><td>{auth.status.user?.admin ? 'yes' : 'no'}</td></tr>
 				</tbody>
 			</table>
+		</section>
+
+		<section class="panel">
+			<div class="panel-title">Password</div>
+			<form class="body new" onsubmit={changePassword}>
+				<input type="password" placeholder="New password" bind:value={password} required minlength="10" autocomplete="new-password" aria-label="New password" />
+				<input type="password" placeholder="Repeat" bind:value={repeat} required minlength="10" autocomplete="new-password" aria-label="Repeat password" />
+				<button type="submit" class="btn primary">Change</button>
+				{#if passwordError}<span class="error" role="alert">{passwordError}</span>{/if}
+				<span class="muted">ends all sessions, this one too</span>
+			</form>
 		</section>
 
 		<section class="panel">

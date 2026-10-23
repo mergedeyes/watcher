@@ -22,6 +22,7 @@ use watcher_store::{HostSpec, ServiceSpec, Store, StoredState};
 
 pub use auth::AuthSettings;
 pub use config::{ConfigFiles, Reload};
+pub use ops::DowntimeChange;
 /// Serves the web UI files and app shell; for routers outside the hub.
 pub use ui::serve as serve_ui;
 
@@ -70,6 +71,9 @@ pub struct Hub {
     instance: OnceLock<String>,
     /// Results per minute.
     results: Mutex<ops::Counter>,
+    /// Hosts and services in a downtime at the last check, for
+    /// [`Hub::downtime_changes`]; `None` before the first.
+    downtime_seen: Mutex<Option<ops::InDowntime>>,
 }
 
 impl Hub {
@@ -113,6 +117,7 @@ impl Hub {
             config_lock: tokio::sync::Mutex::new(()),
             instance: OnceLock::new(),
             results: Mutex::new(ops::Counter::default()),
+            downtime_seen: Mutex::new(None),
         })
     }
 
@@ -122,6 +127,11 @@ impl Hub {
 
     fn write(&self) -> RwLockWriteGuard<'_, Live> {
         self.live.write().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The time zone of downtime group windows (default: the system's).
+    pub fn set_timezone(&self, tz: jiff::tz::TimeZone) {
+        self.write().ops.set_timezone(tz);
     }
 
     /// Names this instance in the API (`health`) and so in the web UI.

@@ -492,6 +492,55 @@ async fn flags_downtimes_and_settings() {
         assert!(!store.cancel_downtime(added.id).await.unwrap());
         assert!(store.downtimes().await.unwrap().is_empty());
 
+        // Acknowledgements and downtimes go to the alert history.
+        store
+            .sync(&[host("web01", None)], &[service("web01", "http", "h1")])
+            .await
+            .unwrap();
+        let ack = watcher_store::OpsEvent {
+            host: "web01".into(),
+            service: Some("http".into()),
+            kind: "ack",
+            state: "critical".into(),
+            output: "alice: on it".into(),
+            time: now,
+        };
+        assert!(store.add_event(&ack).await.unwrap());
+        let host_dt = watcher_store::OpsEvent {
+            service: None,
+            kind: "downtime_start",
+            state: "up".into(),
+            output: "hostgroup linux: patch day".into(),
+            ..ack.clone()
+        };
+        assert!(store.add_event(&host_dt).await.unwrap());
+        let unknown = watcher_store::OpsEvent {
+            host: "nope".into(),
+            ..ack.clone()
+        };
+        assert!(!store.add_event(&unknown).await.unwrap());
+        let events = store
+            .events(&EventFilter {
+                host: Some("web01".into()),
+                service: None,
+                before: None,
+                since: None,
+                kinds: vec!["ack".into(), "downtime_start".into()],
+                states: Vec::new(),
+                state_type: None,
+                hard_only: false,
+                limit: 10,
+            })
+            .await
+            .unwrap();
+        let got: Vec<(&str, &str)> = events
+            .iter()
+            .map(|e| (e.kind.as_str(), e.service.as_str()))
+            .collect();
+        assert_eq!(got.len(), 2);
+        assert!(got.contains(&("ack", "http")));
+        assert!(got.contains(&("downtime_start", "")));
+
         assert_eq!(store.setting("notifications").await.unwrap(), None);
         store
             .set_setting("notifications", &serde_json::json!(false))

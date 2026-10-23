@@ -135,6 +135,7 @@
 				{#if auth.status?.required}
 					<div class="group">Settings</div>
 					<a href="/account" class:active={active('/account')}>Account</a>
+					{#if admin}<a href="/users" class:active={active('/users')}>Users</a>{/if}
 				{/if}
 			</nav>
 		</aside>

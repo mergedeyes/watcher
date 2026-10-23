@@ -441,7 +441,7 @@ struct EventsQuery {
     before: Option<String>,
     /// Only events at or after this time, like `before`.
     since: Option<String>,
-    /// Comma-separated: `service,host,flapping`.
+    /// Comma-separated: `service,host,flapping,ack,downtime`.
     #[serde(rename = "type")]
     kind: Option<String>,
     /// Comma-separated states changed to: `ok,warning,critical,unknown,up,down`.
@@ -473,9 +473,15 @@ fn list_param(name: &str, value: Option<&str>, known: &[&str]) -> Result<Vec<Str
 async fn events(AxState(hub): Shared, Query(q): Query<EventsQuery>) -> ApiResult<Vec<StateEvent>> {
     let now = SystemTime::now();
     let time = |s: &Option<String>| s.as_deref().map(|s| parse_time(s, now)).transpose();
-    let mut kinds = list_param("type", q.kind.as_deref(), &["service", "host", "flapping"])?;
-    if let Some(i) = kinds.iter().position(|k| k == "flapping") {
-        kinds.splice(i..=i, ["flap_start".into(), "flap_stop".into()]);
+    let known = ["service", "host", "flapping", "ack", "downtime"];
+    let mut kinds = list_param("type", q.kind.as_deref(), &known)?;
+    for (name, parts) in [
+        ("flapping", ["flap_start", "flap_stop"]),
+        ("downtime", ["downtime_start", "downtime_end"]),
+    ] {
+        if let Some(i) = kinds.iter().position(|k| k == name) {
+            kinds.splice(i..=i, parts.map(String::from));
+        }
     }
     let states = ["ok", "warning", "critical", "unknown", "up", "down"];
     let state_type = list_param("state_type", q.state_type.as_deref(), &["soft", "hard"])?;

@@ -302,6 +302,8 @@ pub struct NotifyOn {
     pub problem: bool,
     pub recovery: bool,
     pub flapping: bool,
+    /// A downtime starts or ends.
+    pub downtime: bool,
 }
 
 /// Who gets which alerts. Every matching rule notifies.
@@ -346,6 +348,8 @@ pub enum Alert {
     /// Back to OK/UP from the given problem state.
     Recovery,
     Flapping,
+    /// A downtime starts or ends.
+    Downtime,
 }
 
 /// A destination that receives a copy of all results, through a durable
@@ -480,7 +484,44 @@ impl Config {
                 Alert::Problem => rule.on.problem && rule.takes_state(state),
                 Alert::Recovery => rule.on.recovery && rule.takes_state(state),
                 Alert::Flapping => rule.on.flapping,
+                Alert::Downtime => rule.on.downtime,
             };
+            if !takes {
+                continue;
+            }
+            names.extend(rule.contacts.iter().map(String::as_str));
+            for group in &rule.contact_groups {
+                names.extend(self.group_contacts(group).iter().map(|c| c.name.as_str()));
+            }
+        }
+        let mut out: Vec<&Contact> = Vec::new();
+        for name in names {
+            if let Some(c) = self.contacts.iter().find(|c| c.name == name)
+                && !out.iter().any(|o| o.name == name)
+            {
+                out.push(c);
+            }
+        }
+        out
+    }
+}
+
+impl Config {
+    /// Who hears about a downtime of `host`: through its host check if it
+    /// has one, else the rules without `services` that match the host.
+    pub fn host_downtime_recipients(&self, host: &Host) -> Vec<&Contact> {
+        if let Some(hc) = self.host_check(host) {
+            return self.recipients(hc, true, Alert::Downtime, "up");
+        }
+        let mut names: Vec<&str> = Vec::new();
+        for rule in &self.notify {
+            let takes = rule.enabled
+                && rule.on.downtime
+                && rule.services.is_none()
+                && rule
+                    .hosts
+                    .as_ref()
+                    .is_none_or(|s| s.matches(host).is_some());
             if !takes {
                 continue;
             }

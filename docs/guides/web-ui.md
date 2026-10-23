@@ -13,6 +13,9 @@ watcher user add admin --admin      # may edit the configuration
 watcher user passwd alice
 ```
 
+Or in the web UI: Settings → Users (admins); everyone changes their own
+password under Account.
+
 Five failed logins lock a username for a minute. Sessions last 14 days
 from the last use.
 
@@ -35,7 +38,8 @@ login with a database, loopback only.
 | Process Info | uptime, results/min; notifications and active checks on/off |
 | Scheduling Queue | next check of every service |
 | Configuration | forms and file editor (admins) |
-| Account | user, API tokens |
+| Account | user, password, API tokens |
+| Users | add, admin, disable, password, delete (admins) |
 
 Status totals are links to the filtered lists. Columns sort on click.
 The Problems badge counts unhandled problems (not acknowledged, not in a

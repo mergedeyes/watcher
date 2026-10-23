@@ -134,7 +134,7 @@ Need a database.
 | Parameter | |
 |---|---|
 | `host`, `service` | |
-| `type` | comma list: `service,host,flapping` |
+| `type` | comma list: `service,host,flapping,ack,downtime` |
 | `state` | comma list: `ok,warning,critical,unknown,up,down` |
 | `state_type` | `soft`, `hard` |
 | `hard=true` | confirmed problems and their recoveries |

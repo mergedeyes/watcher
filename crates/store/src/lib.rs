@@ -15,7 +15,7 @@ mod write;
 
 pub use auth::{ApiToken, TokenRef, User};
 pub use ingest::{Record, ingest};
-pub use ops::{Downtime, Flag, FlagKind};
+pub use ops::{Downtime, Flag, FlagKind, OpsEvent};
 pub use query::{EventFilter, Points, Series, StateEvent};
 pub use reader::READABLE;
 pub use spool::Spool;

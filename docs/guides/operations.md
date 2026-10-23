@@ -28,6 +28,26 @@ no notification for db01/replication: acknowledged
 
 Recoveries still notify after an acknowledgement (it ends with them).
 
+## History and notifications
+
+Alerts (and the host and service pages) list acknowledgements (ACK, with
+author and comment) and downtimes starting and ending. Filter: Alert type
+Acknowledgement / Downtime; API `events?type=ack,downtime`.
+
+A downtime starting or ending notifies like Nagios (DOWNTIMESTART,
+DOWNTIMEEND) to the notify rules that match the host or service, unless
+they leave `downtime` out of `on`, or it is muted:
+
+```
+[Watcher] DOWNTIMESTART: web01 is UP
+web01 is in a downtime (UP); no notifications until it ends
+
+hostgroup linux: kernel updates
+```
+
+A host in a downtime counts once, not per service. Changes are noticed
+within 15 s.
+
 ## Downtimes
 
 One-off, for hosts, services, host groups, service groups or downtime
@@ -43,7 +63,9 @@ A downtime for a group covers hosts that join it later.
 
 ## Downtime groups
 
-Hosts that share downtimes, with recurring windows in local time.
+Hosts that share downtimes, with recurring windows in local time
+(`timezone` in [watcher.toml](../reference/watcher-toml.md), default the
+system's).
 
 ```toml
 [downtimegroup.patchday]

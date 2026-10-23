@@ -11,7 +11,9 @@
 		['', 'All'],
 		['host', 'Host'],
 		['service', 'Service'],
-		['flapping', 'Flapping']
+		['flapping', 'Flapping'],
+		['ack', 'Acknowledgement'],
+		['downtime', 'Downtime']
 	] as const;
 	const STATES = [
 		['', 'All'],

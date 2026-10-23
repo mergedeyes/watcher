@@ -197,7 +197,7 @@ paths:
         - { name: service, in: query, schema: { type: string } }
         - { name: before, in: query, description: For paging, like `from` of points, schema: { type: string } }
         - { name: since, in: query, description: Like `from` of points, schema: { type: string } }
-        - { name: type, in: query, description: "Comma-separated: service, host, flapping", schema: { type: string } }
+        - { name: type, in: query, description: "Comma-separated: service, host, flapping, ack, downtime", schema: { type: string } }
         - { name: state, in: query, description: "Comma-separated states changed to: ok, warning, critical, unknown, up, down", schema: { type: string } }
         - { name: state_type, in: query, schema: { $ref: "#/components/schemas/StateType" } }
         - { name: hard, in: query, description: Only hard changes, schema: { type: boolean } }

@@ -487,3 +487,43 @@ async fn run_without_recording() {
     let (status, _) = call(&hub, "POST", "/api/v1/services/db01/dump/run", None).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn downtime_changes_start_and_end() {
+    let hub = hub();
+    // The first call only takes note.
+    assert!(hub.downtime_changes().await.is_empty());
+    let (_, dt) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/downtime",
+        Some(json!({ "hosts": ["web01"], "services": ["db01/dump"], "duration": "1h", "comment": "patch" })),
+    )
+    .await;
+    let changes = hub.downtime_changes().await;
+    let got: Vec<(String, Option<String>, bool, String)> = changes
+        .iter()
+        .map(|c| (c.host.clone(), c.service.clone(), c.started, c.what.clone()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (
+                "db01".into(),
+                Some("dump".into()),
+                true,
+                "service db01/dump: patch".into()
+            ),
+            ("web01".into(), None, true, "host web01: patch".into()),
+        ]
+    );
+    assert!(hub.downtime_changes().await.is_empty());
+    for d in dt["downtimes"].as_array().unwrap() {
+        let uri = format!("/api/v1/downtimes/{}", d["id"]);
+        call(&hub, "DELETE", &uri, None).await;
+    }
+    let ended = hub.downtime_changes().await;
+    assert_eq!(ended.len(), 2);
+    assert!(ended.iter().all(|c| !c.started));
+    assert_eq!(hub.downtime_suppressed("web01", None), None);
+}
