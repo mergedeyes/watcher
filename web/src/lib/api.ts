@@ -472,8 +472,9 @@ export const api = {
 		get<ServiceDetail>(`/services/${seg(host)}/${seg(service)}`),
 	series: (host: string, service: string) =>
 		get<Series[]>(`/services/${seg(host)}/${seg(service)}/series`),
-	points: (id: number, from: string, points: number, signal?: AbortSignal) =>
-		get<Points>(`/series/${id}/points?from=${seg(from)}&points=${points}`, { signal }),
+	/** `from`, `to`: RFC 3339, unix seconds or a duration back from now; `to` defaults to now. */
+	points: (id: number, from: string, points: number, signal?: AbortSignal, to?: string) =>
+		get<Points>(`/series/${id}/points?from=${seg(from)}${to ? `&to=${seg(to)}` : ''}&points=${points}`, { signal }),
 	events: (q: EventQuery) => {
 		const params = new URLSearchParams();
 		for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== '') params.set(k, String(v));
