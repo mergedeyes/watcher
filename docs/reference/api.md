@@ -126,7 +126,7 @@ Need a database.
 | Method, path | |
 |---|---|
 | `GET events` | alert history, newest first |
-| `GET services/{host}/{service}/series` | metric series of a service |
+| `GET services/{host}/{service}/series` | metric series of a service; `warn`, `crit`: threshold bounds of the latest result |
 | `GET series/{id}/points` | points, bucketed |
 
 `GET events`:
@@ -230,6 +230,9 @@ curl -X DELETE -H "Authorization: Bearer $T" .../api/v1/config/objects/host/web0
 puts a new object into that file. Kinds: `check`, `service`, `host`,
 `hostgroup`, `servicegroup`, `contact`, `contactgroup`, `downtimegroup`,
 `notify`, `sink`.
+
+Unnamed notify rules: `{name}` is `@path:line` (`@ui/notify.toml:4`,
+URL-encoded in paths), as `GET config/objects` lists them.
 
 With a preview first: `edit` → `preview` → `apply`.
 

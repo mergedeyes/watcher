@@ -149,7 +149,7 @@ A recovery reaches a rule only if the state it recovers from is in the
 rule's `states`: a rule with `states = ["critical"]` gets CRITICAL → OK, not
 WARNING → OK.
 
-Unnamed rules can't be edited in the web UI; give them a `name`.
+Unnamed rules show as `rule at file:line` in logs and Config Trees.
 
 ## Who gets an alert
 

@@ -1,7 +1,7 @@
 //! HTTP API, version 1. All responses are JSON; errors are
 //! `{"error": "..."}` with a matching status code.
 
-use crate::view::{Counts, HostFlags, HostView, ServiceDetail, ServiceView};
+use crate::view::{Counts, HostFlags, HostView, SeriesView, ServiceDetail, ServiceView};
 use crate::{Hub, Update};
 use crate::{auth, config, ops, ssh};
 use axum::extract::{Path, Query, State as AxState};
@@ -22,7 +22,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use watcher_core::{RawOutput, State, Termination};
 use watcher_exec::scheduler::Control;
-use watcher_store::{EventFilter, FlagKind, Points, Series, StateEvent, Store};
+use watcher_store::{EventFilter, FlagKind, Points, StateEvent, Store};
 
 type Shared = AxState<Arc<Hub>>;
 
@@ -408,12 +408,19 @@ async fn submit(
 async fn series(
     AxState(hub): Shared,
     Path((host, name)): Path<(String, String)>,
-) -> ApiResult<Vec<Series>> {
-    store(&hub)?
+) -> ApiResult<Vec<SeriesView>> {
+    let id = format!("{host}/{name}");
+    let list = store(&hub)?
         .series(&host, &name)
         .await?
-        .map(Json)
-        .ok_or_else(|| ApiError::NotFound(format!("no service \"{host}/{name}\"")))
+        .ok_or_else(|| ApiError::NotFound(format!("no service {id:?}")))?;
+    let live = hub.read();
+    let service = live.services.get(&id);
+    Ok(Json(
+        list.into_iter()
+            .map(|s| SeriesView::new(s, service))
+            .collect(),
+    ))
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import type { ConfigObject } from '#lib/api.ts';
-	import { config, editHref, fileHref } from '#lib/config.svelte.ts';
+	import { config, editHref, fileHref, objectId } from '#lib/config.svelte.ts';
 	import ConfigHead from '#lib/ConfigHead.svelte';
 	import { live } from '#lib/live.svelte.ts';
 	import { RELATIONS, remote } from '#lib/membership.ts';
@@ -136,7 +136,7 @@
 							{@const f = o.fields}
 							<tr class:disabled={f.enabled === false}>
 								<td class="nowrap">
-									{#if o.name}<a href={editHref(kind.path, o.name)}>{o.name}</a>{:else}<a class="muted" href={fileHref(o.path, o.line)}>(unnamed)</a>{/if}
+									{#if o.name}<a href={editHref(kind.path, o.name)}>{o.name}</a>{:else}<a class="muted" href={editHref(kind.path, objectId(o))}>(unnamed)</a>{/if}
 								</td>
 								{#if kind.kind === 'host'}
 									<td class="mono">{f.address ?? ''}</td>
@@ -174,7 +174,7 @@
 								{/if}
 								<td class="nowrap hide-narrow"><a class="mono" href={fileHref(o.path, o.line)}>{o.path}:{o.line}</a></td>
 								{#if config.writable}
-									<td class="nowrap">{#if o.name}<a href="/config/{kind.path}/edit?clone={encodeURIComponent(o.name)}">Clone</a>{/if}</td>
+									<td class="nowrap"><a href="/config/{kind.path}/edit?clone={encodeURIComponent(objectId(o))}">Clone</a></td>
 								{/if}
 							</tr>
 						{:else}
