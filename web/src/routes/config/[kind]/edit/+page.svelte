@@ -61,7 +61,7 @@
 			const filled = toForm(k, fields);
 			// From a service page: on a host, a row to override the service.
 			const rows = filled.service as ServiceRow[] | undefined;
-			if (focus && k === 'host' && rows && !rows.some((r) => r[0] === focus)) rows.push([focus, '', '', '', '', '']);
+			if (focus && k === 'host' && rows && !rows.some((r) => r[0] === focus)) rows.push([focus, '', '', '', '']);
 			values = filled;
 			requestAnimationFrame(() => document.querySelector('.row.svc.focused')?.scrollIntoView({ block: 'center' }));
 		});
@@ -73,19 +73,33 @@
 		new Suggest(config.objects, [...new Set(live.services.map((s) => s.service))], scripts?.scripts ?? [])
 	);
 
-	/** Services of the host's roles (as written), by name: role. Host services with these names override them. */
-	let roleServices = $derived.by(() => {
+	/** Services the host gets (as written), by name: where from. Host services with these names override them. */
+	let assignedServices = $derived.by(() => {
 		const out = new Map<string, string>();
 		if (kind?.kind !== 'host' || !values) return out;
-		const listed = items(String(values.roles ?? ''));
-		for (const role of config.of('role')) {
-			const selected = role.fields.hosts !== undefined;
-			if (!listed.includes(role.name) && !selected) continue;
-			const svc = role.fields.service;
-			if (svc && typeof svc === 'object') for (const s of Object.keys(svc)) out.set(s, role.name);
+		const host = String(values.name ?? '');
+		const listOf = (v: unknown) => (Array.isArray(v) ? v.map(String) : typeof v === 'string' ? [v] : []);
+		const groupServices = (sg: string) => [
+			...listOf(config.find('servicegroup', sg)?.fields.services),
+			...config.of('service').filter((o) => listOf(o.fields.groups).includes(sg)).map((o) => o.name)
+		];
+		const add = (names: string[], from: string) => names.forEach((n) => out.has(n) || out.set(n, from));
+		add(items(String(values.services ?? '')), 'host');
+		for (const sg of items(String(values.servicegroups ?? ''))) add(groupServices(sg), `servicegroup ${sg}`);
+		const listed = items(String(values.groups ?? ''));
+		for (const g of config.of('hostgroup')) {
+			const member = listed.includes(g.name) || listOf(g.fields.members).some((m) => glob(m).test(host));
+			if (!member) continue;
+			add(listOf(g.fields.services), `hostgroup ${g.name}`);
+			for (const sg of listOf(g.fields.servicegroups)) add(groupServices(sg), `servicegroup ${sg} on hostgroup ${g.name}`);
 		}
 		return out;
 	});
+
+	function glob(pattern: string): RegExp {
+		const re = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+		return new RegExp(`^${re}$`);
+	}
 	/** Problems on disk that point at this object, e.g. a command not found. */
 	let own = $derived(
 		object ? (config.overview?.diagnostics ?? []).filter((p) => p.path === object.path && p.line === object.line) : []
@@ -248,28 +262,27 @@
 										{:else if f.type === 'services'}
 											<div class="rows">
 												{#if rows<ServiceRow>(f.key).length > 0}
-													<div class="row svc head"><span>Service</span><span>Check</span><span>For Each</span><span>Service Groups</span><span>Enabled</span><span></span></div>
+													<div class="row svc head"><span>Service</span><span>Check</span><span>Service Groups</span><span>Enabled</span><span></span></div>
 												{/if}
 												{#each rows<ServiceRow>(f.key) as row, i (i)}
 													<div class="row svc" class:focused={focus !== null && row[0] === focus}>
 														<Combobox mono placeholder="name" bind:value={row[0]} label="Service" options={suggest.serviceNames()} />
 														<Combobox mono placeholder={row[0] || 'check'} bind:value={row[1]} label="Check" options={suggest.names('check')} />
-														<Combobox mono placeholder="host var" bind:value={row[2]} label="For each" options={suggest.varNames(true)} />
-														<Combobox multi placeholder="groups" bind:value={row[3]} label="Service groups" options={suggest.names('servicegroup')} />
-														<select bind:value={row[4]} aria-label="Enabled">
+														<Combobox multi placeholder="groups" bind:value={row[2]} label="Service groups" options={suggest.names('servicegroup')} />
+														<select bind:value={row[3]} aria-label="Enabled">
 															<option value="">—</option>
 															<option value="yes">yes</option>
 															<option value="no">no</option>
 														</select>
 														<button type="button" class="btn" aria-label="Remove"
 															onclick={() => (values![f.key] = rows<ServiceRow>(f.key).filter((_, j) => j !== i))}>×</button>
-														{#if kind.kind === 'host' && roleServices.has(row[0])}
-															<span class="override">overrides role {roleServices.get(row[0])}</span>
+														{#if kind.kind === 'host' && assignedServices.has(row[0])}
+															<span class="override">overrides service {row[0]} ({assignedServices.get(row[0])})</span>
 														{/if}
 													</div>
 												{/each}
 												<button type="button" class="btn small"
-													onclick={() => (values![f.key] = [...rows<ServiceRow>(f.key), ['', '', '', '', '', '']])}>Add service</button>
+													onclick={() => (values![f.key] = [...rows<ServiceRow>(f.key), ['', '', '', '', '']])}>Add service</button>
 											</div>
 										{:else}
 											<Combobox
@@ -412,7 +425,7 @@
 	}
 
 	.row.svc {
-		grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr) 70px auto;
+		grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.2fr) 70px auto;
 	}
 
 	.row.svc > * {

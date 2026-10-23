@@ -100,7 +100,7 @@ fn host(name: &str, node: Option<&str>) -> HostSpec {
         name: name.into(),
         address: format!("{name}.example"),
         node: node.map(Into::into),
-        tags: vec!["linux".into(), "web".into()],
+        groups: vec!["linux".into(), "web".into()],
         vars: serde_json::json!({ "port": "8080" }),
     }
 }
@@ -178,11 +178,11 @@ async fn sync_ingest_and_restore() {
             count(&store, "SELECT count(*) FROM hosts h JOIN nodes n ON n.id = h.node_id WHERE n.name = 'customer-a'").await,
             1
         );
-        let tags: Vec<String> = sqlx::query_scalar("SELECT tags FROM hosts WHERE name = 'web01'")
+        let groups: Vec<String> = sqlx::query_scalar("SELECT groups FROM hosts WHERE name = 'web01'")
             .fetch_one(store.pool())
             .await
             .unwrap();
-        assert_eq!(tags, ["linux", "web"]);
+        assert_eq!(groups, ["linux", "web"]);
 
         let store = Arc::new(store);
         let disk = record("web01/disk", 0, "DISK OK | /=2643MB;5948;5958;0;5968 'temp'=41", None);

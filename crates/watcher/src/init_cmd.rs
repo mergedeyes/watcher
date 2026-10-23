@@ -516,10 +516,10 @@ impl Plan {
             });
         }
         if a.monitor_localhost {
-            let (checks, roles, hosts) = localhost_config();
+            let (checks, services, hosts) = localhost_config();
             for (name, contents) in [
                 ("checks.toml", checks),
-                ("roles.toml", roles),
+                ("services.toml", services),
                 ("hosts.toml", hosts),
             ] {
                 files.push(PlannedFile {
@@ -626,7 +626,7 @@ pub(crate) fn write_file(path: &Path, contents: &str, private: bool) -> std::io:
 }
 
 /// Checks for this machine: monitoring plugins if installed, else shell.
-/// Returns checks.toml, roles.toml and hosts.toml.
+/// Returns checks.toml, services.toml and hosts.toml.
 fn localhost_config() -> (String, String, String) {
     let (checks, services) = match plugin_dir() {
         // Bare names: the plugin directories are check directories.
@@ -641,9 +641,7 @@ fn localhost_config() -> (String, String, String) {
              [check.swap]\n\
              command = \"check_swap -w 20% -c 10%\"\n"
                 .to_string(),
-            "service.disk_root = { check = \"disk\", vars.path = \"/\" }\n\
-             service.load = {}\n\
-             service.swap = {}\n",
+            &["disk_root", "load", "swap"][..],
         ),
         None => {
             let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
@@ -658,17 +656,25 @@ fn localhost_config() -> (String, String, String) {
                     cpus * 2,
                     cpus * 4
                 ),
-                "service.disk_root = { check = \"disk\", vars.path = \"/\" }\n\
-                 service.load = {}\n",
+                &["disk_root", "load"][..],
             )
         }
     };
-    let roles = format!("[role.linux]\ninterval = \"1m\"\n{services}");
+    let mut objects = String::from("[service.disk_root]\ncheck = \"disk\"\nvars.path = \"/\"\n");
+    for s in &services[1..] {
+        objects.push_str(&format!("\n[service.{s}]\n"));
+    }
+    let list: Vec<String> = services.iter().map(|s| q(s)).collect();
+    objects.push_str(&format!(
+        "\n[servicegroup.linux]\ntitle = \"Linux\"\nservices = [{}]\n",
+        list.join(", ")
+    ));
     let hosts = format!(
-        "[[host]]\nname = {}\naddress = \"127.0.0.1\"\nroles = [\"linux\"]\n",
+        "[hostgroup.linux]\ntitle = \"Linux Servers\"\nservicegroups = [\"linux\"]\n\
+         \n[[host]]\nname = {}\naddress = \"127.0.0.1\"\ngroups = [\"linux\"]\n",
         q(&hostname())
     );
-    (checks, roles, hosts)
+    (checks, objects, hosts)
 }
 
 pub(crate) fn plugin_dir() -> Option<PathBuf> {
@@ -788,7 +794,7 @@ from = "Watcher <watcher@example.com>"
                 "conf.d/contacts.toml",
                 "conf.d/notify.toml",
                 "conf.d/checks.toml",
-                "conf.d/roles.toml",
+                "conf.d/services.toml",
                 "conf.d/hosts.toml"
             ]
         );

@@ -18,13 +18,14 @@ const CONFIG: &str = r#"
 command = "check_http -H $host.address$"
 interval = "1h"
 
-[role.web]
-hosts = { tags = ["web"] }
-service.http = {}
+[service.http]
+
+[hostgroup.web]
+services = ["http"]
 
 [[host]]
 name = "web01"
-tags = ["web"]
+groups = ["web"]
 
 [[host]]
 name = "db01"

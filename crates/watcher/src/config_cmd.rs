@@ -15,8 +15,8 @@ pub enum Command {
 #[derive(clap::Args)]
 pub struct ExplainArgs {
     /// `<host>`, `<host>/<service>`, or `<kind> <name>` with kind one of
-    /// host, service, role, check, hostgroup, servicegroup, contact,
-    /// contactgroup, notify.
+    /// host, service, check, hostgroup, servicegroup, contact, contactgroup,
+    /// notify.
     #[arg(required = true, num_args = 1..=2)]
     target: Vec<String>,
 
@@ -144,9 +144,9 @@ fn summary(out: &mut impl Write, config: &Config, warnings: usize) -> io::Result
     let mut parts = vec![
         plural(config.files.len(), "file"),
         plural(config.hosts.len(), "host"),
-        plural(config.roles.len(), "role"),
         plural(config.checks.len(), "check"),
-        plural(config.services.len(), "service"),
+        plural(config.service_objects.len(), "service"),
+        format!("{} on hosts", config.services.len()),
     ];
     if !config.contacts.is_empty() {
         parts.push(plural(config.contacts.len(), "contact"));

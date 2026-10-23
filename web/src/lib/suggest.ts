@@ -71,20 +71,17 @@ export class Suggest {
 		return uniq(this.of(kind).flatMap((o) => scalars(o.fields[key])));
 	}
 
-	tags(): string[] {
-		return this.used('host', 'tags');
-	}
-
 	nodes(): string[] {
-		return uniq([...this.used('host', 'node'), ...this.used('role', 'node')]);
+		return this.used('host', 'node');
 	}
 
-	/** Service names: checks, role and host service entries, live services. */
+	/** Service names: services on hosts, service objects, host services, checks. */
 	serviceNames(): Option[] {
 		const out = new Map<string, string>();
-		for (const s of this.services) out.set(s, 'service');
-		for (const o of [...this.of('role'), ...this.of('host')]) {
-			if (isTable(o.fields.service)) for (const s of Object.keys(o.fields.service)) out.set(s, `${o.kind} ${o.name}`);
+		for (const s of this.services) out.set(s, 'on hosts');
+		for (const o of this.of('service')) out.set(o.name, 'service');
+		for (const o of this.of('host')) {
+			if (isTable(o.fields.service)) for (const s of Object.keys(o.fields.service)) if (!out.has(s)) out.set(s, `host ${o.name}`);
 		}
 		for (const c of this.of('check')) if (!out.has(c.name)) out.set(c.name, 'check');
 		return [...out].sort(([a], [b]) => a.localeCompare(b)).map(([value, hint]) => ({ value, hint }));
@@ -135,8 +132,8 @@ export class Suggest {
 				return [];
 			case 'command':
 				return this.commands(kind);
-			case 'tags':
-				return this.tags().map((value) => ({ value }));
+			case 'for_each':
+				return this.varNames(true).map((value) => ({ value }));
 			case 'node':
 				return this.nodes().map((value) => ({ value }));
 			case 'host_check':
@@ -158,7 +155,7 @@ export class Suggest {
 		}
 	}
 
-	/** Options for a selector input, by its key (`hosts.tags`, ...). */
+	/** Options for a selector input, by its key (`hosts.groups`, ...). */
 	selector(selects: 'host' | 'service', key: string): Option[] {
 		const hosts = () => this.names('host');
 		switch (key) {
@@ -166,15 +163,12 @@ export class Suggest {
 				return selects === 'host' ? hosts() : this.serviceNames();
 			case 'address':
 				return this.used('host', 'address').map((value) => ({ value }));
-			case 'tags':
-			case 'hosts.tags':
-				return this.tags().map((value) => ({ value }));
 			case 'node':
 				return this.nodes().map((value) => ({ value }));
-			case 'roles':
-				return this.names('role');
 			case 'groups':
 				return this.names(selects === 'host' ? 'hostgroup' : 'servicegroup');
+			case 'hosts.groups':
+				return this.names('hostgroup');
 			case 'checks':
 				return this.names('check');
 			case 'hosts.name':

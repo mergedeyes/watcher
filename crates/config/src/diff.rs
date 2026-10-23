@@ -88,8 +88,6 @@ fn names(list: &[Assigned]) -> Vec<&str> {
 fn same_host(a: &Host, b: &Host) -> bool {
     a.address == b.address
         && a.node == b.node
-        && names(&a.roles) == names(&b.roles)
-        && a.tags == b.tags
         && names(&a.groups) == names(&b.groups)
         && a.vars == b.vars
         && a.host_check == b.host_check
@@ -164,9 +162,10 @@ mod tests {
             r#"
 [check.ping]
 command = "check_ping -H $host.address$"
-[role.base]
-hosts = {}
-service.ping = {}
+[service.ping]
+[hostgroup.base]
+members = ["*"]
+services = ["ping"]
 [[host]]
 name = "a"
 [[host]]
@@ -177,11 +176,12 @@ name = "b"
             r#"
 [check.ping]
 command = "check_ping -H $host.address$"
-[role.base]
-hosts = {}
-service.ping = {}
+[service.ping]
+[hostgroup.base]
+members = ["*"]
+services = ["ping"]
 [hostgroup.all]
-members = {}
+members = ["*"]
 [[host]]
 name = "a"
 address = "10.0.0.1"

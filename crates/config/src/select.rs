@@ -1,10 +1,9 @@
-//! Selectors: which hosts or services a role, group or notify rule applies
-//! to.
+//! Selectors: which hosts or services a notify rule applies to.
 //!
 //! A selector is a table; every field present must match (AND), a list
 //! matches any of its values (OR). `exclude` removes matches, `expr` is an
 //! expression for what the fields can't say. A plain list is shorthand for
-//! names. Matching returns why, e.g. `tag prod, node dc1`, for the Config
+//! names. Matching returns why, e.g. `group prod, node dc1`, for the Config
 //! Tree.
 
 use crate::expr::{Expr, Subject};
@@ -15,13 +14,13 @@ use toml::Value;
 
 /// A name pattern with `*` and `?`.
 #[derive(Debug, Clone)]
-struct Glob {
-    text: String,
+pub(crate) struct Glob {
+    pub(crate) text: String,
     re: Regex,
 }
 
 impl Glob {
-    fn new(text: &str) -> Self {
+    pub(crate) fn new(text: &str) -> Self {
         let mut pattern = String::from("^");
         for c in text.chars() {
             match c {
@@ -38,11 +37,11 @@ impl Glob {
         }
     }
 
-    fn is_match(&self, s: &str) -> bool {
+    pub(crate) fn is_match(&self, s: &str) -> bool {
         self.re.is_match(s)
     }
 
-    fn is_pattern(&self) -> bool {
+    pub(crate) fn is_pattern(&self) -> bool {
         self.text.contains(['*', '?'])
     }
 }
@@ -51,9 +50,7 @@ impl Glob {
 pub struct HostSelector {
     names: Vec<Glob>,
     addresses: Vec<Glob>,
-    tags: Vec<String>,
     nodes: Vec<String>,
-    roles: Vec<String>,
     groups: Vec<String>,
     vars: BTreeMap<String, Vec<String>>,
     exclude: Option<Box<HostSelector>>,
@@ -64,9 +61,7 @@ pub struct HostSelector {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ref {
     Host,
-    Tag,
     Node,
-    Role,
     HostGroup,
     Check,
     ServiceGroup,
@@ -93,9 +88,7 @@ impl HostSelector {
                 "address" => {
                     sel.addresses = strings(v, key)?.iter().map(|s| Glob::new(s)).collect()
                 }
-                "tags" => sel.tags = strings(v, key)?,
                 "node" => sel.nodes = strings(v, key)?,
-                "roles" => sel.roles = strings(v, key)?,
                 "groups" => sel.groups = strings(v, key)?,
                 "vars" => {
                     let Value::Table(vars) = v else {
@@ -122,8 +115,8 @@ impl HostSelector {
                 }
                 other => {
                     return Err(format!(
-                        "unknown field {other:?} (expected name, address, tags, node, roles, \
-                         groups, vars, exclude or expr)"
+                        "unknown field {other:?} (expected name, address, node, groups, vars, \
+                         exclude or expr)"
                     ));
                 }
             }
@@ -145,17 +138,9 @@ impl HostSelector {
             let g = self.addresses.iter().find(|g| g.is_match(&host.address))?;
             why.push(format!("address {}", g.text));
         }
-        if !self.tags.is_empty() {
-            let t = self.tags.iter().find(|t| host.tags.contains(t))?;
-            why.push(format!("tag {t}"));
-        }
         if !self.nodes.is_empty() {
             let n = self.nodes.iter().find(|n| host.node.as_ref() == Some(n))?;
             why.push(format!("node {n}"));
-        }
-        if !self.roles.is_empty() {
-            let r = self.roles.iter().find(|r| host.has_role(r))?;
-            why.push(format!("role {r}"));
         }
         if !self.groups.is_empty() {
             let g = self.groups.iter().find(|g| host.in_group(g))?;
@@ -188,33 +173,12 @@ impl HostSelector {
         })
     }
 
-    /// Whether the selector (or its `exclude`/`expr`) looks at roles or
-    /// host groups, which role selectors can't.
-    pub(crate) fn uses_roles_or_groups(&self) -> bool {
-        !self.roles.is_empty()
-            || !self.groups.is_empty()
-            || self.expr.as_ref().is_some_and(|e| e.uses_roles_or_groups())
-            || self
-                .exclude
-                .as_ref()
-                .is_some_and(|e| e.uses_roles_or_groups())
-    }
-
-    /// Whether it looks at host groups, which host group members can't.
-    pub(crate) fn uses_groups(&self) -> bool {
-        !self.groups.is_empty()
-            || self.expr.as_ref().is_some_and(|e| e.uses_groups())
-            || self.exclude.as_ref().is_some_and(|e| e.uses_groups())
-    }
-
     /// Calls `f` with every name the selector refers to.
     pub(crate) fn refs(&self, f: &mut impl FnMut(Ref, &str)) {
         for g in self.names.iter().filter(|g| !g.is_pattern()) {
             f(Ref::Host, &g.text);
         }
-        self.tags.iter().for_each(|t| f(Ref::Tag, t));
         self.nodes.iter().for_each(|n| f(Ref::Node, n));
-        self.roles.iter().for_each(|r| f(Ref::Role, r));
         self.groups.iter().for_each(|g| f(Ref::HostGroup, g));
         if let Some(ex) = &self.exclude {
             ex.refs(f);
@@ -329,14 +293,6 @@ impl ServiceSelector {
         })
     }
 
-    /// Whether it looks at service groups, which service group members
-    /// can't.
-    pub(crate) fn uses_groups(&self) -> bool {
-        !self.groups.is_empty()
-            || self.expr.as_ref().is_some_and(|e| e.uses_service_groups())
-            || self.exclude.as_ref().is_some_and(|e| e.uses_groups())
-    }
-
     /// Calls `f` with every name the selector refers to.
     pub(crate) fn refs(&self, f: &mut impl FnMut(Ref, &str)) {
         self.checks.iter().for_each(|c| f(Ref::Check, c));
@@ -385,17 +341,21 @@ mod tests {
     use super::*;
     use crate::{Assigned, Reason, Var};
 
-    fn host(name: &str, tags: &[&str]) -> Host {
+    fn host(name: &str, groups: &[&str]) -> Host {
         Host {
             name: name.into(),
             address: format!("{name}.example"),
             node: Some("dc1".into()),
-            roles: vec![Assigned {
-                name: "linux".into(),
-                reason: Reason::Included { by: "x".into() },
-            }],
-            tags: tags.iter().map(|t| t.to_string()).collect(),
-            groups: Vec::new(),
+            groups: groups
+                .iter()
+                .map(|g| Assigned {
+                    name: g.to_string(),
+                    reason: Reason::Listed {
+                        by: "x".into(),
+                        origin: Default::default(),
+                    },
+                })
+                .collect(),
             vars: [("os".to_string(), Var::Text("debian".into()))].into(),
             host_check: None,
             graph: None,
@@ -414,8 +374,10 @@ mod tests {
     fn host_fields_and_together() {
         let web = host("web01", &["web", "prod"]);
         assert_eq!(
-            sel(r#"{ tags = ["db", "prod"] }"#).matches(&web).as_deref(),
-            Some("tag prod")
+            sel(r#"{ groups = ["db", "prod"] }"#)
+                .matches(&web)
+                .as_deref(),
+            Some("group prod")
         );
         assert_eq!(
             sel(r#"{ name = "web*", node = "dc1" }"#)
@@ -435,25 +397,21 @@ mod tests {
         );
         assert_eq!(sel("{}").matches(&web).as_deref(), Some("all hosts"));
         assert!(
-            sel(r#"{ tags = ["web"], node = "dc2" }"#)
+            sel(r#"{ groups = ["web"], node = "dc2" }"#)
                 .matches(&web)
                 .is_none()
         );
         assert!(
-            sel(r#"{ tags = ["web"], exclude = { name = "web0?" } }"#)
+            sel(r#"{ groups = ["web"], exclude = { name = "web0?" } }"#)
                 .matches(&web)
                 .is_none()
         );
         assert!(sel(r#"{ vars.missing = "x" }"#).matches(&web).is_none());
         assert_eq!(
-            sel(r#"{ expr = 'host.tags contains "web" or host.node == "dc9"' }"#)
+            sel(r#"{ expr = 'host.groups contains "web" or host.node == "dc9"' }"#)
                 .matches(&web)
                 .as_deref(),
             Some("expr")
-        );
-        assert_eq!(
-            sel(r#"{ roles = ["linux"] }"#).matches(&web).as_deref(),
-            Some("role linux")
         );
     }
 
@@ -463,7 +421,7 @@ mod tests {
             let v: toml::Table = toml::from_str(&format!("s = {toml}")).unwrap();
             HostSelector::parse(&v["s"]).unwrap_err()
         };
-        assert!(err(r#"{ tag = "x" }"#).contains("unknown field \"tag\""));
+        assert!(err(r#"{ tags = ["x"] }"#).contains("unknown field \"tags\""));
         assert!(err("42").contains("expected a list"));
         assert!(err(r#"{ expr = 'service.name == "x"' }"#).contains("not available"));
         assert!(err(r#"{ expr = 'host.nme == "x"' }"#).contains("expr:"));

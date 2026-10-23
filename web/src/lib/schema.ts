@@ -69,35 +69,40 @@ const PASSIVE: Field[] = [
 ];
 
 const THRESHOLDS: Field = { key: 'thresholds', label: 'Thresholds', type: 'thresholds', help: '> 100, >= 10GB, 10:20, @10:20' };
+const GRAPHS: Field = { key: 'graphs', label: 'Graphs', type: 'bool', default: true, help: 'graphs of its metrics' };
+const SERVICES: Field = { key: 'services', label: 'Services', type: 'list', suggest: 'service', help: 'comma-separated' };
+const SERVICEGROUPS: Field = {
+	key: 'servicegroups',
+	label: 'Service Groups',
+	type: 'list',
+	suggest: 'servicegroup',
+	help: 'their services, comma-separated'
+};
+const HOST_CHECK: Field = { key: 'host_check', label: 'Host Check', type: 'text', help: 'service that gives UP/DOWN' };
+const GRAPH: Field = { key: 'graph', label: 'Graph', type: 'text', help: 'host page graphs; default: Host Check' };
 
 export const SCHEMAS: Record<Kind, Group[]> = {
 	check: [
 		{ title: 'Check', fields: [NAME, TITLE, ...CHECK] },
-		{ title: 'Evaluation', fields: [THRESHOLDS, { ...VARS, help: 'defaults for $name$ in the command' }] },
+		{ title: 'Evaluation', fields: [THRESHOLDS, { ...VARS, help: 'defaults for $name$ in the command' }, GRAPHS] },
 		{ title: 'Scheduling', fields: [...SCHEDULE, ...PASSIVE] }
 	],
-	role: [
+	service: [
 		{
-			title: 'Role',
+			title: 'Service',
 			fields: [
 				NAME,
 				TITLE,
-				{ key: 'include', label: 'Include', type: 'list', suggest: 'role', help: 'roles, comma-separated; this role wins' },
-				{ key: 'hosts', label: 'Hosts', type: 'selector', selects: 'host', help: 'assign by rule; hosts can also list the role' }
+				{ key: 'check', label: 'Check', type: 'text', suggestOne: 'check', help: 'default: the check named like the service' },
+				{ ...CHECK[0]!, help: 'instead of a check' },
+				...CHECK.slice(1, 3),
+				{ key: 'for_each', label: 'For Each', type: 'text', help: 'host var with a table per item: one service each (disk_root, …)' },
+				{ key: 'groups', label: 'Service Groups', type: 'list', suggest: 'servicegroup', help: 'comma-separated' },
+				ENABLED
 			]
 		},
-		{ title: 'Services', fields: [{ key: 'service', label: 'Services', type: 'services' }] },
-		{
-			title: 'Hosts Get',
-			fields: [
-				{ key: 'host_check', label: 'Host Check', type: 'text', help: 'service that gives UP/DOWN' },
-				{ key: 'graph', label: 'Graph', type: 'text', help: 'host page graphs; default: Host Check' },
-				{ key: 'node', label: 'Node', type: 'text', placeholder: 'local' },
-				{ key: 'groups', label: 'Host Groups', type: 'list', suggest: 'hostgroup', help: 'comma-separated' },
-				{ ...VARS, help: 'host var defaults' }
-			]
-		},
-		{ title: 'Service Defaults', fields: SCHEDULE }
+		{ title: 'Evaluation', fields: [THRESHOLDS, { ...VARS, help: 'over the check’s; host vars win' }, GRAPHS] },
+		{ title: 'Scheduling', fields: [...SCHEDULE, ...PASSIVE] }
 	],
 	host: [
 		{
@@ -105,27 +110,35 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 			fields: [
 				NAME,
 				{ key: 'address', label: 'Address', type: 'text', placeholder: 'defaults to name' },
-				{ key: 'roles', label: 'Roles', type: 'list', suggest: 'role', help: 'comma-separated' },
-				{ key: 'tags', label: 'Tags', type: 'list', help: 'comma-separated' },
 				{ key: 'groups', label: 'Host Groups', type: 'list', suggest: 'hostgroup', help: 'comma-separated' },
 				{ key: 'node', label: 'Node', type: 'text', placeholder: 'local' },
-				{ key: 'host_check', label: 'Host Check', type: 'text', help: 'service that gives UP/DOWN; default: from roles' },
-				{ key: 'graph', label: 'Graph', type: 'text', help: 'host page graphs; default: Host Check' }
+				{ ...HOST_CHECK, help: 'service that gives UP/DOWN; default: from host groups' },
+				GRAPH
 			]
 		},
-		{ title: 'Services', fields: [{ key: 'service', label: 'Services', type: 'services', help: 'own services, or overrides of role services' }] },
+		{ title: 'Services', fields: [SERVICES, SERVICEGROUPS] },
+		{
+			title: 'Host Services',
+			fields: [{ key: 'service', label: 'Overrides', type: 'services', help: 'settings of assigned services on this host, or one-off services' }]
+		},
 		{ title: 'Other', fields: [VARS, ENABLED] }
 	],
 	hostgroup: [
 		{
 			title: 'Host Group',
-			fields: [NAME, TITLE, { key: 'members', label: 'Members', type: 'selector', selects: 'host', help: 'hosts and roles can also list the group' }]
-		}
+			fields: [
+				NAME,
+				TITLE,
+				{ key: 'members', label: 'Members', type: 'list', suggest: 'host', help: 'host names, * and ? match; hosts can also list the group' }
+			]
+		},
+		{ title: 'Services', fields: [{ ...SERVICES, help: 'for every member, comma-separated' }, SERVICEGROUPS] },
+		{ title: 'Hosts Get', fields: [HOST_CHECK, GRAPH, { ...VARS, help: 'host var defaults' }] }
 	],
 	servicegroup: [
 		{
 			title: 'Service Group',
-			fields: [NAME, TITLE, { key: 'members', label: 'Members', type: 'selector', selects: 'service', help: 'role and host services can also list the group' }]
+			fields: [NAME, TITLE, { ...SERVICES, help: 'comma-separated; services can also list the group' }]
 		}
 	],
 	contact: [
@@ -170,9 +183,9 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 
 /** Config kinds with their page path and the file new objects go to (as on the server). */
 export const KINDS: { kind: Kind; path: string; label: string; one: string; file: string }[] = [
-	{ kind: 'host', path: 'hosts', label: 'Hosts', one: 'Host', file: 'ui/hosts.toml' },
-	{ kind: 'role', path: 'roles', label: 'Roles', one: 'Role', file: 'ui/roles.toml' },
 	{ kind: 'check', path: 'checks', label: 'Checks', one: 'Check', file: 'ui/checks.toml' },
+	{ kind: 'service', path: 'services', label: 'Services', one: 'Service', file: 'ui/services.toml' },
+	{ kind: 'host', path: 'hosts', label: 'Hosts', one: 'Host', file: 'ui/hosts.toml' },
 	{ kind: 'hostgroup', path: 'hostgroups', label: 'Host Groups', one: 'Host Group', file: 'ui/groups.toml' },
 	{ kind: 'servicegroup', path: 'servicegroups', label: 'Service Groups', one: 'Service Group', file: 'ui/groups.toml' },
 	{ kind: 'contact', path: 'contacts', label: 'Contacts', one: 'Contact', file: 'ui/contacts.toml' },
@@ -185,24 +198,22 @@ export const SELECTOR_FIELDS: Record<'host' | 'service', [string, string, string
 	host: [
 		['name', 'Name', 'web*, db01'],
 		['address', 'Address', '10.0.1.*'],
-		['tags', 'Tags', 'prod, web'],
 		['node', 'Node', 'site-a'],
-		['roles', 'Roles', 'linux'],
 		['groups', 'Host Groups', 'dc1'],
-		['expr', 'Expression', 'host.tags contains "web" or host.node == "dc2"']
+		['expr', 'Expression', 'host.groups contains "web" or host.node == "dc2"']
 	],
 	service: [
 		['name', 'Name', 'disk_*'],
 		['checks', 'Checks', 'disk'],
 		['groups', 'Service Groups', 'webshop'],
 		['hosts.name', 'Host Name', 'web*'],
-		['hosts.tags', 'Host Tags', 'prod'],
-		['expr', 'Expression', 'service.name ~ "^disk" and host.tags contains "prod"']
+		['hosts.groups', 'Host Groups', 'prod'],
+		['expr', 'Expression', 'service.name ~ "^disk" and host.groups contains "prod"']
 	]
 };
 
-/** A service row: name, check, for_each, groups, enabled (`yes`/`no`/``), original name. */
-export type ServiceRow = [string, string, string, string, string, string];
+/** A host service row: name, check, groups, enabled (`yes`/`no`/``), original name. */
+export type ServiceRow = [string, string, string, string, string];
 
 /** Form state: strings for inputs, rows for vars, thresholds and services, a map for selectors. */
 export type FormValue =
@@ -311,7 +322,7 @@ export function toForm(kind: Kind, raw: Record<string, unknown>): FormValues {
 				values[f.key] = Object.entries(isTable(v) ? v : {}).map(([name, e]) => {
 					const entry = isTable(e) ? e : {};
 					const enabled = entry.enabled === false ? 'no' : entry.enabled === true ? 'yes' : '';
-					return [name, str(entry.check), str(entry.for_each), list(entry.groups).join(', '), enabled, name] as ServiceRow;
+					return [name, str(entry.check), list(entry.groups).join(', '), enabled, name] as ServiceRow;
 				});
 				break;
 			default:
@@ -329,7 +340,7 @@ function same(a: unknown, b: unknown) {
 function servicesFromForm(rows: ServiceRow[], raw: unknown): unknown {
 	const before = isTable(raw) ? raw : {};
 	const out: Record<string, unknown> = {};
-	for (const [name, check, forEach, groups, enabled, orig] of rows) {
+	for (const [name, check, groups, enabled, orig] of rows) {
 		if (!name.trim()) continue;
 		const entry: Record<string, unknown> = isTable(before[orig]) ? copy(before[orig]) : {};
 		const set = (key: string, value: unknown) => {
@@ -337,7 +348,6 @@ function servicesFromForm(rows: ServiceRow[], raw: unknown): unknown {
 			else entry[key] = value;
 		};
 		set('check', check.trim());
-		set('for_each', forEach.trim());
 		set('groups', items(groups).length ? items(groups) : undefined);
 		set('enabled', enabled === 'no' ? false : enabled === 'yes' ? true : undefined);
 		out[name.trim()] = entry;
@@ -348,7 +358,7 @@ function servicesFromForm(rows: ServiceRow[], raw: unknown): unknown {
 /**
  * The fields to write: `raw` with the form's keys replaced. Empty inputs
  * and default booleans remove the key; a value equal to what was written
- * keeps its original form (`roles = "x"` stays a string).
+ * keeps its original form (`groups = "x"` stays a string).
  */
 export function fromForm(kind: Kind, raw: Record<string, unknown>, values: FormValues): Record<string, unknown> {
 	const out: Record<string, unknown> = { ...raw };

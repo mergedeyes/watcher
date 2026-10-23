@@ -348,7 +348,7 @@ paths:
     get:
       summary: Config Tree of an object in the running config (admins)
       parameters:
-        - { name: kind, in: path, required: true, schema: { type: string, enum: [host, service, role, check, hostgroup, servicegroup, contact, contactgroup, notify] } }
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [host, service, check, hostgroup, servicegroup, contact, contactgroup, notify] } }
         - { name: name, in: path, required: true, description: "host/service for services", schema: { type: string } }
       responses:
         "200":
@@ -530,6 +530,7 @@ components:
         last_change: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
         output: { type: string }
         passive: { type: boolean }
+        graphs: { type: boolean, description: Show graphs of its metrics }
         flapping: { type: boolean }
         groups: { type: array, items: { type: string }, description: Service groups }
     ServiceDetail:
@@ -547,8 +548,8 @@ components:
               type: object
               properties:
                 name: { type: [string, "null"], description: "The check it runs; null for an inline command" }
-                role: { type: [string, "null"], description: "The role it comes from; null for a host's own service" }
-                entry: { type: [string, "null"], description: "The role's service entry (for for_each services the entry they were made from)" }
+                service: { type: [string, "null"], description: "The service object it is made from (for for_each services the one they were made from); null for a host's one-off service" }
+                assigned: { type: array, items: { type: string }, description: "Why the host has it, e.g. hostgroup linux, servicegroup basics on host web01" }
                 command: { type: [string, "null"] }
                 interval_s: { type: number }
                 retry_interval_s: { type: number }
@@ -556,7 +557,7 @@ components:
                 freshness_s: { type: [number, "null"] }
                 flap_low: { type: [number, "null"] }
                 flap_high: { type: [number, "null"] }
-                origin: { type: string, description: "file:line of the service entry (role or host)" }
+                origin: { type: string, description: "file:line of the service or host service" }
     Metric:
       type: object
       properties:
@@ -577,9 +578,7 @@ components:
         name: { type: string }
         address: { type: string }
         node: { type: [string, "null"] }
-        tags: { type: array, items: { type: string } }
         vars: { type: object, description: "Values are strings, or objects (for_each data)" }
-        roles: { type: array, items: { type: string } }
         groups: { type: array, items: { type: string }, description: Host groups }
         enabled: { type: boolean }
         state: { oneOf: [{ $ref: "#/components/schemas/HostState" }, { type: "null" }], description: "From the host check; up without one; null while pending" }
@@ -655,7 +654,7 @@ components:
     ConfigObject:
       type: object
       properties:
-        kind: { type: string, enum: [check, role, host, hostgroup, servicegroup, contact, contactgroup, notify, sink] }
+        kind: { type: string, enum: [check, service, host, hostgroup, servicegroup, contact, contactgroup, notify, sink] }
         name: { type: string }
         path: { type: string }
         line: { type: integer }
@@ -664,9 +663,9 @@ components:
       type: object
       required: [kind]
       properties:
-        kind: { type: string, enum: [check, role, host, hostgroup, servicegroup, contact, contactgroup, notify, sink] }
+        kind: { type: string, enum: [check, service, host, hostgroup, servicegroup, contact, contactgroup, notify, sink] }
         name: { type: [string, "null"], description: The object to change; null creates one }
-        fields: { type: [object, "null"], description: The fields as written, with name; null deletes, example: { name: web01, address: 10.0.0.5, tags: [linux] } }
+        fields: { type: [object, "null"], description: The fields as written, with name; null deletes, example: { name: web01, address: 10.0.0.5, groups: [linux] } }
         path: { type: [string, "null"], description: "New objects: the file, relative to the object directory (default: the kind's ui/ file)" }
     Change:
       type: object
@@ -698,7 +697,7 @@ components:
     TreeNode:
       type: object
       properties:
-        kind: { type: string, description: "host, service, role, check, hostgroup, servicegroup, contact, contactgroup, notify; section or value otherwise" }
+        kind: { type: string, description: "host, service (host/service: on a host, otherwise a service object), check, hostgroup, servicegroup, contact, contactgroup, notify; section or value otherwise" }
         name: { type: string, description: "Object name to link to (host/service for services)" }
         label: { type: string }
         detail: { type: string, description: A value, or why something applies }

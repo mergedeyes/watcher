@@ -1,0 +1,32 @@
+# Services: a check with its settings. Hosts and host groups list them
+# (services = [...]), directly or in a service group (servicegroups = [...]).
+
+[service.load]
+interval = "30s"
+retry_interval = "10s"
+timeout = "10s"
+
+# One disk service per entry of the host's vars.disks: disk_root, ...
+[service.disk]
+for_each = "disks"
+interval = "30s"
+retry_interval = "10s"
+timeout = "10s"
+
+[service.http]
+
+[service.uptime]
+
+# Passive: results are pushed, e.g. from a cron job, with an API token
+# (Account page, or `watcher token create <user> <name>`):
+#   curl -X POST localhost:8080/api/v1/services/localhost/backup/result \
+#        -H "Authorization: Bearer $WATCHER_TOKEN" \
+#        -H 'content-type: application/json' \
+#        -d '{"exit_code": 0, "output": "BACKUP OK | size=12GB"}'
+[service.backup]
+passive = true
+freshness = "26h"
+
+[servicegroup.linux]
+title = "Linux"
+services = ["load", "disk"]

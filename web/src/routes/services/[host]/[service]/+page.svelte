@@ -20,20 +20,16 @@
 	/** Set when the hub has no database: there is no history to show. */
 	let noHistory = $state(false);
 
-	/** Where the service can be edited: its role entry, the host (own service or override), its check. */
+	/** Where the service can be edited: the service, the host (override or one-off service), its check. */
 	function editTargets(d: ServiceDetail): EditTarget[] {
 		const focus = (s: string) => `&focus=${encodeURIComponent(s)}`;
 		const out: EditTarget[] = [];
-		if (d.check.role)
-			out.push({
-				label: `Role ${d.check.role}`,
-				href: editHref('roles', d.check.role) + focus(d.check.entry ?? d.service),
-				hint: 'all hosts with the role'
-			});
+		if (d.check.service)
+			out.push({ label: `Service ${d.check.service}`, href: editHref('services', d.check.service), hint: 'all hosts with it' });
 		out.push({
 			label: `Host ${d.host}`,
 			href: editHref('hosts', d.host) + focus(d.service),
-			hint: d.check.role ? 'override on this host' : 'service on this host'
+			hint: d.check.service ? 'override on this host' : 'service on this host'
 		});
 		if (d.check.name) out.push({ label: `Check ${d.check.name}`, href: editHref('checks', d.check.name), hint: 'command, thresholds' });
 		return out;
@@ -144,13 +140,9 @@
 					{:else if detail.check.freshness_s !== null}
 						<tr><th>Freshness Threshold</th><td>{duration(detail.check.freshness_s)}</td></tr>
 					{/if}
-					{#if detail.check.name || detail.check.role}
-						<tr>
-							<th>Check</th>
-							<td>
-								{detail.check.name ?? 'inline command'}{#if detail.check.role}<span class="muted">&nbsp;· role {detail.check.role}</span>{/if}
-							</td>
-						</tr>
+					<tr><th>Check</th><td>{detail.check.name ?? (detail.check.command ? 'inline command' : 'passive')}</td></tr>
+					{#if detail.check.assigned.length}
+						<tr><th>Assigned By</th><td>{detail.check.assigned.join('; ')}</td></tr>
 					{/if}
 					{#if detail.groups.length}
 						<tr>
@@ -191,7 +183,9 @@
 			</section>
 		{/if}
 
-		<Graphs {host} service={name} tick={Date.parse(lastCheck ?? '') || 0} />
+		{#if detail.graphs}
+			<Graphs {host} service={name} tick={Date.parse(lastCheck ?? '') || 0} />
+		{/if}
 
 		{#if !noHistory}
 			<section class="panel">

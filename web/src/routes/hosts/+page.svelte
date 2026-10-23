@@ -33,7 +33,7 @@
 			(h) =>
 				matches(h) &&
 				(!group || h.groups.includes(group)) &&
-				(!q || [h.name, h.address, ...h.tags].some((v) => v.toLowerCase().includes(q)))
+				(!q || [h.name, h.address, ...h.groups].some((v) => v.toLowerCase().includes(q)))
 		);
 		const text = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
 		return sorter.apply(rows, {
@@ -57,7 +57,7 @@
 <div class="content">
 	<div class="page-head">
 		<h1>Hosts{group ? ` · ${group}` : ''}{filter ? ` · ${filter.toUpperCase()}` : ''}</h1>
-		<input type="search" placeholder="Search name, address, tag" bind:value={query} aria-label="Search" />
+		<input type="search" placeholder="Search name, address, group" bind:value={query} aria-label="Search" />
 	</div>
 
 	{#if !live.loaded}

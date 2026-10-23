@@ -230,7 +230,7 @@ pub fn specs(config: &Config) -> (Vec<HostSpec>, Vec<ServiceSpec>) {
             name: h.name.clone(),
             address: h.address.clone(),
             node: h.node.clone(),
-            tags: h.tags.clone(),
+            groups: h.groups.iter().map(|g| g.name.clone()).collect(),
             vars: serde_json::json!(h.vars),
         })
         .collect();

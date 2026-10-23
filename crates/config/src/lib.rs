@@ -1,11 +1,12 @@
 //! Configuration for Project Watcher: the bootstrap file (`watcher.toml`)
-//! and the object files (`conf.d/**/*.toml`) with checks, roles, hosts,
+//! and the object files (`conf.d/**/*.toml`) with checks, services, hosts,
 //! groups, contacts, notify rules and sinks.
 //!
-//! Loading compiles the object files into a [`Config`]: roles are assigned
-//! to hosts (listed or by selector), every service a host gets is resolved
-//! layer by layer (host > role > included role > check > defaults) with the
-//! source of each value recorded, and command macros are expanded.
+//! Loading compiles the object files into a [`Config`]: hosts get services
+//! listed on them, on their host groups and in the service groups of
+//! either; every service is resolved layer by layer (host > host group >
+//! service > check > defaults) with the source of each value recorded, and
+//! command macros are expanded.
 
 mod bootstrap;
 pub mod check_dirs;
@@ -78,8 +79,8 @@ pub type Vars = BTreeMap<String, Var>;
 pub enum Layer {
     Default,
     Check,
-    Role,
-    RoleService,
+    Service,
+    HostGroup,
     Host,
     ForEach,
     HostService,
@@ -89,24 +90,23 @@ pub enum Layer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Source {
     pub layer: Layer,
-    /// The check, role or host; for `RoleService`, `role.service`.
+    /// The check, service, host group or host; for `ForEach`
+    /// `host.vars.<var>.<key>`, for `HostService` `host.service`.
     pub name: String,
     pub origin: Origin,
 }
 
-/// Why an object has a role or is in a group.
+/// Why a host has a service, or an object is in a group.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reason {
-    /// Listed by name, at `origin` (the host, role, service or contact that
-    /// lists it, or the group's member list).
+    /// Listed by name, at `origin` (the host, group, service or contact that
+    /// lists it).
     Listed { by: String, origin: Origin },
-    /// A selector matched; `matched` says which fields.
+    /// A pattern or selector matched; `matched` says which.
     Selector { origin: Origin, matched: String },
-    /// Included by another role.
-    Included { by: String },
 }
 
-/// A role or group membership, with the reason.
+/// A service assignment or group membership, with the reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assigned {
     pub name: String,
@@ -123,16 +123,16 @@ pub struct Check {
     pub origin: Origin,
 }
 
-/// What a kind of host gets.
-#[derive(Debug, Clone)]
-pub struct Role {
+/// A service as defined on its own (`[service.<name>]`), before it is
+/// assigned to hosts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ServiceObject {
     pub name: String,
     pub title: Option<String>,
-    pub include: Vec<String>,
-    /// Hosts that get the role without listing it.
-    pub hosts: Option<HostSelector>,
-    /// Services the role brings (after includes), by name.
-    pub services: Vec<String>,
+    /// The check it runs; `None` for an inline command or passive service.
+    pub check: Option<String>,
+    /// Service groups it lists.
+    pub groups: Vec<String>,
     pub origin: Origin,
 }
 
@@ -143,12 +143,9 @@ pub struct Host {
     pub address: String,
     /// The node that runs this host's checks; `None` for the local instance.
     pub node: Option<String>,
-    /// Roles, including those of selectors and includes.
-    pub roles: Vec<Assigned>,
-    pub tags: Vec<String>,
     /// Host groups.
     pub groups: Vec<Assigned>,
-    /// The host's own vars over those of its roles.
+    /// The host's own vars over those of its host groups.
     pub vars: Vars,
     /// The service whose result is the host state (UP/DOWN); without one
     /// the host counts as UP.
@@ -168,10 +165,6 @@ impl Host {
     /// check.
     pub fn graph_check(&self) -> Option<&str> {
         self.graph.as_deref().or(self.host_check.as_deref())
-    }
-
-    pub fn has_role(&self, role: &str) -> bool {
-        self.roles.iter().any(|r| r.name == role)
     }
 
     pub fn in_group(&self, group: &str) -> bool {
@@ -195,6 +188,8 @@ pub struct Settings {
     /// Flap detection thresholds; `None` when turned off.
     pub flap: Option<FlapThresholds>,
     pub thresholds: BTreeMap<String, ThresholdSpec>,
+    /// Show graphs of its metrics.
+    pub graphs: bool,
 }
 
 impl Settings {
@@ -214,8 +209,12 @@ pub struct Service {
     pub host: usize,
     /// The check it runs, if it uses one (not for inline commands).
     pub check: Option<String>,
-    /// The role whose service entry defines it; `None` for a host's own.
-    pub role: Option<String>,
+    /// The service object it is made from; `None` for a host's one-off
+    /// service.
+    pub object: Option<String>,
+    /// Why the host has it: listed on the host or a host group, directly or
+    /// in a service group. Empty for one-off services.
+    pub assigned: Vec<Assigned>,
     /// The `for_each` var and entry key it was made from.
     pub for_each: Option<(String, String)>,
     /// Command text before macro expansion.
@@ -230,7 +229,7 @@ pub struct Service {
     /// Stable hash of what determines the meaning of the data (command and
     /// output format). A change marks where data from a new check begins.
     pub check_hash: String,
-    /// Where the service is defined: the role service entry, or the host's
+    /// Where the service is defined: the service object, or the host's
     /// `service.<name>`.
     pub origin: Origin,
     /// Where each setting and `vars.<x>` came from, by key.
@@ -250,6 +249,14 @@ impl Service {
 pub struct Group {
     pub name: String,
     pub title: Option<String>,
+    /// As written: host names and patterns (host groups), contacts
+    /// (contact groups); empty for service groups.
+    pub members: Vec<String>,
+    /// Services it lists: those its hosts get (host groups), its members
+    /// (service groups).
+    pub services: Vec<String>,
+    /// Service groups whose services its hosts get (host groups).
+    pub servicegroups: Vec<String>,
     pub origin: Origin,
 }
 
@@ -355,8 +362,10 @@ impl Sink {
 pub struct Config {
     pub files: Vec<PathBuf>,
     pub checks: Vec<Check>,
-    pub roles: Vec<Role>,
+    /// Services as defined, before they are assigned.
+    pub service_objects: Vec<ServiceObject>,
     pub hosts: Vec<Host>,
+    /// Services on hosts.
     pub services: Vec<Service>,
     pub hostgroups: Vec<Group>,
     pub servicegroups: Vec<Group>,

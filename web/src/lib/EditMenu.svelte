@@ -3,7 +3,7 @@
 	export interface EditTarget {
 		label: string;
 		href: string;
-		/** What editing there changes, e.g. "all hosts with the role". */
+		/** What editing there changes, e.g. "all hosts in the group". */
 		hint?: string;
 	}
 </script>

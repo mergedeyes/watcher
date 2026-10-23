@@ -18,7 +18,9 @@
 	let services = $derived(live.services.filter((s) => s.host === name));
 
 	/** The service whose graphs show: picked (`?graph=`), or the host's `graph`. */
-	let graph = $derived(page.url.searchParams.get('graph') ?? host?.graph ?? null);
+	let picked = $derived(page.url.searchParams.get('graph') ?? host?.graph ?? null);
+	/** Null when that service has graphs turned off. */
+	let graph = $derived(picked && live.find(name, picked)?.graphs !== false ? picked : null);
 	let graphCheck = $derived(graph ? (live.find(name, graph)?.last_check ?? null) : null);
 
 	function pick(service: string) {
@@ -75,7 +77,7 @@
 					<EditMenu
 						targets={[
 							{ label: `Host ${host.name}`, href: editHref('hosts', host.name) },
-							...host.roles.map((r) => ({ label: `Role ${r}`, href: editHref('roles', r), hint: 'all hosts with the role' }))
+							...host.groups.map((g) => ({ label: `Host Group ${g}`, href: editHref('hostgroups', g), hint: 'all hosts in the group' }))
 						]}
 					/>
 					<ConfigTree kind="host" name={host.name} />
@@ -119,8 +121,6 @@
 				<tbody>
 					<tr><th>Address</th><td class="mono">{host.address}</td></tr>
 					{#if host.node}<tr><th>Node</th><td>{host.node}</td></tr>{/if}
-					{#if host.roles.length}<tr><th>Roles</th><td>{host.roles.join(', ')}</td></tr>{/if}
-					<tr><th>Tags</th><td>{#each host.tags as t, i (i)}<span class="tag">{t}</span> {/each}</td></tr>
 					{#if host.groups.length}
 						<tr>
 							<th>Host Groups</th>
@@ -144,7 +144,7 @@
 		{#snippet picker()}
 			<select class="pick" aria-label="Service" value={graph ?? ''} onchange={(e) => pick(e.currentTarget.value)}>
 				{#if !graph}<option value="">–</option>{/if}
-				{#each services.map((s) => s.service).sort() as s (s)}<option value={s}>{s}</option>{/each}
+				{#each services.filter((s) => s.graphs).map((s) => s.service).sort() as s (s)}<option value={s}>{s}</option>{/each}
 			</select>
 		{/snippet}
 		{#if graph}

@@ -16,6 +16,8 @@ export interface ServiceView {
 	last_change: string | null;
 	output: string;
 	passive: boolean;
+	/** Show graphs of its metrics. */
+	graphs: boolean;
 	/** The state changes too often; problem notifications are held back. */
 	flapping: boolean;
 	/** Service groups. */
@@ -34,10 +36,8 @@ export interface HostView {
 	name: string;
 	address: string;
 	node: string | null;
-	tags: string[];
 	/** Text, or tables (for_each data). */
 	vars: Record<string, unknown>;
-	roles: string[];
 	/** Host groups. */
 	groups: string[];
 	enabled: boolean;
@@ -88,10 +88,10 @@ export interface ServiceDetail extends ServiceView {
 	check: {
 		/** The check it runs; null for an inline command. */
 		name: string | null;
-		/** The role it comes from; null for a host's own service. */
-		role: string | null;
-		/** The role's service entry (`disk` for the for_each service `disk_root`). */
-		entry: string | null;
+		/** The service object it is made from (`disk` for the for_each service `disk_root`); null for a host's one-off service. */
+		service: string | null;
+		/** Why the host has it: `hostgroup linux`, `servicegroup basics on host web01`, ... */
+		assigned: string[];
 		command: string | null;
 		interval_s: number;
 		retry_interval_s: number;
@@ -182,7 +182,7 @@ export interface ApiToken {
 
 export type Kind =
 	| 'check'
-	| 'role'
+	| 'service'
 	| 'host'
 	| 'hostgroup'
 	| 'servicegroup'
@@ -191,14 +191,14 @@ export type Kind =
 	| 'notify'
 	| 'sink';
 
-/** Kinds with a Config Tree: the config kinds plus services. */
-export type TreeKind = Exclude<Kind, 'sink'> | 'service';
+/** Kinds with a Config Tree. A `service` named `host/service` is a service on a host, otherwise a service object. */
+export type TreeKind = Exclude<Kind, 'sink'>;
 
 /** A node of a Config Tree: where an object and its values come from. */
 export interface TreeNode {
 	/** An object kind, or `section` / `value`. */
 	kind: TreeKind | 'section' | 'value';
-	/** Object name to link to (`host/service` for services). */
+	/** Object name to link to (`host/service` for services on hosts). */
 	name?: string;
 	label: string;
 	/** A value, or why something applies. */

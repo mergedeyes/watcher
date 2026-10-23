@@ -4,7 +4,7 @@ use crate::LiveService;
 use serde::Serialize;
 
 use std::time::SystemTime;
-use watcher_config::{Assigned, Config, Host, Service, Vars};
+use watcher_config::{Assigned, Config, Host, Reason, Service, Vars};
 use watcher_core::{HostState, MetricResult, State, StateType};
 
 /// RFC 3339 with milliseconds, e.g. `2026-10-22T10:00:00.123Z`.
@@ -26,6 +26,8 @@ pub struct ServiceView {
     pub last_change: Option<String>,
     pub output: String,
     pub passive: bool,
+    /// Show graphs of its metrics.
+    pub graphs: bool,
     /// The state changes too often; problem notifications are held back.
     pub flapping: bool,
     /// Service groups.
@@ -49,6 +51,7 @@ impl ServiceView {
             last_change: live.map(|l| time(l.state.last_change)),
             output: live.map(|l| l.output.clone()).unwrap_or_default(),
             passive: service.settings.passive,
+            graphs: service.settings.graphs,
             flapping: live.is_some_and(|l| l.state.flapping),
             groups: names(&service.groups),
         }
@@ -77,11 +80,12 @@ pub struct ServiceDetail {
 pub struct CheckView {
     /// The check it runs; `None` for an inline command.
     pub name: Option<String>,
-    /// The role it comes from; `None` for a host's own service.
-    pub role: Option<String>,
-    /// The role's service entry: the name, or for `for_each` services the
-    /// entry they were made from (`disk` for `disk_root`).
-    pub entry: Option<String>,
+    /// The service object it is made from (`disk` for `disk_root` made
+    /// with `for_each`); `None` for a host's one-off service.
+    pub service: Option<String>,
+    /// Why the host has it: `hostgroup linux`, `servicegroup basics on
+    /// host web01`, ...
+    pub assigned: Vec<String>,
     /// `None` for passive checks.
     pub command: Option<String>,
     pub interval_s: f64,
@@ -91,7 +95,7 @@ pub struct CheckView {
     /// Flap detection thresholds in percent; `None` when off.
     pub flap_low: Option<f64>,
     pub flap_high: Option<f64>,
-    /// Where the service is defined (role entry or host), `file:line`.
+    /// Where the service is defined (service or host), `file:line`.
     pub origin: String,
 }
 
@@ -113,15 +117,15 @@ impl ServiceDetail {
             host_check: config.is_host_check(service),
             check: CheckView {
                 name: service.check.clone(),
-                role: service.role.clone(),
-                entry: service.role.as_ref().map(|_| match &service.for_each {
-                    Some((_, key)) => service
-                        .name
-                        .strip_suffix(&format!("_{key}"))
-                        .unwrap_or(&service.name)
-                        .to_string(),
-                    None => service.name.clone(),
-                }),
+                service: service.object.clone(),
+                assigned: service
+                    .assigned
+                    .iter()
+                    .map(|a| match &a.reason {
+                        Reason::Listed { by, .. } => by.clone(),
+                        Reason::Selector { matched, .. } => matched.clone(),
+                    })
+                    .collect(),
                 command: service.command.as_ref().map(ToString::to_string),
                 interval_s: settings.interval.as_secs_f64(),
                 retry_interval_s: settings.retry_interval.as_secs_f64(),
@@ -162,9 +166,7 @@ pub struct HostView {
     pub name: String,
     pub address: String,
     pub node: Option<String>,
-    pub tags: Vec<String>,
     pub vars: Vars,
-    pub roles: Vec<String>,
     /// Host groups.
     pub groups: Vec<String>,
     pub enabled: bool,
@@ -216,9 +218,7 @@ impl HostView {
             name: host.name.clone(),
             address: host.address.clone(),
             node: host.node.clone(),
-            tags: host.tags.clone(),
             vars: host.vars.clone(),
-            roles: names(&host.roles),
             groups: names(&host.groups),
             enabled: host.enabled,
             state,

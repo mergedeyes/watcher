@@ -34,7 +34,7 @@
 			.join(', ');
 	}
 
-	/** A selector in one line: `all`, a list, or `tags: prod; node: dc1`. */
+	/** A selector in one line: `all`, a list, or `groups: prod; node: dc1`. */
 	function selector(v: unknown): string {
 		if (v === undefined || v === null) return '';
 		if (Array.isArray(v)) return v.join(', ');
@@ -46,9 +46,6 @@
 			.join('; ');
 	}
 
-	function services(v: unknown): string {
-		return v !== null && typeof v === 'object' ? Object.keys(v).join(', ') : '';
-	}
 </script>
 
 <div class="content">
@@ -74,15 +71,21 @@
 							<th>Name</th>
 							{#if kind.kind === 'host'}
 								<th>Address</th>
-								<th>Roles</th>
-								<th class="hide-narrow">Tags</th>
-							{:else if kind.kind === 'role'}
-								<th>Services</th>
-								<th class="hide-narrow">Hosts</th>
-								<th class="hide-narrow">Include</th>
+								<th>Host Groups</th>
+								<th class="hide-narrow">Services</th>
+							{:else if kind.kind === 'service'}
+								<th>Check</th>
+								<th class="hide-narrow">Service Groups</th>
 							{:else if kind.kind === 'check'}
 								<th>Command</th>
-							{:else if kind.kind === 'hostgroup' || kind.kind === 'servicegroup' || kind.kind === 'contactgroup'}
+							{:else if kind.kind === 'hostgroup'}
+								<th>Title</th>
+								<th>Members</th>
+								<th class="hide-narrow">Services</th>
+							{:else if kind.kind === 'servicegroup'}
+								<th>Title</th>
+								<th>Services</th>
+							{:else if kind.kind === 'contactgroup'}
 								<th>Title</th>
 								<th>Members</th>
 							{:else if kind.kind === 'contact'}
@@ -109,19 +112,23 @@
 								</td>
 								{#if kind.kind === 'host'}
 									<td class="mono">{f.address ?? ''}</td>
-									<td>{list(f.roles)}</td>
-									<td class="hide-narrow">
-										{#each Array.isArray(f.tags) ? f.tags : [] as tag, i (i)}<span class="tag">{tag}</span>{' '}{/each}
-									</td>
-								{:else if kind.kind === 'role'}
-									<td class="mono">{services(f.service)}</td>
-									<td class="mono hide-narrow">{selector(f.hosts)}</td>
-									<td class="hide-narrow">{list(f.include)}</td>
+									<td>{list(f.groups)}</td>
+									<td class="hide-narrow">{[list(f.services), list(f.servicegroups)].filter(Boolean).join(' · ')}</td>
+								{:else if kind.kind === 'service'}
+									<td class="mono info">{f.passive === true ? 'passive' : f.command !== undefined ? list(f.command) : list(f.check ?? o.name)}</td>
+									<td class="hide-narrow">{list(f.groups)}</td>
 								{:else if kind.kind === 'check'}
 									<td class="mono info">{f.passive === true ? 'passive' : list(f.command)}</td>
-								{:else if kind.kind === 'hostgroup' || kind.kind === 'servicegroup' || kind.kind === 'contactgroup'}
+								{:else if kind.kind === 'hostgroup'}
 									<td>{list(f.title)}</td>
-									<td class="mono">{selector(f.members)}</td>
+									<td class="mono">{list(f.members)}</td>
+									<td class="hide-narrow">{[list(f.services), list(f.servicegroups)].filter(Boolean).join(' · ')}</td>
+								{:else if kind.kind === 'servicegroup'}
+									<td>{list(f.title)}</td>
+									<td class="mono">{list(f.services)}</td>
+								{:else if kind.kind === 'contactgroup'}
+									<td>{list(f.title)}</td>
+									<td class="mono">{list(f.members)}</td>
 								{:else if kind.kind === 'contact'}
 									<td>{list(f.email)}</td>
 									<td class="mono hide-narrow info">{list(f.webhook)}</td>

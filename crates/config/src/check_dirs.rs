@@ -204,11 +204,13 @@ command = "check_gone"
 shell = true
 command = "check_gone | head -1"
 
-[role.all]
-hosts = {}
-service.here = {}
-service.gone = {}
-service.script = {}
+[service.here]
+[service.gone]
+[service.script]
+
+[hostgroup.all]
+members = ["*"]
+services = ["here", "gone", "script"]
 
 [[host]]
 name = "h1"

@@ -1,23 +1,25 @@
 //! Loading the object files into a [`Config`].
 //!
-//! Every value of a service is resolved layer by layer, least specific
-//! first: built-in defaults, the check, the role's defaults, the role's
-//! service entry, the host's vars, the `for_each` entry and the host's own
-//! `service.<name>`. Layers are merged as TOML tables, recording which
-//! layer set each key; that record is what the Config Tree shows.
+//! A host gets the services listed on it and on its host groups, directly
+//! or in a service group. Every value of a service is resolved layer by
+//! layer, least specific first: built-in defaults, the check, the service,
+//! the host's vars (over those of its host groups), the `for_each` entry
+//! and the host's own `service.<name>`. Layers are merged as TOML tables,
+//! recording which layer set each key; that record is what the Config Tree
+//! shows.
 //!
-//! Roles on the same host (and roles included side by side) are the same
-//! level: if two of them set a key to different values, that is an error
-//! naming both, never a silent pick.
+//! Host groups of the same host are the same level: if two of them set a
+//! key to different values, that is an error naming both, never a silent
+//! pick.
 
-use crate::select::{HostSelector, Ref, ServiceSelector};
+use crate::select::{Glob, HostSelector, Ref, ServiceSelector};
 use crate::{
     Assigned, Check, Config, Contact, Diagnostic, Group, Host, Layer, Loaded, NotifyOn, NotifyRule,
-    Origin, Reason, Role, Service, Settings, Severity, Source, Var, Vars, macros,
+    Origin, Reason, Service, ServiceObject, Settings, Severity, Source, Var, Vars, macros,
 };
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use toml::{Spanned, Table, Value};
@@ -123,7 +125,7 @@ impl Sink {
             .any(|d| d.severity == Severity::Error)
     }
 
-    /// Sorted by file and line; a role problem hit by several hosts is
+    /// Sorted by file and line; a group problem hit by several hosts is
     /// reported once.
     fn finish(mut self) -> Vec<Diagnostic> {
         self.diagnostics.sort();
@@ -139,7 +141,7 @@ pub(crate) struct RawFile {
     #[serde(default)]
     pub check: BTreeMap<String, Spanned<Table>>,
     #[serde(default)]
-    pub role: BTreeMap<String, Spanned<Table>>,
+    pub service: BTreeMap<String, Spanned<Table>>,
     #[serde(default)]
     pub host: Vec<Spanned<Table>>,
     #[serde(default)]
@@ -156,12 +158,10 @@ pub(crate) struct RawFile {
     pub sink: Vec<Spanned<Table>>,
 }
 
-/// Where the service entries of roles and hosts are, read separately since
-/// they sit inside other objects.
+/// Where the `service.<name>` entries of hosts are, read separately since
+/// they sit inside the hosts.
 #[derive(Default, Deserialize)]
 struct Spans {
-    #[serde(default)]
-    role: BTreeMap<String, ServiceSpans>,
     #[serde(default)]
     host: Vec<ServiceSpans>,
 }
@@ -172,24 +172,27 @@ struct ServiceSpans {
     service: BTreeMap<String, Spanned<Value>>,
 }
 
-/// Parses an object file, with a hint for files in the old format.
+/// Parses an object file.
 pub(crate) fn parse_file(text: &str) -> Result<RawFile, toml::de::Error> {
     toml::from_str(text)
 }
 
-/// A hint when `text` uses the config v1 layout, which is no longer read.
-fn v1_hint(text: &str) -> Option<&'static str> {
+/// A hint when `text` uses an older layout, which is no longer read.
+fn old_format_hint(text: &str) -> Option<&'static str> {
     let table: Table = toml::from_str(text).ok()?;
-    if table.contains_key("template") {
+    if table.contains_key("role") {
         return Some(
-            "templates are gone: put shared services and host settings in a role \
-             ([role.<name>]), shared check settings in the check",
+            "roles are gone: define [service.<name>] and assign it with services = [...] or \
+             servicegroups = [...] on a host or host group",
         );
+    }
+    if table.contains_key("template") {
+        return Some("templates are gone: define [service.<name>] and assign it to hosts");
     }
     if matches!(table.get("check"), Some(Value::Array(_))) {
         return Some(
-            "[[check]] is the old format: write [check.<name>] (what to run) and assign it \
-             with a role (service.<name> = { check = \"<name>\" }) or on the host",
+            "[[check]] is the old format: write [check.<name>] (what to run) and \
+             [service.<name>] (assigned to hosts)",
         );
     }
     None
@@ -199,14 +202,14 @@ struct RawObject {
     name: String,
     table: Table,
     origin: Origin,
-    /// Lines of the `service.<name>` entries (roles and hosts).
+    /// Lines of the `service.<name>` entries (hosts).
     services: BTreeMap<String, Origin>,
 }
 
 #[derive(Default)]
 struct RawObjects {
     checks: Vec<RawObject>,
-    roles: Vec<RawObject>,
+    services: Vec<RawObject>,
     hosts: Vec<RawObject>,
     hostgroups: Vec<RawObject>,
     servicegroups: Vec<RawObject>,
@@ -232,7 +235,7 @@ impl RawObjects {
                     },
                     |s| origin(s.start),
                 );
-                let message = match v1_hint(text) {
+                let message = match old_format_hint(text) {
                     Some(hint) => format!("{} ({hint})", err.message().trim()),
                     None => err.message().trim().to_string(),
                 };
@@ -241,15 +244,6 @@ impl RawObjects {
             }
         };
         let spans: Spans = toml::from_str(text).unwrap_or_default();
-        let service_lines = |s: Option<&ServiceSpans>| -> BTreeMap<String, Origin> {
-            s.map(|s| {
-                s.service
-                    .iter()
-                    .map(|(name, v)| (name.clone(), origin(v.span().start)))
-                    .collect()
-            })
-            .unwrap_or_default()
-        };
         let keyed = |list: &mut Vec<RawObject>, map: BTreeMap<String, Spanned<Table>>| {
             for (name, t) in map {
                 list.push(RawObject {
@@ -261,27 +255,30 @@ impl RawObjects {
             }
         };
         keyed(&mut self.checks, file.check);
+        keyed(&mut self.services, file.service);
         keyed(&mut self.hostgroups, file.hostgroup);
         keyed(&mut self.servicegroups, file.servicegroup);
         keyed(&mut self.contacts, file.contact);
         keyed(&mut self.contactgroups, file.contactgroup);
-        for (name, t) in file.role {
-            self.roles.push(RawObject {
-                services: service_lines(spans.role.get(&name)),
-                name,
-                origin: origin(t.span().start),
-                table: t.into_inner(),
-            });
-        }
         for (i, t) in file.host.into_iter().enumerate() {
             let table = t.get_ref();
             let name = table
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
+            let services = spans
+                .host
+                .get(i)
+                .map(|s| {
+                    s.service
+                        .iter()
+                        .map(|(name, v)| (name.clone(), origin(v.span().start)))
+                        .collect()
+                })
+                .unwrap_or_default();
             self.hosts.push(RawObject {
                 name: name.to_string(),
-                services: service_lines(spans.host.get(i)),
+                services,
                 origin: origin(t.span().start),
                 table: t.into_inner(),
             });
@@ -311,16 +308,17 @@ impl RawObjects {
             raw: self,
             sink,
             checks: BTreeMap::new(),
-            roles: BTreeMap::new(),
-            flat: BTreeMap::new(),
+            objects: BTreeMap::new(),
+            sg_services: BTreeMap::new(),
+            hostgroups: BTreeMap::new(),
         };
 
         c.compile_checks(&mut config);
-        c.compile_roles(&mut config);
-        let hosts = c.compile_hosts(&mut config);
-        c.compile_hostgroups(&mut config);
-        c.compile_services(&mut config, &hosts);
+        c.compile_service_objects(&mut config);
         c.compile_servicegroups(&mut config);
+        c.compile_hostgroups(&mut config);
+        let hosts = c.compile_hosts(&mut config);
+        c.compile_services(&mut config, &hosts);
         c.compile_contacts(&mut config);
         c.compile_notify(&mut config);
         c.compile_sinks(&mut config);
@@ -454,57 +452,16 @@ fn set_path(table: &mut Table, path: &str, value: Value) {
     t.insert(last.to_string(), value);
 }
 
-/// A role with its includes merged in.
-#[derive(Debug, Clone)]
-struct FlatRole {
-    /// This role and every role it includes, directly or not.
-    closure: BTreeSet<String>,
-    /// What hosts get: `host_check`, `graph`, `node`, `vars`, `groups`.
-    host: Layered,
-    /// `interval`, `retry_interval`, `max_attempts`, `timeout` for its
-    /// services.
-    defaults: Layered,
-    services: BTreeMap<String, Entry>,
-}
-
-/// A service entry of a role, after includes.
-#[derive(Debug, Clone, PartialEq)]
-struct Entry {
-    layered: Layered,
-    /// The most derived role that defines it.
-    role: String,
-    origin: Origin,
-    /// The role service entries it was merged from, least specific first.
-    chain: Vec<Source>,
-}
-
 /// Keys of a service that are not settings.
 const META_KEYS: [&str; 5] = ["check", "for_each", "groups", "enabled", "title"];
-/// Role keys that are defaults for its services.
-const ROLE_DEFAULTS: [&str; 4] = ["interval", "retry_interval", "max_attempts", "timeout"];
 
-/// Parses a role: the definition, and its service defaults (validated).
-fn role_def(table: &Table) -> Result<(RoleDef, Table), String> {
-    let mut rest = table.clone();
-    let defaults: Table = ROLE_DEFAULTS
-        .iter()
-        .filter_map(|k| rest.remove(*k).map(|v| (k.to_string(), v)))
-        .collect();
-    SettingsDef::deserialize(Value::Table(defaults.clone()))
-        .map_err(|e| e.message().trim().to_string())?;
-    let def =
-        RoleDef::deserialize(Value::Table(rest)).map_err(|e| e.message().trim().to_string())?;
-    Ok((def, defaults))
-}
-
-/// The host settings of a host or role as a table, for layering.
+/// The host settings of a host or host group as a table, for layering.
 fn host_part(
     address: Option<&str>,
     node: Option<&str>,
     host_check: Option<&str>,
     graph: Option<&str>,
     vars: &Table,
-    groups: &[String],
 ) -> Table {
     let mut t = Table::new();
     for (key, value) in [
@@ -520,13 +477,16 @@ fn host_part(
     if !vars.is_empty() {
         t.insert("vars".into(), Value::Table(vars.clone()));
     }
-    if !groups.is_empty() {
-        t.insert(
-            "groups".into(),
-            Value::Array(groups.iter().map(|g| Value::String(g.clone())).collect()),
-        );
-    }
     t
+}
+
+/// A host group, validated.
+struct HostGroupInfo {
+    def: HostGroupDef,
+    origin: Origin,
+    members: Vec<Glob>,
+    /// What its hosts get: `host_check`, `graph`, `vars`.
+    host: Layered,
 }
 
 struct Compiler<'a> {
@@ -534,30 +494,33 @@ struct Compiler<'a> {
     sink: &'a mut Sink,
     /// Check tables, validated, by name.
     checks: BTreeMap<String, (Table, Origin)>,
-    /// Role definitions, validated, by name.
-    roles: BTreeMap<String, &'a RawObject>,
-    flat: BTreeMap<String, Option<FlatRole>>,
+    /// Service object tables, validated, by name.
+    objects: BTreeMap<String, (Table, Origin)>,
+    /// The services of each service group: listed in the group or listing
+    /// it, with why.
+    sg_services: BTreeMap<String, Vec<(String, Reason)>>,
+    hostgroups: BTreeMap<String, HostGroupInfo>,
 }
 
 /// A service a host will get, before its layers are resolved.
 struct Planned {
     name: String,
-    /// The role entry or host service it comes from (for `for_each`, the
-    /// entry name, not `<entry>_<key>`).
+    /// The service object or host service it comes from (for `for_each`,
+    /// the object's name, not `<name>_<key>`).
     base: String,
-    /// The role entry and the role's service defaults.
-    entry: Option<(Entry, Layered)>,
+    /// The service object it is made from.
+    object: Option<String>,
+    assigned: Vec<Assigned>,
     /// `(var, key, the entry's vars)` for `for_each` services.
     for_each: Option<(String, String, Table)>,
 }
 
-/// A host before its services: the raw object and its own service tables.
+/// A host before its services: the raw object, its own service tables and
+/// the service objects assigned to it.
 struct HostInput<'a> {
     raw: &'a RawObject,
     services: BTreeMap<String, Table>,
-    /// The roles whose services and settings it gets: assigned roles
-    /// without those already included by another one.
-    top_roles: Vec<String>,
+    assigned: BTreeMap<String, Vec<Assigned>>,
 }
 
 impl<'a> Compiler<'a> {
@@ -576,7 +539,7 @@ impl<'a> Compiler<'a> {
                 if ["check", "for_each", "groups", "enabled"].contains(&key.as_str()) {
                     self.sink.error(
                         Some(&raw.origin),
-                        format!("{what}: {key} belongs on a service (in a role or host)"),
+                        format!("{what}: {key} belongs on a service ([service.<name>])"),
                     );
                     ok = false;
                 }
@@ -601,217 +564,218 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn compile_roles(&mut self, config: &mut Config) {
-        for raw in &self.raw.roles {
-            if self.duplicate("role", &raw.name, &raw.origin, &self.raw.roles) {
+    fn compile_service_objects(&mut self, config: &mut Config) {
+        for raw in &self.raw.services {
+            if self.duplicate("service", &raw.name, &raw.origin, &self.raw.services) {
                 continue;
             }
-            let what = format!("role {:?}", raw.name);
+            let what = format!("service {:?}", raw.name);
             if let Err(msg) = valid_name(&raw.name) {
                 self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
                 continue;
             }
-            self.roles.insert(raw.name.clone(), raw);
-        }
-        let names: Vec<String> = self.roles.keys().cloned().collect();
-        for name in &names {
-            self.flatten(name, &mut Vec::new());
-        }
-        for name in &names {
-            let raw = self.roles[name];
-            let what = format!("role {name:?}");
-            let Ok((def, _)) = role_def(&raw.table) else {
-                continue; // reported by flatten
+            let Some(def) = self.settings(&raw.table, &raw.origin, &what) else {
+                continue;
             };
-            let hosts = def
-                .hosts
-                .as_ref()
-                .and_then(|v| match HostSelector::parse(v) {
-                    Ok(sel) if sel.uses_roles_or_groups() => {
-                        self.sink.error(
-                            Some(&raw.origin),
-                            format!("{what}: hosts: can't select by roles or groups"),
-                        );
-                        None
-                    }
-                    Ok(sel) => Some(sel),
-                    Err(e) => {
-                        self.sink
-                            .error(Some(&raw.origin), format!("{what}: hosts: {e}"));
-                        None
-                    }
-                });
-            let services = self.flat[name]
-                .as_ref()
-                .map(|f| f.services.keys().cloned().collect())
-                .unwrap_or_default();
-            config.roles.push(Role {
-                name: name.clone(),
+            if let Some(command) = &def.command {
+                self.check_command(command, def.shell.unwrap_or(false), &raw.origin, &what);
+            }
+            let check = match &def.check {
+                Some(c) if !self.checks.contains_key(c) => {
+                    self.sink
+                        .error(Some(&raw.origin), format!("{what}: unknown check {c:?}"));
+                    continue;
+                }
+                Some(c) => Some(c.clone()),
+                None if self.checks.contains_key(&raw.name) => Some(raw.name.clone()),
+                None => None,
+            };
+            if check.is_none() && def.command.is_none() && def.passive != Some(true) {
+                self.sink.error(
+                    Some(&raw.origin),
+                    format!(
+                        "{what}: no check {:?}; set check, command or passive = true",
+                        raw.name
+                    ),
+                );
+                continue;
+            }
+            self.objects
+                .insert(raw.name.clone(), (raw.table.clone(), raw.origin.clone()));
+            config.service_objects.push(ServiceObject {
+                name: raw.name.clone(),
                 title: def.title,
-                include: def.include,
-                hosts,
-                services,
+                check,
+                groups: def.groups,
                 origin: raw.origin.clone(),
             });
         }
     }
 
-    /// Flattens role `name` (its includes first); `None` after errors.
-    fn flatten(&mut self, name: &str, stack: &mut Vec<String>) -> Option<FlatRole> {
-        if let Some(done) = self.flat.get(name) {
-            return done.clone();
-        }
-        let raw = *self.roles.get(name)?;
-        let what = format!("role {name:?}");
-        if stack.iter().any(|s| s == name) {
-            let cycle = [stack.as_slice(), &[name.to_string()]]
-                .concat()
-                .join(" -> ");
-            self.sink
-                .error(Some(&raw.origin), format!("include cycle: {cycle}"));
-            return None;
-        }
-        let (def, own_defaults) = match role_def(&raw.table) {
-            Ok(parsed) => parsed,
-            Err(msg) => {
-                self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
-                self.flat.insert(name.into(), None);
-                return None;
-            }
-        };
-        stack.push(name.to_string());
-        let mut included = Vec::new();
-        let mut failed = false;
-        for inc in &def.include {
-            if !self.roles.contains_key(inc) {
-                self.sink.error(
-                    Some(&raw.origin),
-                    format!("{what}: unknown role {inc:?} in include"),
-                );
-                failed = true;
+    fn compile_servicegroups(&mut self, config: &mut Config) {
+        for raw in &self.raw.servicegroups {
+            if self.duplicate(
+                "servicegroup",
+                &raw.name,
+                &raw.origin,
+                &self.raw.servicegroups,
+            ) {
                 continue;
             }
-            match self.flatten(inc, stack) {
-                Some(f) => included.push((inc.clone(), f)),
-                None => failed = true,
+            let what = format!("servicegroup {:?}", raw.name);
+            if let Err(msg) = valid_name(&raw.name) {
+                self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
+                continue;
             }
-        }
-        stack.pop();
-        if failed {
-            self.flat.insert(name.into(), None);
-            return None;
-        }
-        // Includes already included by another include are covered there.
-        let tops: Vec<&(String, FlatRole)> = included
-            .iter()
-            .filter(|(n, _)| {
-                !included
-                    .iter()
-                    .any(|(other, f)| other != n && f.closure.contains(n))
-            })
-            .collect();
-
-        let source = Source {
-            layer: Layer::Role,
-            name: name.to_string(),
-            origin: raw.origin.clone(),
-        };
-        let mut ok = true;
-
-        // Host part and defaults: includes side by side, then this role.
-        let (mut host, conflicts) =
-            Layered::siblings(&tops.iter().map(|(_, f)| &f.host).collect::<Vec<_>>());
-        ok &= self.report_conflicts(&raw.origin, &what, "includes", conflicts);
-        let (mut defaults, conflicts) =
-            Layered::siblings(&tops.iter().map(|(_, f)| &f.defaults).collect::<Vec<_>>());
-        ok &= self.report_conflicts(&raw.origin, &what, "includes", conflicts);
-        let own_host = host_part(
-            None,
-            def.node.as_deref(),
-            def.host_check.as_deref(),
-            def.graph.as_deref(),
-            &def.vars,
-            &def.groups,
-        );
-        if let Err(msg) = vars_of(&def.vars) {
-            self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
-            ok = false;
-        }
-        host.add(&own_host, &source);
-        defaults.add(&own_defaults, &source);
-
-        // Services: an entry from two includes side by side must agree.
-        let mut services: BTreeMap<String, Entry> = BTreeMap::new();
-        for (inc, f) in &tops {
-            for (svc, entry) in &f.services {
-                match services.get(svc) {
-                    Some(prev) if prev.layered.table != entry.layered.table => {
+            let def: ServiceGroupDef =
+                match ServiceGroupDef::deserialize(Value::Table(raw.table.clone())) {
+                    Ok(d) => d,
+                    Err(err) => {
                         self.sink.error(
                             Some(&raw.origin),
-                            format!(
-                                "{what}: service {svc:?} comes from roles {:?} and {inc:?} with \
-                                 different settings; define it in {name:?} to decide",
-                                prev.role
-                            ),
+                            format!("{what}: {}", err.message().trim()),
                         );
-                        ok = false;
+                        continue;
                     }
-                    _ => {
-                        services.insert(svc.clone(), entry.clone());
-                    }
+                };
+            let mut members = Vec::new();
+            for svc in &def.services {
+                if self.known_service(svc, &raw.origin, &what) {
+                    members.push((
+                        svc.clone(),
+                        Reason::Listed {
+                            by: format!("servicegroup {}", raw.name),
+                            origin: raw.origin.clone(),
+                        },
+                    ));
+                }
+            }
+            self.sg_services.insert(raw.name.clone(), members);
+            config.servicegroups.push(Group {
+                name: raw.name.clone(),
+                title: def.title,
+                members: Vec::new(),
+                services: def.services,
+                servicegroups: Vec::new(),
+                origin: raw.origin.clone(),
+            });
+        }
+        // Service objects listing a group.
+        for object in &config.service_objects {
+            for g in &object.groups {
+                match self.sg_services.get_mut(g) {
+                    None => self.sink.error(
+                        Some(&object.origin),
+                        format!("service {:?}: unknown servicegroup {g:?}", object.name),
+                    ),
+                    Some(list) if list.iter().any(|(s, _)| *s == object.name) => {}
+                    Some(list) => list.push((
+                        object.name.clone(),
+                        Reason::Listed {
+                            by: format!("service {}", object.name),
+                            origin: object.origin.clone(),
+                        },
+                    )),
                 }
             }
         }
-        for (svc, table) in &def.service {
-            let origin = raw.services.get(svc).unwrap_or(&raw.origin).clone();
-            let swhat = format!("{what}: service {svc:?}");
-            if let Err(msg) = valid_name(svc) {
-                self.sink.error(Some(&origin), format!("{swhat}: {msg}"));
-                ok = false;
-                continue;
-            }
-            let Some(entry_def) = self.settings(table, &origin, &swhat) else {
-                ok = false;
-                continue;
-            };
-            if let Some(command) = &entry_def.command {
-                self.check_command(command, entry_def.shell.unwrap_or(false), &origin, &swhat);
-            }
-            let src = Source {
-                layer: Layer::RoleService,
-                name: format!("{name}.{svc}"),
-                origin: origin.clone(),
-            };
-            let entry = match services.remove(svc) {
-                Some(mut prev) => {
-                    prev.layered.add(table, &src);
-                    prev.role = name.to_string();
-                    prev.origin = origin;
-                    prev.chain.push(src);
-                    prev
-                }
-                None => Entry {
-                    layered: Layered::default().with(table, &src),
-                    role: name.to_string(),
-                    origin,
-                    chain: vec![src],
-                },
-            };
-            services.insert(svc.clone(), entry);
-        }
+    }
 
-        let mut closure: BTreeSet<String> = BTreeSet::from([name.to_string()]);
-        for (_, f) in &included {
-            closure.extend(f.closure.iter().cloned());
+    /// Whether `name` is a service object; reports it if not.
+    fn known_service(&mut self, name: &str, origin: &Origin, what: &str) -> bool {
+        if self.objects.contains_key(name) {
+            return true;
         }
-        let flat = ok.then_some(FlatRole {
-            closure,
-            host,
-            defaults,
-            services,
-        });
-        self.flat.insert(name.into(), flat.clone());
-        flat
+        let msg = match self.checks.contains_key(name) {
+            true => format!(
+                "{what}: unknown service {name:?} (there is a check {name:?}: add [service.{name}])"
+            ),
+            false => format!("{what}: unknown service {name:?}"),
+        };
+        self.sink.error(Some(origin), msg);
+        false
+    }
+
+    /// Whether `name` is a service group; reports it if not.
+    fn known_servicegroup(&mut self, name: &str, origin: &Origin, what: &str) -> bool {
+        let known = self.sg_services.contains_key(name);
+        if !known {
+            self.sink.error(
+                Some(origin),
+                format!("{what}: unknown servicegroup {name:?}"),
+            );
+        }
+        known
+    }
+
+    fn compile_hostgroups(&mut self, config: &mut Config) {
+        for raw in &self.raw.hostgroups {
+            if self.duplicate("hostgroup", &raw.name, &raw.origin, &self.raw.hostgroups) {
+                continue;
+            }
+            let what = format!("hostgroup {:?}", raw.name);
+            if let Err(msg) = valid_name(&raw.name) {
+                self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
+                continue;
+            }
+            let def: HostGroupDef = match HostGroupDef::deserialize(Value::Table(raw.table.clone()))
+            {
+                Ok(d) => d,
+                Err(err) => {
+                    self.sink.error(
+                        Some(&raw.origin),
+                        format!("{what}: {}", err.message().trim()),
+                    );
+                    continue;
+                }
+            };
+            let mut ok = true;
+            for svc in &def.services {
+                ok &= self.known_service(svc, &raw.origin, &what);
+            }
+            for sg in &def.servicegroups {
+                ok &= self.known_servicegroup(sg, &raw.origin, &what);
+            }
+            if let Err(msg) = vars_of(&def.vars) {
+                self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
+                ok = false;
+            }
+            config.hostgroups.push(Group {
+                name: raw.name.clone(),
+                title: def.title.clone(),
+                members: def.members.clone(),
+                services: def.services.clone(),
+                servicegroups: def.servicegroups.clone(),
+                origin: raw.origin.clone(),
+            });
+            if !ok {
+                continue;
+            }
+            let source = Source {
+                layer: Layer::HostGroup,
+                name: raw.name.clone(),
+                origin: raw.origin.clone(),
+            };
+            let host = Layered::default().with(
+                &host_part(
+                    None,
+                    None,
+                    def.host_check.as_deref(),
+                    def.graph.as_deref(),
+                    &def.vars,
+                ),
+                &source,
+            );
+            self.hostgroups.insert(
+                raw.name.clone(),
+                HostGroupInfo {
+                    members: def.members.iter().map(|m| Glob::new(m)).collect(),
+                    def,
+                    origin: raw.origin.clone(),
+                    host,
+                },
+            );
+        }
     }
 
     fn report_conflicts(
@@ -840,10 +804,18 @@ impl<'a> Compiler<'a> {
             let def: HostDef = match HostDef::deserialize(Value::Table(raw.table.clone())) {
                 Ok(def) => def,
                 Err(err) => {
-                    self.sink.error(
-                        Some(&raw.origin),
-                        format!("{what}: {}", err.message().trim()),
-                    );
+                    let msg = err.message().trim();
+                    let hint = match () {
+                        _ if msg.contains("`tags`") => {
+                            " (tags are gone: put hosts in host groups, groups = [...])"
+                        }
+                        _ if msg.contains("`roles`") => {
+                            " (roles are gone: assign services = [...] or servicegroups = [...])"
+                        }
+                        _ => "",
+                    };
+                    self.sink
+                        .error(Some(&raw.origin), format!("{what}: {msg}{hint}"));
                     continue;
                 }
             };
@@ -851,145 +823,155 @@ impl<'a> Compiler<'a> {
                 self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
                 continue;
             }
-            if let Some(prev) = config.hosts.iter().find(|h| h.name == def.name) {
-                let msg = format!("{what} is already defined at {}", prev.origin);
-                self.sink.error(Some(&raw.origin), msg);
+            if self.duplicate("host", &def.name, &raw.origin, &self.raw.hosts) {
                 continue;
             }
-            let own_vars = match vars_of(&def.vars) {
-                Ok(v) => v,
-                Err(msg) => {
-                    self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
-                    continue;
-                }
-            };
+            if let Err(msg) = vars_of(&def.vars) {
+                self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
+                continue;
+            }
             let host_src = Source {
                 layer: Layer::Host,
                 name: def.name.clone(),
                 origin: raw.origin.clone(),
             };
-            // The host as written: what role selectors see.
-            let mut host = Host {
-                name: def.name.clone(),
-                address: def.address.clone().unwrap_or_else(|| def.name.clone()),
-                node: def.node.clone(),
-                roles: Vec::new(),
-                tags: def.tags.clone(),
-                groups: Vec::new(),
-                vars: own_vars,
-                host_check: None,
-                graph: None,
-                enabled: def.enabled,
+            let listed = |by: String| Reason::Listed {
+                by,
                 origin: raw.origin.clone(),
-                sources: BTreeMap::new(),
             };
 
-            // Roles: listed, by selector, then what those include.
-            let mut assigned: Vec<Assigned> = Vec::new();
-            for role in &def.roles {
-                if !self.roles.contains_key(role) {
-                    self.sink
-                        .error(Some(&raw.origin), format!("{what}: unknown role {role:?}"));
+            // Host groups: listed on the host, or the group's members.
+            let mut groups: Vec<Assigned> = Vec::new();
+            let mut ok = true;
+            for g in &def.groups {
+                if !config.hostgroups.iter().any(|x| x.name == *g) {
+                    self.sink.error(
+                        Some(&raw.origin),
+                        format!("{what}: unknown hostgroup {g:?}"),
+                    );
+                    ok = false;
                     continue;
                 }
-                assigned.push(Assigned {
-                    name: role.clone(),
-                    reason: Reason::Listed {
-                        by: format!("host {}", def.name),
-                        origin: raw.origin.clone(),
-                    },
+                groups.push(Assigned {
+                    name: g.clone(),
+                    reason: listed(format!("host {}", def.name)),
                 });
             }
-            for role in &config.roles {
-                if assigned.iter().any(|a| a.name == role.name) {
+            for (name, info) in &self.hostgroups {
+                if groups.iter().any(|a| a.name == *name) {
                     continue;
                 }
-                if let Some(matched) = role.hosts.as_ref().and_then(|s| s.matches(&host)) {
-                    assigned.push(Assigned {
-                        name: role.name.clone(),
-                        reason: Reason::Selector {
-                            origin: role.origin.clone(),
-                            matched,
+                if let Some(glob) = info.members.iter().find(|m| m.is_match(&def.name)) {
+                    let reason = match glob.is_pattern() {
+                        true => Reason::Selector {
+                            origin: info.origin.clone(),
+                            matched: format!("members {}", glob.text),
                         },
+                        false => Reason::Listed {
+                            by: format!("hostgroup {name}"),
+                            origin: info.origin.clone(),
+                        },
+                    };
+                    groups.push(Assigned {
+                        name: name.clone(),
+                        reason,
                     });
                 }
             }
-            let flats: Vec<(String, FlatRole)> = assigned
+            // A group with errors gives nothing; they are reported there.
+            if groups
                 .iter()
-                .filter_map(|a| Some((a.name.clone(), self.flat.get(&a.name)?.clone()?)))
-                .collect();
-            if flats.len() < assigned.len() {
-                continue; // the role has errors
+                .any(|g| !self.hostgroups.contains_key(&g.name))
+            {
+                ok = false;
             }
-            let top_roles: Vec<String> = flats
-                .iter()
-                .filter(|(n, _)| {
-                    !flats
-                        .iter()
-                        .any(|(other, f)| other != n && f.closure.contains(n))
-                })
-                .map(|(n, _)| n.clone())
-                .collect();
-            for (n, f) in &flats {
-                for inc in &f.closure {
-                    if inc != n && !assigned.iter().any(|a| a.name == *inc) {
-                        assigned.push(Assigned {
-                            name: inc.clone(),
-                            reason: Reason::Included { by: n.clone() },
-                        });
-                    }
-                }
-            }
-            host.roles = assigned;
 
-            // What the roles set, side by side, then the host itself.
-            let parts: Vec<&Layered> = flats
+            // What the host groups set, side by side, then the host itself.
+            let parts: Vec<&Layered> = groups
                 .iter()
-                .filter(|(n, _)| top_roles.contains(n))
-                .map(|(_, f)| &f.host)
+                .filter_map(|g| self.hostgroups.get(&g.name).map(|i| &i.host))
                 .collect();
             let (mut layered, conflicts) = Layered::siblings(&parts);
-            if !self.report_conflicts(&raw.origin, &what, "roles", conflicts) {
-                continue;
-            }
-            let own = host_part(
-                def.address.as_deref(),
-                def.node.as_deref(),
-                def.host_check.as_deref(),
-                def.graph.as_deref(),
-                &def.vars,
-                &[],
+            ok &= self.report_conflicts(&raw.origin, &what, "host groups", conflicts);
+            layered.add(
+                &host_part(
+                    def.address.as_deref(),
+                    def.node.as_deref(),
+                    def.host_check.as_deref(),
+                    def.graph.as_deref(),
+                    &def.vars,
+                ),
+                &host_src,
             );
-            let role_groups: Vec<(String, Source)> = match layered.table.get("groups") {
-                Some(Value::Array(items)) => items
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .map(|g| {
-                        let src = layered
-                            .sources
-                            .get("groups")
-                            .cloned()
-                            .unwrap_or_else(|| host_src.clone());
-                        (g.to_string(), src)
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            };
-            layered.table.remove("groups");
-            layered.add(&own, &host_src);
-            match vars_of(
+            let vars = match vars_of(
                 layered
                     .table
                     .get("vars")
                     .and_then(Value::as_table)
                     .unwrap_or(&Table::new()),
             ) {
-                Ok(vars) => host.vars = vars,
+                Ok(vars) => vars,
                 Err(msg) => {
                     self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
                     continue;
                 }
+            };
+
+            // Services: listed on the host or its groups, directly or in a
+            // service group.
+            let mut assigned: BTreeMap<String, Vec<Assigned>> = BTreeMap::new();
+            let mut add = |svc: &str, reason: Reason| {
+                let list = assigned.entry(svc.to_string()).or_default();
+                if !list.iter().any(|a| a.reason == reason) {
+                    list.push(Assigned {
+                        name: svc.to_string(),
+                        reason,
+                    });
+                }
+            };
+            for svc in &def.services {
+                if self.known_service(svc, &raw.origin, &what) {
+                    add(svc, listed(format!("host {}", def.name)));
+                } else {
+                    ok = false;
+                }
             }
+            for sg in &def.servicegroups {
+                if !self.known_servicegroup(sg, &raw.origin, &what) {
+                    ok = false;
+                    continue;
+                }
+                for (svc, _) in &self.sg_services[sg] {
+                    add(
+                        svc,
+                        listed(format!("servicegroup {sg} on host {}", def.name)),
+                    );
+                }
+            }
+            for g in &groups {
+                let Some(info) = self.hostgroups.get(&g.name) else {
+                    continue;
+                };
+                let by_group = |by: String| Reason::Listed {
+                    by,
+                    origin: info.origin.clone(),
+                };
+                for svc in &info.def.services {
+                    add(svc, by_group(format!("hostgroup {}", g.name)));
+                }
+                for sg in &info.def.servicegroups {
+                    for (svc, _) in self.sg_services.get(sg).into_iter().flatten() {
+                        add(
+                            svc,
+                            by_group(format!("servicegroup {sg} on hostgroup {}", g.name)),
+                        );
+                    }
+                }
+            }
+            if !ok {
+                continue;
+            }
+
             let text = |key: &str| {
                 layered
                     .table
@@ -997,115 +979,30 @@ impl<'a> Compiler<'a> {
                     .and_then(Value::as_str)
                     .map(String::from)
             };
-            host.node = text("node");
-            host.host_check = text("host_check");
-            host.graph = text("graph");
-            host.sources = layered
-                .sources
-                .iter()
-                .filter(|(k, _)| *k != "address" || def.address.is_some())
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
-
-            // Host groups listed on the host or its roles.
-            for g in &def.groups {
-                host.groups.push(Assigned {
-                    name: g.clone(),
-                    reason: Reason::Listed {
-                        by: format!("host {}", def.name),
-                        origin: raw.origin.clone(),
-                    },
-                });
-            }
-            for (g, src) in role_groups {
-                if !host.in_group(&g) {
-                    host.groups.push(Assigned {
-                        name: g,
-                        reason: Reason::Listed {
-                            by: format!("role {}", src.name),
-                            origin: src.origin,
-                        },
-                    });
-                }
-            }
-
+            config.hosts.push(Host {
+                name: def.name.clone(),
+                address: def.address.clone().unwrap_or_else(|| def.name.clone()),
+                node: text("node"),
+                groups,
+                vars,
+                host_check: text("host_check"),
+                graph: text("graph"),
+                enabled: def.enabled,
+                origin: raw.origin.clone(),
+                sources: layered
+                    .sources
+                    .iter()
+                    .filter(|(k, _)| *k != "address" || def.address.is_some())
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            });
             inputs.push(HostInput {
                 raw,
                 services: def.service.clone(),
-                top_roles,
+                assigned,
             });
-            config.hosts.push(host);
         }
         inputs
-    }
-
-    fn compile_hostgroups(&mut self, config: &mut Config) {
-        let mut selectors = Vec::new();
-        for raw in &self.raw.hostgroups {
-            if self.duplicate("hostgroup", &raw.name, &raw.origin, &self.raw.hostgroups) {
-                continue;
-            }
-            let what = format!("hostgroup {:?}", raw.name);
-            if let Err(msg) = valid_name(&raw.name) {
-                self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
-                continue;
-            }
-            let def: GroupDef = match GroupDef::deserialize(Value::Table(raw.table.clone())) {
-                Ok(d) => d,
-                Err(err) => {
-                    self.sink.error(
-                        Some(&raw.origin),
-                        format!("{what}: {}", err.message().trim()),
-                    );
-                    continue;
-                }
-            };
-            if let Some(members) = &def.members {
-                match HostSelector::parse(members) {
-                    Ok(sel) if sel.uses_groups() => self.sink.error(
-                        Some(&raw.origin),
-                        format!("{what}: members: can't select by host groups"),
-                    ),
-                    Ok(sel) => selectors.push((raw.name.clone(), raw.origin.clone(), sel)),
-                    Err(e) => self
-                        .sink
-                        .error(Some(&raw.origin), format!("{what}: members: {e}")),
-                }
-            }
-            config.hostgroups.push(Group {
-                name: raw.name.clone(),
-                title: def.title,
-                origin: raw.origin.clone(),
-            });
-        }
-        for host in &mut config.hosts {
-            for (name, origin, sel) in &selectors {
-                if host.in_group(name) {
-                    continue;
-                }
-                if let Some(matched) = sel.matches(host) {
-                    host.groups.push(Assigned {
-                        name: name.clone(),
-                        reason: Reason::Selector {
-                            origin: origin.clone(),
-                            matched,
-                        },
-                    });
-                }
-            }
-        }
-        for host in &config.hosts {
-            for g in &host.groups {
-                if !config.hostgroups.iter().any(|h| h.name == g.name) {
-                    let origin = match &g.reason {
-                        Reason::Listed { origin, .. } | Reason::Selector { origin, .. } => origin,
-                        Reason::Included { .. } => &host.origin,
-                    };
-                    self.sink
-                        .error(Some(origin), format!("unknown hostgroup {:?}", g.name));
-                }
-            }
-        }
     }
 
     fn compile_services(&mut self, config: &mut Config, inputs: &[HostInput<'a>]) {
@@ -1161,46 +1058,51 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    /// The services a host gets: its roles' entries (`for_each` expanded),
-    /// then its own services that override none of them.
+    /// The services a host gets: the assigned service objects (`for_each`
+    /// expanded), then its own services that override none of them.
     fn plan(&mut self, host: &Host, input: &HostInput) -> Vec<Planned> {
         let what = format!("host {:?}", host.name);
-        // Role service entries; two roles side by side must agree.
-        let mut entries: BTreeMap<String, (Entry, Layered)> = BTreeMap::new();
-        for role in &input.top_roles {
-            let Some(Some(flat)) = self.flat.get(role) else {
-                continue;
-            };
-            for (svc, entry) in &flat.services {
-                match entries.get(svc) {
-                    Some((prev, _)) if prev.layered.table != entry.layered.table => {
-                        self.sink.error(
-                            Some(&host.origin),
-                            format!(
-                                "{what}: service {svc:?} comes from roles {:?} and {:?} with \
-                                 different settings; override it on the host or in a role \
-                                 including both",
-                                prev.role, entry.role
-                            ),
-                        );
-                    }
-                    _ => {
-                        entries.insert(svc.clone(), (entry.clone(), flat.defaults.clone()));
-                    }
-                }
+        let mut wanted: Vec<(String, Vec<Assigned>)> = input
+            .assigned
+            .iter()
+            .map(|(s, a)| (s.clone(), a.clone()))
+            .collect();
+        // A host service named like a service object assigns it too.
+        for name in input.services.keys() {
+            if self.objects.contains_key(name) && !input.assigned.contains_key(name) {
+                let origin = input
+                    .raw
+                    .services
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| host.origin.clone());
+                wanted.push((
+                    name.clone(),
+                    vec![Assigned {
+                        name: name.clone(),
+                        reason: Reason::Listed {
+                            by: format!("host {}, service.{name}", host.name),
+                            origin,
+                        },
+                    }],
+                ));
             }
         }
 
         let mut planned = Vec::new();
-        for (svc, (entry, defaults)) in entries {
-            let for_each = SettingsDef::deserialize(Value::Table(entry.layered.table.clone()))
+        for (svc, assigned) in wanted {
+            let Some((table, _)) = self.objects.get(&svc) else {
+                continue;
+            };
+            let for_each = SettingsDef::deserialize(Value::Table(table.clone()))
                 .ok()
                 .and_then(|d| d.for_each);
             let Some(var) = for_each else {
                 planned.push(Planned {
                     name: svc.clone(),
-                    base: svc,
-                    entry: Some((entry, defaults)),
+                    base: svc.clone(),
+                    object: Some(svc),
+                    assigned,
                     for_each: None,
                 });
                 continue;
@@ -1239,7 +1141,8 @@ impl<'a> Compiler<'a> {
                         planned.push(Planned {
                             name: format!("{svc}_{key}"),
                             base: svc.clone(),
-                            entry: Some((entry.clone(), defaults.clone())),
+                            object: Some(svc.clone()),
+                            assigned: assigned.clone(),
                             for_each: Some((var.clone(), key.clone(), vars)),
                         });
                     }
@@ -1251,7 +1154,8 @@ impl<'a> Compiler<'a> {
                 planned.push(Planned {
                     name: name.clone(),
                     base: name.clone(),
-                    entry: None,
+                    object: None,
+                    assigned: Vec::new(),
                     for_each: None,
                 });
             }
@@ -1269,16 +1173,23 @@ impl<'a> Compiler<'a> {
     ) -> Option<Service> {
         let host = &config.hosts[host_idx];
         let name = plan.name.as_str();
-        let entry = plan.entry.as_ref();
         let what = format!("host {:?}: service {name:?}", host.name);
         let host_src = Source {
             layer: Layer::Host,
             name: host.name.clone(),
             origin: host.origin.clone(),
         };
-        let service_origin = |key: &str| input.raw.services.get(key).cloned();
+        let object = plan.object.as_ref().and_then(|o| {
+            let (table, origin) = self.objects.get(o)?;
+            let src = Source {
+                layer: Layer::Service,
+                name: o.clone(),
+                origin: origin.clone(),
+            };
+            Some(Layered::default().with(table, &src))
+        });
 
-        // The host's overrides: for a whole `for_each` entry, then this one.
+        // The host's overrides: for a whole `for_each` service, then this one.
         let mut overrides: Vec<(Table, Source)> = Vec::new();
         let mut keys = vec![&plan.base];
         if plan.base != plan.name {
@@ -1288,7 +1199,12 @@ impl<'a> Compiler<'a> {
             let Some(table) = input.services.get(key) else {
                 continue;
             };
-            let o = service_origin(key).unwrap_or_else(|| host.origin.clone());
+            let o = input
+                .raw
+                .services
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| host.origin.clone());
             self.settings(table, &o, &what)?;
             overrides.push((
                 table.clone(),
@@ -1299,12 +1215,17 @@ impl<'a> Compiler<'a> {
                 },
             ));
         }
+        let object_origin = plan
+            .object
+            .as_ref()
+            .and_then(|o| self.objects.get(o))
+            .map(|(_, origin)| origin.clone());
         let origin = overrides
             .last()
             .map(|(_, s)| s.origin.clone())
-            .or_else(|| entry.map(|(e, _)| e.origin.clone()))
+            .or_else(|| object_origin.clone())
             .unwrap_or_else(|| host.origin.clone());
-        if entry.is_none()
+        if plan.object.is_none()
             && let Err(msg) = valid_name(name)
         {
             self.sink.error(Some(&origin), format!("{what}: {msg}"));
@@ -1312,10 +1233,7 @@ impl<'a> Compiler<'a> {
         }
 
         // Meta keys: the most specific wins; groups add up.
-        let mut meta = Layered::default();
-        if let Some((e, _)) = entry {
-            meta = e.layered.clone();
-        }
+        let mut meta = object.clone().unwrap_or_default();
         for (t, src) in &overrides {
             meta.add(t, src);
         }
@@ -1359,19 +1277,16 @@ impl<'a> Compiler<'a> {
             add_paths(&mut layered, &check_layer);
             layers.push(src);
         }
-        if let Some((e, defaults)) = entry {
-            add_paths(&mut layered, defaults);
-            if let Some(role) = config.roles.iter().find(|r| r.name == e.role) {
-                layers.push(Source {
-                    layer: Layer::Role,
-                    name: role.name.clone(),
-                    origin: role.origin.clone(),
-                });
-            }
-            add_paths(&mut layered, &e.layered);
-            layers.extend(e.chain.iter().cloned());
+        if let (Some(obj), Some(name), Some(o)) = (&object, &plan.object, &object_origin) {
+            add_paths(&mut layered, obj);
+            layers.push(Source {
+                layer: Layer::Service,
+                name: name.clone(),
+                origin: o.clone(),
+            });
         }
-        // Host vars (text) override role and check var defaults.
+        // Host vars (text, including those of its host groups) override the
+        // service and check var defaults.
         for (key, var) in &host.vars {
             if let Var::Text(text) = var {
                 let src = host
@@ -1383,12 +1298,27 @@ impl<'a> Compiler<'a> {
                 layered.add(&t, src);
             }
         }
+        for g in &host.groups {
+            if let Some(info) = self.hostgroups.get(&g.name)
+                && !info.def.vars.is_empty()
+            {
+                layers.push(Source {
+                    layer: Layer::HostGroup,
+                    name: g.name.clone(),
+                    origin: info.origin.clone(),
+                });
+            }
+        }
         layers.push(host_src.clone());
         let for_each = plan.for_each.as_ref().map(|(var, key, vars)| {
             let src = Source {
                 layer: Layer::ForEach,
                 name: format!("{}.vars.{var}.{key}", host.name),
-                origin: host.origin.clone(),
+                origin: host
+                    .sources
+                    .get(&format!("vars.{var}.{key}"))
+                    .or_else(|| host.sources.get(&format!("vars.{var}")))
+                    .map_or_else(|| host.origin.clone(), |s| s.origin.clone()),
             };
             let mut t = Table::new();
             t.insert("vars".into(), Value::Table(vars.clone()));
@@ -1412,15 +1342,12 @@ impl<'a> Compiler<'a> {
 
         let command = match (&def.command, settings.passive) {
             (None, false) => {
-                let msg = match (&check_name, entry) {
-                    (Some(c), _) => {
+                let msg = match &check_name {
+                    Some(c) => {
                         format!("{what}: check {c:?} has no command (or set passive = true)")
                     }
-                    (None, None) => format!(
-                        "{what}: not a service of its roles; set check, command or passive = true"
-                    ),
-                    (None, Some(_)) => format!(
-                        "{what}: no check {:?}; set check, command or passive = true",
+                    None => format!(
+                        "{what}: no service or check {:?}; set check, command or passive = true",
                         plan.base
                     ),
                 };
@@ -1461,39 +1388,52 @@ impl<'a> Compiler<'a> {
             (None, true) => None,
         };
 
-        // Service groups listed on the role entries and the host.
-        let groups = meta_def
-            .groups
-            .iter()
-            .map(|g| {
-                let src = meta.sources.get("groups");
-                let by = match src {
-                    Some(s) if s.layer == Layer::RoleService => {
-                        let (role, svc) = s.name.split_once('.').unwrap_or((&s.name, ""));
-                        format!("role {role}, service {svc}")
-                    }
-                    Some(s) => {
-                        let (h, svc) = s.name.split_once('.').unwrap_or((&s.name, ""));
-                        format!("host {h}, service {svc}")
-                    }
-                    None => format!("host {}", host.name),
-                };
-                Assigned {
-                    name: g.clone(),
-                    reason: Reason::Listed {
-                        by,
-                        origin: src.map_or_else(|| origin.clone(), |s| s.origin.clone()),
-                    },
+        // Service groups: those listing its service object or listed by it,
+        // and those its host service lists.
+        let mut groups: Vec<Assigned> = Vec::new();
+        if let Some(object) = &plan.object {
+            for (sg, members) in &self.sg_services {
+                if let Some((_, reason)) = members.iter().find(|(s, _)| s == object) {
+                    groups.push(Assigned {
+                        name: sg.clone(),
+                        reason: reason.clone(),
+                    });
                 }
-            })
-            .collect();
+            }
+        }
+        for (table, src) in &overrides {
+            let Some(Value::Array(items)) = table.get("groups") else {
+                continue;
+            };
+            for g in items.iter().filter_map(Value::as_str) {
+                if groups.iter().any(|a| a.name == g) {
+                    continue;
+                }
+                if !self.sg_services.contains_key(g) {
+                    self.sink.error(
+                        Some(&src.origin),
+                        format!("{what}: unknown servicegroup {g:?}"),
+                    );
+                    continue;
+                }
+                let (h, svc) = src.name.split_once('.').unwrap_or((&src.name, ""));
+                groups.push(Assigned {
+                    name: g.to_string(),
+                    reason: Reason::Listed {
+                        by: format!("host {h}, service {svc}"),
+                        origin: src.origin.clone(),
+                    },
+                });
+            }
+        }
 
         Some(Service {
             id: format!("{}/{name}", host.name),
             name: name.to_string(),
             host: host_idx,
             check: check_name,
-            role: entry.map(|(e, _)| e.role.clone()),
+            object: plan.object.clone(),
+            assigned: plan.assigned.clone(),
             for_each,
             check_hash: check_hash(command.as_ref(), settings.format),
             command_text: def.command.clone(),
@@ -1505,6 +1445,88 @@ impl<'a> Compiler<'a> {
             sources: layered.sources,
             layers,
         })
+    }
+
+    /// Warnings for objects used by nothing and selector names that exist
+    /// nowhere (likely typos).
+    fn check_references(&mut self, config: &Config) {
+        for check in &config.checks {
+            let used = config
+                .service_objects
+                .iter()
+                .any(|s| s.check.as_ref() == Some(&check.name))
+                || config
+                    .services
+                    .iter()
+                    .any(|s| s.check.as_ref() == Some(&check.name));
+            if !used {
+                self.sink.warning(
+                    Some(&check.origin),
+                    format!("check {:?} is used by no service", check.name),
+                );
+            }
+        }
+        for object in &config.service_objects {
+            if !config
+                .services
+                .iter()
+                .any(|s| s.object.as_ref() == Some(&object.name))
+            {
+                self.sink.warning(
+                    Some(&object.origin),
+                    format!("service {:?} is on no host", object.name),
+                );
+            }
+        }
+        for g in &config.hostgroups {
+            if !config.hosts.iter().any(|h| h.in_group(&g.name)) {
+                self.sink.warning(
+                    Some(&g.origin),
+                    format!("hostgroup {:?} has no hosts", g.name),
+                );
+            }
+        }
+        for g in &config.servicegroups {
+            if self.sg_services.get(&g.name).is_none_or(Vec::is_empty) {
+                self.sink.warning(
+                    Some(&g.origin),
+                    format!("servicegroup {:?} has no services", g.name),
+                );
+            }
+        }
+        let mut problems: Vec<(Origin, String)> = Vec::new();
+        let mut check = |origin: &Origin, kind: Ref, name: &str| {
+            let (what, known) = match kind {
+                Ref::Host => ("host", config.hosts.iter().any(|h| h.name == name)),
+                Ref::Node => (
+                    "node",
+                    config.hosts.iter().any(|h| h.node.as_deref() == Some(name)),
+                ),
+                Ref::HostGroup => (
+                    "hostgroup",
+                    config.hostgroups.iter().any(|g| g.name == name),
+                ),
+                Ref::Check => ("check", config.checks.iter().any(|c| c.name == name)),
+                Ref::ServiceGroup => (
+                    "servicegroup",
+                    config.servicegroups.iter().any(|g| g.name == name),
+                ),
+            };
+            if !known {
+                problems.push((origin.clone(), format!("selector: no {what} {name:?}")));
+            }
+        };
+        for rule in &config.notify {
+            if let Some(sel) = &rule.hosts {
+                sel.refs(&mut |k, n| check(&rule.origin, k, n));
+            }
+            if let Some(sel) = &rule.services {
+                sel.refs(&mut |k, n| check(&rule.origin, k, n));
+            }
+        }
+        for (origin, msg) in problems {
+            self.sink.warning(Some(&origin), msg);
+        }
     }
 
     /// Settings with defaults applied, validated.
@@ -1568,84 +1590,8 @@ impl<'a> Compiler<'a> {
             freshness: def.freshness,
             flap: def.flap_detection.unwrap_or(true).then_some(flap),
             thresholds: def.thresholds.clone(),
+            graphs: def.graphs.unwrap_or(true),
         })
-    }
-
-    fn compile_servicegroups(&mut self, config: &mut Config) {
-        let mut selectors = Vec::new();
-        for raw in &self.raw.servicegroups {
-            if self.duplicate(
-                "servicegroup",
-                &raw.name,
-                &raw.origin,
-                &self.raw.servicegroups,
-            ) {
-                continue;
-            }
-            let what = format!("servicegroup {:?}", raw.name);
-            if let Err(msg) = valid_name(&raw.name) {
-                self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
-                continue;
-            }
-            let def: GroupDef = match GroupDef::deserialize(Value::Table(raw.table.clone())) {
-                Ok(d) => d,
-                Err(err) => {
-                    self.sink.error(
-                        Some(&raw.origin),
-                        format!("{what}: {}", err.message().trim()),
-                    );
-                    continue;
-                }
-            };
-            if let Some(members) = &def.members {
-                match ServiceSelector::parse(members) {
-                    Ok(sel) if sel.uses_groups() => self.sink.error(
-                        Some(&raw.origin),
-                        format!("{what}: members: can't select by service groups"),
-                    ),
-                    Ok(sel) => selectors.push((raw.name.clone(), raw.origin.clone(), sel)),
-                    Err(e) => self
-                        .sink
-                        .error(Some(&raw.origin), format!("{what}: members: {e}")),
-                }
-            }
-            config.servicegroups.push(Group {
-                name: raw.name.clone(),
-                title: def.title,
-                origin: raw.origin.clone(),
-            });
-        }
-        for i in 0..config.services.len() {
-            let host = &config.hosts[config.services[i].host];
-            let mut add = Vec::new();
-            for (name, origin, sel) in &selectors {
-                if config.services[i].in_group(name) {
-                    continue;
-                }
-                if let Some(matched) = sel.matches(&config.services[i], host) {
-                    add.push(Assigned {
-                        name: name.clone(),
-                        reason: Reason::Selector {
-                            origin: origin.clone(),
-                            matched,
-                        },
-                    });
-                }
-            }
-            config.services[i].groups.extend(add);
-        }
-        for s in &config.services {
-            for g in &s.groups {
-                if !config.servicegroups.iter().any(|x| x.name == g.name) {
-                    let origin = match &g.reason {
-                        Reason::Listed { origin, .. } | Reason::Selector { origin, .. } => origin,
-                        Reason::Included { .. } => &s.origin,
-                    };
-                    self.sink
-                        .error(Some(origin), format!("unknown servicegroup {:?}", g.name));
-                }
-            }
-        }
     }
 
     fn compile_contacts(&mut self, config: &mut Config) {
@@ -1756,6 +1702,9 @@ impl<'a> Compiler<'a> {
             config.contactgroups.push(Group {
                 name: raw.name.clone(),
                 title: def.title,
+                members: def.members,
+                services: Vec::new(),
+                servicegroups: Vec::new(),
                 origin: raw.origin.clone(),
             });
         }
@@ -1878,93 +1827,6 @@ impl<'a> Compiler<'a> {
                 continue;
             }
             config.sinks.push(s);
-        }
-    }
-
-    /// Warnings for objects used by nothing and selector names that exist
-    /// nowhere (likely typos).
-    fn check_references(&mut self, config: &Config) {
-        for check in &config.checks {
-            if !config
-                .services
-                .iter()
-                .any(|s| s.check.as_ref() == Some(&check.name))
-            {
-                self.sink.warning(
-                    Some(&check.origin),
-                    format!("check {:?} is used by no service", check.name),
-                );
-            }
-        }
-        for role in &config.roles {
-            if !config.hosts.iter().any(|h| h.has_role(&role.name)) {
-                self.sink.warning(
-                    Some(&role.origin),
-                    format!("role {:?} is assigned to no host", role.name),
-                );
-            }
-        }
-        for g in &config.hostgroups {
-            if !config.hosts.iter().any(|h| h.in_group(&g.name)) {
-                self.sink.warning(
-                    Some(&g.origin),
-                    format!("hostgroup {:?} has no hosts", g.name),
-                );
-            }
-        }
-        for g in &config.servicegroups {
-            if !config.services.iter().any(|s| s.in_group(&g.name)) {
-                self.sink.warning(
-                    Some(&g.origin),
-                    format!("servicegroup {:?} has no services", g.name),
-                );
-            }
-        }
-        let mut problems: Vec<(Origin, String)> = Vec::new();
-        let mut check = |origin: &Origin, kind: Ref, name: &str| {
-            let (what, known) = match kind {
-                Ref::Host => ("host", config.hosts.iter().any(|h| h.name == name)),
-                Ref::Tag => (
-                    "tag",
-                    config
-                        .hosts
-                        .iter()
-                        .any(|h| h.tags.iter().any(|t| t == name)),
-                ),
-                Ref::Node => (
-                    "node",
-                    config.hosts.iter().any(|h| h.node.as_deref() == Some(name)),
-                ),
-                Ref::Role => ("role", config.roles.iter().any(|r| r.name == name)),
-                Ref::HostGroup => (
-                    "hostgroup",
-                    config.hostgroups.iter().any(|g| g.name == name),
-                ),
-                Ref::Check => ("check", config.checks.iter().any(|c| c.name == name)),
-                Ref::ServiceGroup => (
-                    "servicegroup",
-                    config.servicegroups.iter().any(|g| g.name == name),
-                ),
-            };
-            if !known {
-                problems.push((origin.clone(), format!("selector: no {what} {name:?}")));
-            }
-        };
-        for role in &config.roles {
-            if let Some(sel) = &role.hosts {
-                sel.refs(&mut |k, n| check(&role.origin, k, n));
-            }
-        }
-        for rule in &config.notify {
-            if let Some(sel) = &rule.hosts {
-                sel.refs(&mut |k, n| check(&rule.origin, k, n));
-            }
-            if let Some(sel) = &rule.services {
-                sel.refs(&mut |k, n| check(&rule.origin, k, n));
-            }
-        }
-        for (origin, msg) in problems {
-            self.sink.warning(Some(&origin), msg);
         }
     }
 
@@ -2157,8 +2019,8 @@ fn vars_of(table: &Table) -> Result<Vars, String> {
         .collect()
 }
 
-/// Settings of a check, a role's service entry or a host service. Every
-/// field is optional: layers are merged before the result is read.
+/// Settings of a check, a service or a host service. Every field is
+/// optional: layers are merged before the result is read.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SettingsDef {
@@ -2184,29 +2046,11 @@ struct SettingsDef {
     flap_detection: Option<bool>,
     flap_low: Option<f64>,
     flap_high: Option<f64>,
+    graphs: Option<bool>,
     for_each: Option<String>,
     #[serde(default)]
     groups: Vec<String>,
     enabled: Option<bool>,
-}
-
-/// A role, without its service defaults (see [`role_def`]).
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RoleDef {
-    title: Option<String>,
-    #[serde(default)]
-    include: Vec<String>,
-    hosts: Option<Value>,
-    host_check: Option<String>,
-    graph: Option<String>,
-    node: Option<String>,
-    #[serde(default)]
-    vars: Table,
-    #[serde(default)]
-    groups: Vec<String>,
-    #[serde(default)]
-    service: BTreeMap<String, Table>,
 }
 
 #[derive(Deserialize)]
@@ -2215,12 +2059,13 @@ struct HostDef {
     name: String,
     address: Option<String>,
     node: Option<String>,
-    #[serde(default)]
-    roles: Vec<String>,
-    #[serde(default)]
-    tags: Vec<String>,
+    /// Host groups.
     #[serde(default)]
     groups: Vec<String>,
+    #[serde(default)]
+    services: Vec<String>,
+    #[serde(default)]
+    servicegroups: Vec<String>,
     #[serde(default)]
     vars: Table,
     host_check: Option<String>,
@@ -2233,9 +2078,27 @@ struct HostDef {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct GroupDef {
+struct HostGroupDef {
     title: Option<String>,
-    members: Option<Value>,
+    /// Host names and patterns.
+    #[serde(default)]
+    members: Vec<String>,
+    #[serde(default)]
+    services: Vec<String>,
+    #[serde(default)]
+    servicegroups: Vec<String>,
+    host_check: Option<String>,
+    graph: Option<String>,
+    #[serde(default)]
+    vars: Table,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ServiceGroupDef {
+    title: Option<String>,
+    #[serde(default)]
+    services: Vec<String>,
 }
 
 #[derive(Deserialize)]
