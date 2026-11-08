@@ -39,7 +39,8 @@
 
 	// Refetch whenever a new result for this service arrives, and after
 	// commands (the server then sends a reload).
-	let lastCheck = $derived(live.find(host, name)?.last_check ?? null);
+	let lastCheck = $state<string | null>(null);
+	$effect(() => live.watch({ services: [`${host}/${name}`] }, (v) => (lastCheck = v.last_check)));
 
 	$effect(() => {
 		const [h, s, _, __] = [host, name, lastCheck, live.reloads];
@@ -190,7 +191,7 @@
 		{/if}
 
 		{#if detail.graphs}
-			<Graphs {host} service={name} tick={Date.parse(lastCheck ?? '') || 0} />
+			<Graphs {host} service={name} tick={Date.parse(detail.last_check ?? '') || 0} />
 		{/if}
 
 		{#if !noHistory}

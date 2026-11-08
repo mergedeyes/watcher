@@ -1,6 +1,6 @@
 <!-- Status totals per host or service group, like Nagios' group summary. -->
 <script lang="ts">
-	import { api, type HostView, type ServiceView } from './api.ts';
+	import { api, type Counts, type HostCounts } from './api.ts';
 	import { live } from './live.svelte.ts';
 	import { auth } from './auth.svelte.ts';
 	import { editHref } from './config.svelte.ts';
@@ -8,28 +8,23 @@
 
 	let { of }: { of: 'host' | 'service' } = $props();
 
-	let groups = $state<{ name: string; title: string | null }[] | null>(null);
+	interface Row {
+		name: string;
+		title: string | null;
+		hosts?: HostCounts;
+		services: Counts;
+	}
 
+	let groups = $state<Row[] | null>(null);
+
+	// Totals change with states: refetch with the generation.
 	$effect(() => {
 		void live.reloads;
+		void live.generation;
 		api.groups().then((g) => (groups = of === 'host' ? g.hostgroups : g.servicegroups));
 	});
 
 	const STATES = ['critical', 'warning', 'unknown', 'ok'] as const;
-
-	function hostsOf(group: string): HostView[] {
-		return live.hosts.filter((h) => h.groups.includes(group));
-	}
-
-	function servicesOf(group: string): ServiceView[] {
-		if (of === 'service') return live.services.filter((s) => s.groups.includes(group));
-		const hosts = new Set(hostsOf(group).map((h) => h.name));
-		return live.services.filter((s) => hosts.has(s.host));
-	}
-
-	function count<T>(list: T[], test: (t: T) => boolean) {
-		return list.filter(test).length;
-	}
 
 	let list = $derived(of === 'host' ? '/hosts' : '/services');
 </script>
@@ -53,8 +48,8 @@
 				</thead>
 				<tbody>
 					{#each groups as g (g.name)}
-						{@const hosts = hostsOf(g.name)}
-						{@const services = servicesOf(g.name)}
+						{@const hosts = g.hosts ?? { up: 0, down: 0, pending: 0 }}
+						{@const services = g.services}
 						{@const href = `${list}?group=${encodeURIComponent(g.name)}`}
 						<tr>
 							<td class="nowrap">
@@ -63,17 +58,17 @@
 							</td>
 							{#if of === 'host'}
 								<td class="nowrap">
-									{#if count(hosts, (h) => h.state === 'down')}<span class="pair"><Status state="down" /> {count(hosts, (h) => h.state === 'down')}</span>{/if}
-									<span class="pair"><Status state="up" /> {count(hosts, (h) => h.state === 'up')}</span>
-									{#if count(hosts, (h) => h.state === null)}<span class="pair"><Status state={null} /> {count(hosts, (h) => h.state === null)}</span>{/if}
+									{#if hosts.down}<span class="pair"><Status state="down" /> {hosts.down}</span>{/if}
+									<span class="pair"><Status state="up" /> {hosts.up}</span>
+									{#if hosts.pending}<span class="pair"><Status state={null} /> {hosts.pending}</span>{/if}
 								</td>
 							{/if}
 							<td class="nowrap">
 								{#each STATES as st (st)}
-									{@const n = count(services, (s) => s.state === st)}
+									{@const n = services[st]}
 									{#if n > 0 || st === 'ok'}<span class="pair"><Status state={st} /> {n}</span>{/if}
 								{/each}
-								{#if count(services, (s) => s.state === null)}<span class="pair"><Status state={null} /> {count(services, (s) => s.state === null)}</span>{/if}
+								{#if services.pending}<span class="pair"><Status state={null} /> {services.pending}</span>{/if}
 							</td>
 							{#if auth.admin}
 								<td class="nowrap"><a href={editHref(of === 'host' ? 'hostgroups' : 'servicegroups', g.name)}>Edit Config</a></td>

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { api, ApiError, HISTORY_DELAY, serviceHref, type Flag, type StateEvent } from '#lib/api.ts';
+	import { api, ApiError, HISTORY_DELAY, serviceHref, type Flag, type HostView, type ServiceView, type StateEvent } from '#lib/api.ts';
 	import AlertTable from '#lib/AlertTable.svelte';
 	import { auth } from '#lib/auth.svelte.ts';
 	import { editHref } from '#lib/config.svelte.ts';
@@ -11,20 +11,22 @@
 	import EditMenu from '#lib/EditMenu.svelte';
 	import Graphs from '#lib/Graphs.svelte';
 	import { datetime, since } from '#lib/format.ts';
+	import { patchHost, patchRow } from '#lib/list.svelte.ts';
 	import { live } from '#lib/live.svelte.ts';
 	import ServiceTable from '#lib/ServiceTable.svelte';
 	import Status from '#lib/Status.svelte';
 	import VarTree from '#lib/VarTree.svelte';
 
 	let name = $derived(page.params.host ?? '');
-	let host = $derived(live.hosts.find((h) => h.name === name));
-	let services = $derived(live.services.filter((s) => s.host === name));
+	let host = $state<HostView | null>(null);
+	let services = $state<ServiceView[]>([]);
+	const find = (service: string) => services.find((s) => s.service === service);
 
 	/** The service whose graphs show: picked (`?graph=`), or the host's `graph`. */
 	let picked = $derived(page.url.searchParams.get('graph') ?? host?.graph ?? null);
 	/** Null when that service has graphs turned off. */
-	let graph = $derived(picked && live.find(name, picked)?.graphs !== false ? picked : null);
-	let graphCheck = $derived(graph ? (live.find(name, graph)?.last_check ?? null) : null);
+	let graph = $derived(picked && find(picked)?.graphs !== false ? picked : null);
+	let graphCheck = $derived(graph ? (find(graph)?.last_check ?? null) : null);
 
 	function pick(service: string) {
 		const params = new URLSearchParams(page.url.search);
@@ -57,19 +59,50 @@
 		return () => clearTimeout(later);
 	});
 
-	$effect(() => {
-		const [current, _] = [name, live.reloads];
-		missing = false;
+	let loaded = '';
+	function load(current: string) {
 		api.host(current).then(
 			(r) => {
+				if (current !== name) return;
+				host = r.host;
+				services = r.services;
 				origin = r.origin;
 				flags = r.flags;
+				missing = false;
+				loaded = current;
 			},
 			(e) => {
-				if (e instanceof ApiError && e.status === 404) missing = true;
+				if (e instanceof ApiError && e.status === 404 && current === name) missing = true;
 			}
 		);
+	}
+
+	$effect(() => {
+		const [current, _] = [name, live.reloads];
+		if (current !== loaded) {
+			host = null;
+			services = [];
+		}
+		load(current);
 	});
+
+	// Counts and badges change with states: refetch after a change.
+	let seen = live.generation;
+	$effect(() => {
+		const generation = live.generation;
+		if (generation === seen) return;
+		seen = generation;
+		const later = setTimeout(() => load(name), 300);
+		return () => clearTimeout(later);
+	});
+
+	// New results of the host's services, in place.
+	$effect(() =>
+		live.watch({ hosts: [name] }, (v) => {
+			patchRow(services, v);
+			if (host) patchHost(host, v);
+		})
+	);
 </script>
 
 <div class="content">
