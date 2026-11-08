@@ -9,6 +9,7 @@ Channels: email, webhook. Who gets what: `[[notify]]` rules.
 | PROBLEM | HARD change to a problem state, incl. WARNING → CRITICAL |
 | RECOVERY | HARD change from a problem back to OK |
 | FLAPPINGSTART, FLAPPINGSTOP | flapping starts / stops |
+| DOWNTIMESTART, DOWNTIMEEND | a downtime starts / ends ([Operations](operations.md#history-and-notifications)) |
 
 Not sent:
 
@@ -145,6 +146,11 @@ enabled = false
 
 `hosts` and `services` both set: both must match.
 
+`services` set: no host alerts (host DOWN/UP) from this rule.
+
+`states` filters problems and recoveries only; flapping and downtime
+notifications ignore it.
+
 A recovery reaches a rule only if the state it recovers from is in the
 rule's `states`: a rule with `states = ["critical"]` gets CRITICAL → OK, not
 WARNING → OK.
@@ -191,7 +197,7 @@ POST, JSON:
 
 | Field | |
 |---|---|
-| `kind` | `problem`, `recovery`, `flappingstart`, `flappingstop`, `test` |
+| `kind` | `problem`, `recovery`, `flappingstart`, `flappingstop`, `downtimestart`, `downtimeend`, `test` |
 | `host_check` | `true`: about the host; `critical`/`unknown` = DOWN |
 | `previous_state` | the state before; `null` when a SOFT problem was just confirmed |
 | `url` | `null` without `public_url` |
