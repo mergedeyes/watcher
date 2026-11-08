@@ -1,15 +1,18 @@
 # Examples
 
-Complete `conf.d/` setups. Each passes `watcher config check`. Plugins:
-monitoring-plugins.
+Complete `conf.d/` setups for common cases. Each one passes
+`watcher config check`. The plugins come from the monitoring-plugins
+package.
 
 More in the repository: [examples/local](../examples/local),
-[examples/demo](../examples/demo) (no plugins needed),
+[examples/demo](../examples/demo) (needs no plugins), and
 [examples/sinks.toml](../examples/sinks.toml).
 
 ## One Linux server
 
-The Watcher machine itself.
+Monitors the machine Watcher runs on: two disks, load, swap and processes.
+The `disk` service uses `for_each`, so the host gets one disk service per
+entry in `vars.disks`: `disk_root` and `disk_var`.
 
 ```toml
 # conf.d/checks.toml
@@ -61,8 +64,16 @@ contacts = ["admin"]
 
 ## Web and database servers
 
-Host groups by name, UP/DOWN by ping, a service group for every server, a
-"Webshop" view, DBAs only for database problems.
+A small company network:
+
+- Every host gets the service group `server` (ping and SSH) through the
+  host group `all`. Ping also decides whether a host is UP or DOWN.
+- Web servers and databases get their services through host groups that
+  match their names.
+- The service group `shop` doesn't give anyone services. It only groups the
+  web and database services into a "Webshop" view.
+- The DBAs only get critical database problems; on-call gets everything
+  about production hosts.
 
 ```toml
 # conf.d/checks.toml
@@ -124,6 +135,9 @@ services = ["pgsql"]
 members = ["web01", "web02", "db01"]
 ```
 
+web02 checks another URL and db01 another database, by setting the var.
+test01 has a self-signed certificate, so its certificate check is removed.
+
 ```toml
 # conf.d/hosts.toml
 [[host]]
@@ -144,7 +158,7 @@ vars.db = "shop"
 name = "test01"
 address = "10.0.9.1"
   [host.service.https_cert]
-  enabled = false                             # self-signed on test
+  enabled = false
 ```
 
 ```toml
@@ -180,7 +194,10 @@ states = ["critical"]
 
 ## Many websites
 
-One HTTP service per site with `for_each`, all on one host entry.
+Monitors several websites from one host entry. `for_each` creates one HTTP
+service and one certificate service per site: `websites/http_shop`,
+`websites/http_blog`, `websites/http_api`, `websites/cert_shop`, and so on.
+The host has no address, so it has no host check and is always UP.
 
 ```toml
 # conf.d/checks.toml
@@ -220,12 +237,14 @@ vars.sites.api = { vhost = "api.example.com", url = "/v1/health" }
 title = "Websites"
 ```
 
-Services: `websites/http_shop`, `websites/http_blog`, `websites/http_api`,
-`websites/cert_shop`, ...
-
 ## Customers (MSP)
 
-A host group per customer, alerts to the customer and to the NOC.
+A service provider with several customers. Each customer has a host group
+that matches their host names. The NOC gets every notification; each
+customer only gets critical problems of their own hosts.
+
+The host group `windows` has no `members`: hosts join it themselves with
+`groups = ["windows"]`.
 
 ```toml
 # conf.d/checks.toml
@@ -268,6 +287,8 @@ members = ["acme-*"]
 title = "Globex"
 members = ["globex-*"]
 ```
+
+One file per customer keeps the hosts apart:
 
 ```toml
 # conf.d/hosts/acme.toml
@@ -312,7 +333,10 @@ on = ["problem", "recovery"]
 
 ## Backup jobs (passive)
 
-Jobs push their result after each run; no result in 26 h is UNKNOWN.
+The backup jobs send their result to Watcher after each run. If no result
+arrives for 26 hours, the service turns UNKNOWN. The mail server backs up
+every 6 hours, so it gets a shorter freshness and a threshold on the
+backup duration.
 
 ```toml
 # conf.d/services.toml
@@ -334,7 +358,7 @@ groups = ["backup"]
 name = "mailserver"
 groups = ["backup"]
   [host.service.backup]
-  freshness = "8h"                            # runs every 6 h
+  freshness = "8h"
   thresholds.duration = { warn = "> 2h" }
 ```
 
@@ -359,16 +383,18 @@ curl -fsS -X POST "https://watcher.example.com/api/v1/services/$(hostname)/backu
 
 ## Own scripts
 
-`checks/` next to `watcher.toml`, executable.
+Two scripts in `checks/` next to `watcher.toml`, both executable. One prints
+`key=value` metrics, the other JSON. Thresholds in the check decide the
+state of the first one; the second one sets its state in the JSON.
 
-`checks/app_queue`, key=value:
+`checks/app_queue`:
 
 ```sh
 #!/bin/sh
 echo "depth=$(redis-cli -h "$1" llen jobs) workers=$(redis-cli -h "$1" scard workers)"
 ```
 
-`checks/app_health`, JSON:
+`checks/app_health`:
 
 ```sh
 #!/bin/sh
@@ -413,8 +439,9 @@ servicegroups = ["app"]
 
 ## Copy to a central database
 
-Every result also goes to a reporting PostgreSQL; buffered on disk while
-it is down.
+Every result is also written to a reporting database, every five minutes.
+While the reporting database is down, results wait in a buffer of up to
+4 GB on disk.
 
 ```toml
 # conf.d/sinks.toml
@@ -427,7 +454,7 @@ flush = { mode = "interval", interval = "5m" }
 buffer = { max_size = "4GB" }
 ```
 
-Read-only access for Grafana on the local database:
+A read-only login on the local database, for Grafana:
 
 ```sh
 watcher db reader grafana

@@ -4,31 +4,32 @@
 watcher <command> [options]
 ```
 
-`PATH` arguments: a `watcher.toml`, or a directory of object files
-(no bootstrap file). Default: `./watcher.toml`, then
-`/etc/watcher/watcher.toml`.
+Commands that take a `PATH` accept either a `watcher.toml`, or a directory
+of object files (then there is no `watcher.toml`). Without a `PATH`,
+Watcher uses `./watcher.toml`, then `/etc/watcher/watcher.toml`.
 
-Log level: `RUST_LOG`, e.g. `RUST_LOG=debug watcher run`.
+The log level is set with `RUST_LOG`, for example
+`RUST_LOG=debug watcher run`.
 
 ## run
 
-Run all checks, serve the web UI and API.
+Runs all checks and serves the web UI and the API.
 
 ```
 watcher run [PATH] [options]
 ```
 
-| Option | Default | |
+| Option | Default | Description |
 |---|---|---|
-| `--all` | | log every result, not only state changes |
-| `--max-concurrent N` | 64 | checks running at the same time |
-| `--database URL` | `[database]` | env `WATCHER_DATABASE_URL` |
-| `--no-database` | | don't store results |
-| `--no-auth` | | no login; loopback only |
-| `--listen ADDR` | `listen` | e.g. `0.0.0.0:8080` |
+| `--all` | | Log every result, not only state changes. |
+| `--max-concurrent N` | `64` | How many checks may run at the same time. |
+| `--database URL` | `[database]` in `watcher.toml` | Database to use. Also: environment variable `WATCHER_DATABASE_URL`. |
+| `--no-database` | | Run without a database; results are not stored. |
+| `--no-auth` | | No login. Only listens on loopback. |
+| `--listen ADDR` | `listen` in `watcher.toml` | Address to listen on, for example `0.0.0.0:8080`. |
 
-A `PATH` to a `watcher.toml` that doesn't exist starts the browser setup.
-`SIGHUP` reloads the object files.
+If `PATH` points to a `watcher.toml` that doesn't exist yet, the setup
+wizard starts in the browser. `SIGHUP` reloads the object files.
 
 ```sh
 watcher run /etc/watcher/watcher.toml
@@ -37,26 +38,27 @@ watcher run examples/demo/watcher.toml --database postgres://watcher:watcher@loc
 
 ## run-check
 
-Run one command, print the evaluated result. Exit code: final state
-(0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN).
+Runs one command and shows how Watcher reads the result. Needs no
+configuration. The exit code is the final state: 0 OK, 1 WARNING,
+2 CRITICAL, 3 UNKNOWN.
 
 ```
 watcher run-check [options] [--] COMMAND...
 ```
 
-| Option | Default | |
+| Option | Default | Description |
 |---|---|---|
-| `--format F` | `auto` | `auto`, `nagios`, `key_value`, `json` |
-| `--timeout D` | `60s` | |
-| `--shell` | | run with `/bin/sh -c` |
-| `--warn METRIC=THRESHOLD` | | repeatable |
-| `--crit METRIC=THRESHOLD` | | repeatable |
-| `--output-limit BYTES` | 65536 | per stream |
-| `--json` | | result as JSON |
+| `--format F` | `auto` | Output format: `auto`, `nagios`, `key_value` or `json`. |
+| `--timeout D` | `60s` | Kill the command after this time. |
+| `--shell` | | Run the command with `/bin/sh -c`. |
+| `--warn METRIC=THRESHOLD` | | WARNING threshold for a metric. Can be given several times. |
+| `--crit METRIC=THRESHOLD` | | CRITICAL threshold for a metric. Can be given several times. |
+| `--output-limit BYTES` | `65536` | Maximum output read per stream (stdout, stderr). |
+| `--json` | | Print the result as JSON. |
 
-Options go before the command. One argument is split like a shell would;
-several are used as they are. Bare names are found in the default check
-directories.
+Options go before the command. A single argument is split into words like
+a shell would; several arguments are used as they are. Commands without a
+path are found in the default check directories.
 
 ```sh
 watcher run-check -- check_disk -w 20% -c 10% -p /
@@ -64,40 +66,43 @@ watcher run-check --shell 'echo "users=$(who | wc -l)"'
 watcher run-check --crit 'time=> 2s' -- check_http -H example.com
 ```
 
+See [Testing a command](../objects/check.md#testing-a-command).
+
 ## init
 
-Write `watcher.toml` and `conf.d/` from questions in the terminal.
+Asks questions in the terminal and writes `watcher.toml` and `conf.d/`.
 
 ```
 watcher init [DIR] [--answers FILE] [--force]
 ```
 
-| Option | |
-|---|---|
-| `DIR` | default `.` |
-| `--answers FILE` | no questions; format: [examples/init-answers.toml](../../examples/init-answers.toml) |
-| `--force` | overwrite existing files |
+| Option | Default | Description |
+|---|---|---|
+| `DIR` | `.` | Directory to write to. |
+| `--answers FILE` | | Take the answers from a file instead of asking. Format: [examples/init-answers.toml](../../examples/init-answers.toml). |
+| `--force` | | Overwrite existing files. |
 
-Piped stdin works too.
+Answers can also be piped to stdin.
 
 ## setup
 
-Setup wizard in the browser, then run.
+Runs the setup wizard in the browser, then starts Watcher.
 
 ```
 watcher setup [DIR] [--listen ADDR]
 ```
 
-| Option | Default | |
+| Option | Default | Description |
 |---|---|---|
-| `DIR` | `.` | |
-| `--listen ADDR` | `127.0.0.1:8080` | `0.0.0.0:8080` for a remote machine |
+| `DIR` | `.` | Directory to write to. |
+| `--listen ADDR` | `127.0.0.1:8080` | Use `0.0.0.0:8080` to set up a remote machine. |
 
-The setup token is printed to the log.
+The setup token you need to enter on the page is printed to the log.
 
 ## config check
 
-Validate; summary or every service.
+Checks the configuration and prints a summary, or every service with its
+command.
 
 ```
 watcher config check [PATH] [--services]
@@ -110,7 +115,7 @@ OK: 4 files, 2 hosts, 4 checks, 5 services, 5 on hosts, 1 contact
   localhost/backup     fresh 1day 2h  (passive)
 ```
 
-Errors with file and line, exit code 1:
+Errors are shown with file and line, and the exit code is 1:
 
 ```
 hosts.toml:4: error: host "h1": unknown hostgroup "b"
@@ -118,7 +123,8 @@ hosts.toml:4: error: host "h1": unknown hostgroup "b"
 
 ## config explain
 
-Config Tree: where an object and its values come from, where it is used.
+Shows the Config Tree: where an object and each of its values come from,
+and where the object is used.
 
 ```
 watcher config explain <host>[/<service>] [-c PATH]
@@ -126,8 +132,9 @@ watcher config explain <kind> <name> [-c PATH]
 ```
 
 Kinds: `host`, `service`, `check`, `hostgroup`, `servicegroup`,
-`contact`, `contactgroup`, `notify`. `service <name>` is a service as
-defined, `<host>/<service>` a service on a host.
+`contact`, `contactgroup`, `notify`. `service <name>` explains a service
+definition and the hosts that have it; `<host>/<service>` explains the
+service on one host.
 
 ```sh
 watcher config explain web01
@@ -137,9 +144,11 @@ watcher config explain hostgroup linux
 watcher config explain notify dba-critical
 ```
 
+See [Finding out where a value comes from](../guides/configuration.md#finding-out-where-a-value-comes-from).
+
 ## notify test
 
-Send a test message to a contact over all its channels.
+Sends a test message to a contact, on all its channels.
 
 ```
 watcher notify test <contact> [PATH]
@@ -147,7 +156,7 @@ watcher notify test <contact> [PATH]
 
 ## user
 
-Accounts, in the database.
+Manages web UI accounts. Accounts are stored in the database.
 
 ```
 watcher user add <name> [--admin] [--password-stdin]
@@ -156,13 +165,15 @@ watcher user list
 watcher user remove <name>
 ```
 
-- `--admin`: may edit the configuration.
-- Passwords: at least 10 characters. Asked twice, or first line of stdin.
-- `passwd` ends the user's sessions; `remove` deletes sessions and tokens.
+- `--admin`: the user may edit the configuration.
+- Passwords need at least 10 characters. They are asked twice, or read
+  from the first line of stdin with `--password-stdin`.
+- `passwd` logs the user out everywhere. `remove` also deletes the user's
+  sessions and API tokens.
 
 ## token
 
-API tokens, shown once.
+Manages API tokens. A token is shown only once, when it is created.
 
 ```
 watcher token create <user> <name>
@@ -176,19 +187,21 @@ watcher token create alice "backup cron job"
 
 ## db reader
 
-Read-only database login for Grafana, BI, SQL. Creates it or sets its
-password. Needs CREATEROLE; rerun after upgrades.
+Creates a read-only database login for Grafana, BI tools or SQL, or sets
+its password. Watcher's database user needs the CREATEROLE right. Run it
+again after upgrades.
 
 ```
 watcher db reader <name> [--password-stdin]
 ```
 
-Without `--password-stdin` a password is generated and printed.
+Without `--password-stdin`, a password is generated and printed. See
+[Read-only login](../guides/data.md#read-only-login).
 
 ## secret
 
-Keys and passwords for [checks over SSH](../guides/ssh.md#secrets), in
-the database, encrypted with `data_dir/secret.key`.
+Manages keys and passwords for [checks over SSH](../guides/ssh.md#secrets).
+They are stored in the database, encrypted with `data_dir/secret.key`.
 
 ```
 watcher secret new <name> [--replace]
@@ -199,14 +212,15 @@ watcher secret list
 watcher secret remove <name>
 ```
 
-- `new`: ed25519 key; the public key alone on stdout:
-  `watcher secret new monitor >> authorized_keys`.
-- `import`: ed25519 or ECDSA; OpenSSH, PEM, PuTTY; passphrase asked if
-  encrypted. No RSA.
+- `new` creates an ed25519 key and prints only the public key to stdout,
+  so you can append it directly: `watcher secret new monitor >> authorized_keys`.
+- `import` reads ed25519 or ECDSA keys in OpenSSH, PEM or PuTTY format, and
+  asks for the passphrase if the key is encrypted. RSA is not supported.
+- `--replace` overwrites an existing secret of the same name.
 
 ## hostkey
 
-SSH host keys, pinned on the first connection.
+Manages SSH host keys. Watcher stores a host's key on the first connection.
 
 ```
 watcher hostkey list
@@ -214,11 +228,14 @@ watcher hostkey accept <address>[:<port>]
 watcher hostkey forget <address>[:<port>]
 ```
 
+See [Host keys](../guides/ssh.md#host-keys).
+
 ## Database options
 
-`user`, `token`, `db`, `secret`, `hostkey` take:
+`user`, `token`, `db`, `secret` and `hostkey` need the database. They find
+it with these options:
 
-| Option | |
+| Option | Description |
 |---|---|
-| `-c, --config FILE` | `watcher.toml` with `[database]` |
-| `--database URL` | env `WATCHER_DATABASE_URL` |
+| `-c, --config FILE` | A `watcher.toml` with `[database]`. |
+| `--database URL` | The database URL. Also: environment variable `WATCHER_DATABASE_URL`. |
