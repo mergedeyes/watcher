@@ -598,7 +598,7 @@ pub(crate) async fn action(
                 let live = hub.read();
                 let state = |id: &str| live.services.get(id).map(|l| l.state.state);
                 for h in &reach.hosts {
-                    let host = config.hosts.iter().find(|x| x.name == *h);
+                    let host = config.host_named(h).map(|(_, h)| h);
                     match host.and_then(|h| config.host_check(h)) {
                         None => result.skipped.push(Skipped {
                             target: h.clone(),

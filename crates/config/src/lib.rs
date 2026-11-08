@@ -30,9 +30,10 @@ pub use schedule::Window;
 pub use select::{HostSelector, ServiceSelector};
 
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::Duration;
 use watcher_core::{FlapThresholds, Format, State, ThresholdSpec};
 use watcher_exec::CommandLine;
@@ -447,19 +448,71 @@ pub struct Config {
     pub downtimegroups: Vec<DowntimeGroup>,
     pub notify: Vec<NotifyRule>,
     pub sinks: Vec<Sink>,
+    /// Lookups by name, built on first use: the lists must be complete by
+    /// then.
+    index: OnceLock<Index>,
+}
+
+/// Positions in [`Config::hosts`] and [`Config::services`].
+#[derive(Debug, Clone, Default)]
+struct Index {
+    services: HashMap<String, usize>,
+    hosts: HashMap<String, usize>,
+    /// Per host, its services in config order.
+    host_services: Vec<Vec<usize>>,
+    /// Per host, its host check.
+    host_checks: Vec<Option<usize>>,
 }
 
 impl Config {
+    fn index(&self) -> &Index {
+        self.index.get_or_init(|| {
+            let mut index = Index {
+                services: HashMap::with_capacity(self.services.len()),
+                hosts: self
+                    .hosts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, h)| (h.name.clone(), i))
+                    .collect(),
+                host_services: vec![Vec::new(); self.hosts.len()],
+                host_checks: vec![None; self.hosts.len()],
+            };
+            for (i, s) in self.services.iter().enumerate() {
+                index.services.insert(s.id.clone(), i);
+                index.host_services[s.host].push(i);
+                if self.hosts[s.host].host_check.as_deref() == Some(s.name.as_str()) {
+                    index.host_checks[s.host] = Some(i);
+                }
+            }
+            index
+        })
+    }
+
     pub fn host(&self, service: &Service) -> &Host {
         &self.hosts[service.host]
     }
 
+    /// The host named `name` with its position in [`Config::hosts`].
+    pub fn host_named(&self, name: &str) -> Option<(usize, &Host)> {
+        let i = *self.index().hosts.get(name)?;
+        Some((i, &self.hosts[i]))
+    }
+
+    /// The services of the host at position `host`, in config order.
+    pub fn services_of(&self, host: usize) -> impl Iterator<Item = &Service> {
+        self.index()
+            .host_services
+            .get(host)
+            .into_iter()
+            .flatten()
+            .map(|&i| &self.services[i])
+    }
+
     /// The service that gives `host` its UP/DOWN state.
     pub fn host_check(&self, host: &Host) -> Option<&Service> {
-        let name = host.host_check.as_deref()?;
-        self.services
-            .iter()
-            .find(|s| s.name == name && self.host(s).name == host.name)
+        let (i, _) = self.host_named(&host.name)?;
+        self.index().host_checks[i].map(|s| &self.services[s])
     }
 
     /// Whether `service` gives its host its state.
@@ -468,7 +521,7 @@ impl Config {
     }
 
     pub fn service(&self, id: &str) -> Option<&Service> {
-        self.services.iter().find(|s| s.id == id)
+        self.index().services.get(id).map(|&i| &self.services[i])
     }
 
     /// The contacts of a contact group: listed in the group or listing it.

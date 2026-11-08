@@ -140,7 +140,7 @@ pub fn decide<'a>(
     config: &'a Config,
     public_url: Option<&str>,
 ) -> Option<(Notification, Vec<&'a Contact>)> {
-    let service = config.services.iter().find(|s| s.id == event.id)?;
+    let service = config.service(&event.id)?;
     let host_check = config.is_host_check(service);
     let to = event.state.state;
     // The hard state before: soft problems always start from a hard OK.
@@ -252,7 +252,7 @@ pub fn decide_downtime<'a>(
     config: &'a Config,
     public_url: Option<&str>,
 ) -> Option<(Notification, Vec<&'a Contact>)> {
-    let host = config.hosts.iter().find(|h| h.name == change.host)?;
+    let (_, host) = config.host_named(&change.host)?;
     let service = match &change.service {
         Some(name) => Some(config.service(&format!("{}/{name}", host.name))?),
         None => None,

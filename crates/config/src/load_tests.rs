@@ -237,6 +237,15 @@ fn compiles_the_design_example() {
     assert_eq!(names(&db.groups), ["dc1", "linux"]);
     assert_eq!(config.host_check(db).unwrap().id, "db01/ping");
     assert!(config.service("db01/load").is_none());
+    let (i, named) = config.host_named("db01").unwrap();
+    assert_eq!(named.name, "db01");
+    let own: Vec<_> = config.services_of(i).map(|s| s.id.as_str()).collect();
+    let all: Vec<_> = (config.services.iter())
+        .filter(|s| config.host(s).name == "db01")
+        .map(|s| s.id.as_str())
+        .collect();
+    assert_eq!(own, all);
+    assert!(config.host_named("nope").is_none());
 
     let dba: Vec<_> = config
         .group_contacts("dba")

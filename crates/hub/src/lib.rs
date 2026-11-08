@@ -223,7 +223,7 @@ impl Hub {
     pub fn host_down(&self, id: &str) -> bool {
         let live = self.live.read().unwrap_or_else(|e| e.into_inner());
         let config = &live.config;
-        let Some(service) = config.services.iter().find(|s| s.id == id) else {
+        let Some(service) = config.service(id) else {
             return false;
         };
         if config.is_host_check(service) {
