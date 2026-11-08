@@ -6,12 +6,15 @@
 mod api;
 pub mod auth;
 pub mod config;
+mod list;
 mod ops;
 pub mod ssh;
+mod stream;
 mod ui;
 mod view;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, SystemTime};
 use tokio::sync::{broadcast, mpsc};
@@ -52,7 +55,11 @@ struct Live {
 #[derive(Debug, Clone)]
 enum Update {
     /// A service view after a check result.
-    Result(Arc<str>),
+    Result {
+        /// `host/service`.
+        id: Arc<str>,
+        json: Arc<str>,
+    },
     /// The configuration was reloaded; clients should refetch lists.
     Reload,
 }
@@ -78,6 +85,12 @@ pub struct Hub {
     downtime_seen: Mutex<Option<ops::InDowntime>>,
     /// Checks over SSH: test runs and the secrets API.
     ssh: OnceLock<ssh::Access>,
+    /// What the open event streams get.
+    watches: Arc<stream::Watches>,
+    /// Counts changes of states, flags and the configuration.
+    generation: AtomicU64,
+    /// The summary of a generation, serialized.
+    summary: Mutex<Option<(u64, Arc<str>)>>,
 }
 
 impl Hub {
@@ -123,7 +136,37 @@ impl Hub {
             results: Mutex::new(ops::Counter::default()),
             downtime_seen: Mutex::new(None),
             ssh: OnceLock::new(),
+            watches: Arc::default(),
+            generation: AtomicU64::new(0),
+            summary: Mutex::new(None),
         })
+    }
+
+    /// Changes with every state, flag or configuration change.
+    fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Relaxed)
+    }
+
+    /// Lists and summaries are out of date.
+    fn changed(&self) {
+        self.generation.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The status summary of the current generation, serialized.
+    fn summary_json(&self) -> Arc<str> {
+        let generation = self.generation();
+        let mut cached = self.summary.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((g, json)) = &*cached
+            && *g == generation
+        {
+            return json.clone();
+        }
+        let summary = list::summary(&self.read(), generation);
+        let json: Arc<str> = serde_json::to_string(&summary)
+            .unwrap_or_else(|_| "{}".into())
+            .into();
+        *cached = Some((generation, json.clone()));
+        json
     }
 
     fn read(&self) -> RwLockReadGuard<'_, Live> {
@@ -178,6 +221,7 @@ impl Hub {
         }
         // Host flags may now cover other services.
         self.sync_scheduler();
+        self.changed();
         let _ = self.updates.send(Update::Reload);
     }
 
@@ -190,9 +234,9 @@ impl Hub {
         if event.state.state == watcher_core::State::Ok {
             self.clear_acks(&event.id);
         }
-        let view = {
+        let (view, changed) = {
             let mut live = self.live.write().unwrap_or_else(|e| e.into_inner());
-            live.services.insert(
+            let before = live.services.insert(
                 event.id.clone(),
                 LiveService {
                     state: event.state.clone(),
@@ -202,18 +246,34 @@ impl Hub {
                     duration: event.duration,
                 },
             );
+            let changed = before.is_none_or(|b| {
+                (b.state.state, b.state.state_type, b.state.flapping)
+                    != (
+                        event.state.state,
+                        event.state.state_type,
+                        event.state.flapping,
+                    )
+            });
+            // Only make a view when someone listens for it.
+            let wanted = self.updates.receiver_count() > 0 && self.watches.wanted(&event.id);
             let config = live.config.clone();
-            config.service(&event.id).map(|s| {
+            let view = config.service(&event.id).filter(|_| wanted).map(|s| {
                 let status = live.ops.status(&config, s, SystemTime::now());
                 view::ServiceView::new(&config, s, live.services.get(&s.id), &status)
-            })
+            });
+            (view, changed)
         };
-        // Only serialize when someone listens.
+        if changed {
+            self.changed();
+        }
         if let Some(view) = view
-            && self.updates.receiver_count() > 0
             && let Ok(json) = serde_json::to_string(&view)
         {
-            let _ = self.updates.send(Update::Result(json.into()));
+            let id = event.id.as_str().into();
+            let _ = self.updates.send(Update::Result {
+                id,
+                json: json.into(),
+            });
         }
     }
 

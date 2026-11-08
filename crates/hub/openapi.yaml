@@ -45,13 +45,31 @@ paths:
 
   /hosts:
     get:
-      summary: All hosts with their state
+      summary: Hosts with their state, filtered, sorted and paged
+      parameters:
+        - name: state
+          in: query
+          description: "Comma-separated: up, down, pending"
+          schema: { type: string, example: down }
+        - { name: group, in: query, description: Hosts in this host group, schema: { type: string } }
+        - { name: unhandled, in: query, description: DOWN and neither acknowledged nor in a downtime, schema: { type: boolean } }
+        - { name: q, in: query, description: Text in the name, address or host groups (ignoring case), schema: { type: string } }
+        - { name: sort, in: query, description: Config order without, schema: { type: string, enum: [host, status, address, last_check, duration] } }
+        - { name: desc, in: query, schema: { type: boolean } }
+        - { $ref: "#/components/parameters/offset" }
+        - { $ref: "#/components/parameters/limit" }
       responses:
         "200":
           description: OK
           content:
             application/json:
-              schema: { type: array, items: { $ref: "#/components/schemas/HostView" } }
+              schema:
+                type: object
+                properties:
+                  counts: { $ref: "#/components/schemas/HostCounts", description: Of the hosts that match every filter but state }
+                  total: { type: integer, description: Hosts that match every filter }
+                  hosts: { type: array, items: { $ref: "#/components/schemas/HostView" }, description: The requested page }
+        "400": { $ref: "#/components/responses/Error" }
 
   /hosts/{host}:
     get:
@@ -72,15 +90,23 @@ paths:
 
   /services:
     get:
-      summary: Services, filtered
+      summary: Services, filtered, sorted and paged
       parameters:
         - { name: host, in: query, schema: { type: string } }
+        - { name: hostgroup, in: query, description: Services of hosts in this host group, schema: { type: string } }
+        - { name: group, in: query, description: Services in this service group, schema: { type: string } }
         - name: state
           in: query
-          description: Comma-separated
+          description: "Comma-separated: ok, warning, critical, unknown, pending"
           schema: { type: string, example: "warning,critical" }
         - { name: problems, in: query, description: Not OK and not pending, schema: { type: boolean } }
         - { name: hard, in: query, description: Only hard states, schema: { type: boolean } }
+        - { name: unhandled, in: query, description: Problems neither acknowledged nor in a downtime, schema: { type: boolean } }
+        - { name: q, in: query, description: Text in the host, service, title or output (ignoring case), schema: { type: string } }
+        - { name: sort, in: query, description: Config order without, schema: { type: string, enum: [host, service, status, last_check, duration, attempt] } }
+        - { name: desc, in: query, schema: { type: boolean } }
+        - { $ref: "#/components/parameters/offset" }
+        - { $ref: "#/components/parameters/limit" }
       responses:
         "200":
           description: OK
@@ -89,8 +115,9 @@ paths:
               schema:
                 type: object
                 properties:
-                  counts: { $ref: "#/components/schemas/Counts" }
-                  services: { type: array, items: { $ref: "#/components/schemas/ServiceView" } }
+                  counts: { $ref: "#/components/schemas/Counts", description: Of the services that match every filter but state }
+                  total: { type: integer, description: Services that match every filter }
+                  services: { type: array, items: { $ref: "#/components/schemas/ServiceView" }, description: The requested page }
         "400": { $ref: "#/components/responses/Error" }
 
   /services/{host}/{service}:
@@ -360,6 +387,7 @@ paths:
                   properties:
                     host: { type: string }
                     service: { type: string }
+                    title: { type: [string, "null"] }
                     next_check: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
                     last_check: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
                     running: { type: boolean }
@@ -369,7 +397,7 @@ paths:
 
   /groups:
     get:
-      summary: Host and service groups (members are in the host and service views)
+      summary: Host and service groups with status totals (members are in the host and service views)
       responses:
         "200":
           description: OK
@@ -378,21 +406,89 @@ paths:
               schema:
                 type: object
                 properties:
-                  hostgroups: { type: array, items: { $ref: "#/components/schemas/Group" } }
-                  servicegroups: { type: array, items: { $ref: "#/components/schemas/Group" } }
+                  hostgroups:
+                    type: array
+                    items:
+                      allOf:
+                        - { $ref: "#/components/schemas/Group" }
+                        - type: object
+                          properties:
+                            hosts: { $ref: "#/components/schemas/HostCounts" }
+                            services: { $ref: "#/components/schemas/Counts" }
+                  servicegroups:
+                    type: array
+                    items:
+                      allOf:
+                        - { $ref: "#/components/schemas/Group" }
+                        - type: object
+                          properties:
+                            services: { $ref: "#/components/schemas/Counts" }
                   downtimegroups: { type: array, items: { type: object, properties: { name: { type: string }, title: { type: [string, "null"] }, schedule: { type: array, items: { type: string } } } } }
+
+  /summary:
+    get:
+      summary: Host and service totals
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Summary" }
+
+  /names:
+    get:
+      summary: All host names and the distinct service names, for suggestions
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hosts: { type: array, items: { type: string } }
+                  services: { type: array, items: { type: string } }
 
   /stream:
     get:
       summary: Live updates (Server-Sent Events)
       description: |
-        Events: `result` (a ServiceView after every check), `reload` (the config
-        was reloaded; fetch lists again), `lagged` (updates were dropped; fetch again).
+        Events: `result` (a ServiceView after a check), `summary` (a Summary
+        when states, flags or the config changed, at most once a second, and
+        when the stream opens), `reload` (the config was reloaded or a command
+        changed something; fetch again), `lagged` (updates were dropped; fetch
+        again).
+
+        With `watch=true` the stream first sends `hello` with its `id`, and
+        `result` only for the services and hosts set with `PUT /stream/{id}`:
+        the rows a page shows. Lists showing a page fetch it again when the
+        summary's `generation` changes.
+      parameters:
+        - { name: watch, in: query, description: Only results set with PUT /stream/{id}, schema: { type: boolean } }
       responses:
         "200":
           description: Event stream
           content:
             text/event-stream: {}
+
+  /stream/{id}:
+    put:
+      summary: What a stream opened with watch=true gets results of
+      description: Replaces the previous set. At most 10000 entries.
+      parameters: [{ name: id, in: path, required: true, description: From the stream's hello event, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                services: { type: array, items: { type: string }, description: "host/service ids" }
+                hosts: { type: array, items: { type: string }, description: All services of these hosts }
+      responses:
+        "200": { description: How many services and hosts are watched }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
 
   /auth/status:
     get:
@@ -847,6 +943,8 @@ components:
   parameters:
     host: { name: host, in: path, required: true, schema: { type: string } }
     service: { name: service, in: path, required: true, schema: { type: string } }
+    offset: { name: offset, in: query, description: Rows to skip, schema: { type: integer, default: 0 } }
+    limit: { name: limit, in: query, description: Rows to return; all without, schema: { type: integer } }
 
   requestBodies:
     Changes:
@@ -892,6 +990,30 @@ components:
         critical: { type: integer }
         unknown: { type: integer }
         pending: { type: integer }
+    HostCounts:
+      type: object
+      properties:
+        up: { type: integer }
+        down: { type: integer }
+        pending: { type: integer }
+    Summary:
+      type: object
+      properties:
+        generation: { type: integer, description: Changes when states, flags or the config change }
+        hosts:
+          allOf:
+            - { $ref: "#/components/schemas/HostCounts" }
+            - type: object
+              properties:
+                total: { type: integer }
+                unhandled: { type: integer, description: DOWN, not acknowledged, not in a downtime }
+        services:
+          allOf:
+            - { $ref: "#/components/schemas/Counts" }
+            - type: object
+              properties:
+                total: { type: integer }
+                unhandled: { type: integer, description: Not OK, not acknowledged, not in a downtime }
     ServiceView:
       type: object
       properties:
@@ -1032,6 +1154,7 @@ components:
         state_type: { $ref: "#/components/schemas/StateType" }
         hard: { type: boolean }
         output: { type: string }
+        title: { type: [string, "null"], description: The service's title now }
     RunResult:
       type: object
       properties:

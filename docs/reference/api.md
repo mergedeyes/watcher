@@ -39,13 +39,15 @@ Requests with a session cookie that change something need a matching
 | Method and path | Description |
 |---|---|
 | `GET health` | Status and version. |
-| `GET hosts` | All hosts with their state. |
+| `GET hosts` | Hosts with their state; filters below. |
 | `GET hosts/{host}` | One host with its services. |
-| `GET services` | All services; filters below. |
+| `GET services` | Services; filters below. |
 | `GET services/{host}/{service}` | One service with its last result. |
 | `POST services/{host}/{service}/result` | Submit a result for a passive service. |
 | `POST services/{host}/{service}/run` | Run the service's command once. The result is shown, not recorded. |
-| `GET groups` | Host groups, service groups and downtime groups. |
+| `GET groups` | Host groups, service groups and downtime groups, with the number of hosts and services in each state. |
+| `GET summary` | The number of hosts and services in each state, and how many problems are unhandled. |
+| `GET names` | All host names and the service names, for suggestions. |
 | `GET stream` | Live updates as Server-Sent Events. |
 
 Filters for `GET services`:
@@ -53,12 +55,41 @@ Filters for `GET services`:
 | Parameter | Description |
 |---|---|
 | `host` | Only services of this host. |
+| `hostgroup` | Only services of hosts in this host group. |
+| `group` | Only services in this service group. |
 | `state` | Comma-separated list: `ok,warning,critical,unknown,pending`. |
 | `problems=true` | Only services that are not OK and not PENDING. |
 | `hard=true` | Only HARD states. |
+| `unhandled=true` | Only problems that are not acknowledged and not in a downtime. |
+| `q` | Only services with this text in the host name, service name, title or output. Upper and lower case don't matter. |
+
+Filters for `GET hosts`:
+
+| Parameter | Description |
+|---|---|
+| `state` | Comma-separated list: `up,down,pending`. |
+| `group` | Only hosts in this host group. |
+| `unhandled=true` | Only DOWN hosts that are not acknowledged and not in a downtime. |
+| `q` | Only hosts with this text in the name, address or host groups. |
+
+Both lists can be sorted and split into pages:
+
+| Parameter | Description |
+|---|---|
+| `sort` | Services: `host`, `service`, `status`, `last_check`, `duration` or `attempt`. Hosts: `host`, `status`, `address`, `last_check` or `duration`. Without it, the list is in config order. Names sort by their numbers: `web2` comes before `web10`. |
+| `desc=true` | Reverse the order. |
+| `offset` | Skip this many entries. |
+| `limit` | Return at most this many entries. Without it, you get all of them. |
+
+The answer has the page in `services` (or `hosts`), the number of
+entries that match the filters in `total`, and `counts`: how many are in
+each state. `counts` ignores the `state` filter, so it shows the other
+states too.
 
 ```sh
 curl -H "Authorization: Bearer $T" '.../api/v1/services?state=critical,unknown&hard=true'
+curl -H "Authorization: Bearer $T" '.../api/v1/services?problems=true&sort=status&desc=true&limit=50'
+# → {"counts": {"ok": 0, "warning": 3, …}, "total": 12, "services": [ …50 at most… ]}
 ```
 
 Host and service objects include `acknowledged`, `muted`,
@@ -85,8 +116,23 @@ curl -N -H "Authorization: Bearer $T" .../api/v1/stream
 | Event | Meaning |
 |---|---|
 | `result` | A service after each check. |
-| `reload` | The configuration was reloaded; fetch the lists again. |
+| `summary` | The same as `GET summary`. Sent when the stream opens and after states change, at most once a second. Its `generation` number changes whenever a state, an acknowledgement, a downtime or the configuration changes. |
+| `reload` | The configuration was reloaded, or a command changed something; fetch the lists again. |
 | `lagged` | Updates were dropped because the client was too slow; fetch again. |
+
+With many services, a client usually only wants results for what it
+shows. Open the stream with `?watch=true`. The first event is `hello`
+with the stream's `id`. Then tell the hub which services and hosts you
+want results for; each call replaces the previous list:
+
+```sh
+curl -X PUT -H "Authorization: Bearer $T" -H 'content-type: application/json' \
+  -d '{"services": ["web01/http"], "hosts": ["db01"]}' .../api/v1/stream/<id>
+```
+
+`hosts` means all services of those hosts. `summary`, `reload` and
+`lagged` still come for everything. When `generation` changes, fetch your
+list again: services may have moved into or out of it.
 
 ## Commands
 

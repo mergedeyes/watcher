@@ -233,10 +233,8 @@ impl Hub {
                             let state = match service {
                                 Some(_) => live.services.get(&id).map(|l| l.state.state),
                                 None => config
-                                    .hosts
-                                    .iter()
-                                    .find(|h| h.name == *host)
-                                    .and_then(|h| config.host_check(h))
+                                    .host_named(host)
+                                    .and_then(|(_, h)| config.host_check(h))
                                     .and_then(|s| live.services.get(&s.id))
                                     .map(|l| l.state.state),
                             };
@@ -255,6 +253,9 @@ impl Hub {
             (now_in, changes)
         };
         *self.downtime_seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(now_in);
+        if !changes.is_empty() {
+            self.changed();
+        }
         for c in &changes {
             let kind = if c.started {
                 "downtime_start"
@@ -811,6 +812,7 @@ impl Hub {
     /// and the clients.
     pub(crate) fn ops_changed(&self) {
         self.sync_scheduler();
+        self.changed();
         let _ = self.updates.send(Update::Reload);
     }
 
@@ -1074,6 +1076,7 @@ pub(crate) async fn scheduler(
             Some(json!({
                 "host": live.config.host(service).name,
                 "service": service.name,
+                "title": service.title,
                 "next_check": j.next.map(|t| humantime::format_rfc3339_seconds(t).to_string()),
                 "last_check": last,
                 "running": j.running,
