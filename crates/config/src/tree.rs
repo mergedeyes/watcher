@@ -3,7 +3,7 @@
 //! client can link to it, and carries the file and line it is written at.
 
 use crate::{
-    Assigned, Config, Host, Layer, NotifyRule, Origin, Reason, RunOn, Service, Source, files,
+    Assigned, Config, Host, Layer, NotifyRule, Origin, Reason, RunOn, Service, Source, Var, files,
 };
 use serde::Serialize;
 use std::path::Path;
@@ -452,13 +452,14 @@ impl<'a> Builder<'a> {
             out.push(self.value("ssh.port", ssh.port.to_string(), src("ssh.port")));
             out.push(self.value("ssh.secret", ssh.secret.clone(), src("ssh.secret")));
         }
+        // Sources are recorded per text value: a table shows each of them.
         for (k, v) in &host.vars {
-            let key = format!("vars.{k}");
-            let text = match v.as_text() {
-                Some(t) => t.to_string(),
-                None => "(table)".into(),
-            };
-            out.push(self.value(&key, text, src(&key)));
+            let mut leaves = Vec::new();
+            leaf_vars(&format!("vars.{k}"), v, &mut leaves);
+            for (key, text) in leaves {
+                let source = ancestors(&key).find_map(src);
+                out.push(self.value(&key, text, source));
+            }
         }
         out
     }
@@ -953,6 +954,24 @@ pub fn render(node: &Node) -> String {
     out
 }
 
+/// The text values in `var`, with their dotted paths below `path`.
+fn leaf_vars(path: &str, var: &Var, out: &mut Vec<(String, String)>) {
+    match var {
+        Var::Text(t) => out.push((path.to_string(), t.clone())),
+        Var::Table(table) if table.is_empty() => out.push((path.to_string(), "{}".into())),
+        Var::Table(table) => {
+            for (k, v) in table {
+                leaf_vars(&format!("{path}.{k}"), v, out);
+            }
+        }
+    }
+}
+
+/// `a.b.c`, `a.b`, `a`.
+fn ancestors(path: &str) -> impl Iterator<Item = &str> {
+    std::iter::successors(Some(path), |p| p.rsplit_once('.').map(|(head, _)| head))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -979,6 +998,7 @@ services = ["disk"]
 [hostgroup.linux]
 members = ["db*"]
 servicegroups = ["basics"]
+vars.disks.root = { path = "/" }
 
 [contact.ops]
 email = "ops@example.com"
@@ -1017,7 +1037,7 @@ vars.disks.data = { path = "/srv", warn = "5%" }
             .iter()
             .find(|o| o.kind == crate::edit::Kind::Notify)
             .unwrap();
-        assert_eq!(rule.id(), "@a.toml:19");
+        assert_eq!(rule.id(), "@a.toml:20");
         let tree = builder.tree("service", "db01/disk_data").unwrap();
         fn names(n: &Node, out: &mut Vec<String>) {
             out.extend(n.name.clone());
@@ -1048,6 +1068,21 @@ vars.disks.data = { path = "/srv", warn = "5%" }
             ),
             "{text}"
         );
+        // Table vars: every value with where it comes from.
+        for expected in [
+            "vars.disks.data.path: /srv",
+            "vars.disks.data.warn: 5%",
+            "vars.disks.root.path: /",
+        ] {
+            assert!(text.contains(expected), "missing {expected:?} in\n{text}");
+        }
+        let root = text
+            .lines()
+            .skip_while(|l| !l.contains("vars.disks.root.path"))
+            .nth(1)
+            .unwrap();
+        assert!(root.contains("hostgroup linux"), "{text}");
+        assert!(!text.contains("(table)"), "{text}");
         let text = render(&builder.tree("servicegroup", "basics").unwrap());
         assert!(text.contains("hostgroup linux"), "{text}");
         std::fs::remove_dir_all(&dir).unwrap();
