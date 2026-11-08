@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="web/static/favicon.svg" alt="" width="72" height="72">
-</p>
-
 <h1 align="center">Watcher</h1>
 
 <p align="center">
@@ -27,6 +23,8 @@
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/overview-dark.png">
     <img src="docs/images/overview.png" alt="The Tactical Overview: host and service totals, hosts that are DOWN and service problems">
   </picture>
+  <br>
+  <sub>A simulated network: 9,500 hosts and 206,000 services in four datacenters.</sub>
 </p>
 
 Watcher checks your servers, network devices and applications, keeps
@@ -93,6 +91,13 @@ set it, and every alert to the rule that sent it.
 - **Data:** PostgreSQL or TimescaleDB, SQL views, read-only database
   logins, copies to a central database.
 - **API:** everything the web UI does, with tokens for your scripts.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/host-groups-dark.png">
+    <img src="docs/images/host-groups.png" alt="Host groups by datacenter and role, with the number of hosts and services in each state">
+  </picture>
+</p>
 
 ## Status
 
