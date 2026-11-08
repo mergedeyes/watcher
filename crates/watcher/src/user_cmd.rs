@@ -56,7 +56,7 @@ pub enum UserCommand {
     /// Create a user account.
     Add {
         name: String,
-        /// May manage other users (once user management exists in the UI).
+        /// May edit the configuration and manage users.
         #[arg(long)]
         admin: bool,
         /// Read the password from the first line of stdin instead of asking.

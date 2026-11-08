@@ -1,47 +1,49 @@
 # Notifications
 
-Channels: email, webhook. Who gets what: `[[notify]]` rules.
+Watcher sends notifications by email and webhook. Setting them up takes
+three steps:
 
-## When
+1. An SMTP server in `watcher.toml`, for email. See [SMTP](#smtp).
+2. [Contacts](../objects/contact.md): who receives notifications, and where.
+3. [Notify rules](../objects/notify.md): which contacts get which
+   notifications.
 
-| Type | Sent on |
-|---|---|
-| PROBLEM | HARD change to a problem state, incl. WARNING → CRITICAL |
-| RECOVERY | HARD change from a problem back to OK |
-| FLAPPINGSTART, FLAPPINGSTOP | flapping starts / stops |
+```toml
+# conf.d/contacts.toml
+[contact.oncall]
+email = "oncall@example.com"
 
-Not sent:
+[[notify]]
+contacts = ["oncall"]
+```
 
-- SOFT states
-- first OK results, states restored after a restart
-- other services of a host that is HARD DOWN
-- problems while flapping
-- host check WARNING (host stays UP), CRITICAL ↔ UNKNOWN on a host check
-- muted hosts and services, downtimes, acknowledged problems, and
-  everything while notifications are off ([Operations](operations.md))
+Then test it:
 
-The host check notifies as the host: `web01 is DOWN`.
+```sh
+watcher notify test oncall
+```
 
-*Not yet:* re-notification, escalations.
+When a notification is sent, and when it isn't, is described in
+[When notifications are sent](../objects/notify.md#when-notifications-are-sent).
 
 ## SMTP
 
-In `watcher.toml`:
+The mail server is set in `watcher.toml`. Changes need a restart.
 
 ```toml
-public_url = "https://watcher.example.com"   # links in messages
-instance_name = "msp-hub"                    # subject: [Watcher msp-hub]
+public_url = "https://watcher.example.com"   # used for links in messages
+instance_name = "msp-hub"                    # subject: [Watcher msp-hub] ...
 
 [smtp]
 host = "mail.example.com"
-port = 587                    # default: 587 starttls, 465 tls, 25 none
-tls = "starttls"              # starttls | tls | none
+port = 587
+tls = "starttls"
 username = "watcher"
-password_file = "smtp.pass"   # or: password = "..."
+password_file = "smtp.pass"
 from = "Watcher <watcher@example.com>"
 ```
 
-Local relay:
+A local mail relay without login or encryption:
 
 ```toml
 [smtp]
@@ -50,108 +52,93 @@ tls = "none"
 from = "watcher@example.com"
 ```
 
-Subject: `[Watcher] PROBLEM: web01/http is CRITICAL`.
+All SMTP fields: [watcher.toml](../reference/watcher-toml.md#smtp).
 
-## Contacts
+## Email
 
-```toml
-[contact.oncall]
-email = "oncall@example.com"
+The subject names the event, the host or service, and its state:
 
-[contact.alice]
-email = ["alice@example.com", "alice@pager.example.com"]
-
-[contact.chatops]
-webhook = "https://hooks.example.com/watcher"
+```
+[Watcher] PROBLEM: web01/http is CRITICAL
+[Watcher] RECOVERY: web01/http is OK
+[Watcher] PROBLEM: web01 is DOWN
+[Watcher] DOWNTIMESTART: web01 is UP
 ```
 
-Test:
+The body, as plain text:
 
-```sh
-watcher notify test oncall
+```
+web01/http is CRITICAL (was WARNING)
+
+HTTP CRITICAL - Socket timeout
+
+Host:     web01 (10.0.0.5)
+Service:  http
+State:    CRITICAL, confirmed after 3 attempts
+Time:     2026-10-23T08:15:02Z
+Details:  https://watcher.example.com/services/web01/http
 ```
 
-## Notify rules
+The `Details` link is only there if `public_url` is set.
 
-Every rule that matches adds its contacts. Each contact gets one message.
-No order, no "stop".
+| Event | Sent when |
+|---|---|
+| PROBLEM | A host or service has a confirmed (HARD) problem, or the problem got worse (WARNING → CRITICAL). |
+| RECOVERY | A confirmed problem is back to OK or UP. |
+| FLAPPINGSTART, FLAPPINGSTOP | A service starts or stops flapping. |
+| DOWNTIMESTART, DOWNTIMEEND | A downtime starts or ends. |
 
-Everything:
+## Webhook
 
-```toml
-[[notify]]
-contacts = ["oncall"]
+A contact with `webhook` gets each notification as a POST request with a
+JSON body:
+
+```json
+{
+  "kind": "problem",
+  "host": "web01",
+  "address": "10.0.0.5",
+  "service": "http",
+  "host_check": false,
+  "state": "critical",
+  "previous_state": "warning",
+  "attempts": 3,
+  "output": "HTTP CRITICAL - Socket timeout",
+  "long_output": "",
+  "time": "2026-10-23T08:15:02Z",
+  "url": "https://watcher.example.com/services/web01/http",
+  "instance": "msp-hub"
+}
 ```
 
-By host:
+| Field | Description |
+|---|---|
+| `kind` | `problem`, `recovery`, `flappingstart`, `flappingstop`, `downtimestart`, `downtimeend`, or `test` (from `watcher notify test`). |
+| `host`, `address` | The host. |
+| `service` | The service. For host notifications, the host check. |
+| `host_check` | `true`: the notification is about the host. Then `critical` and `unknown` mean DOWN, `ok` and `warning` mean UP. |
+| `state` | `ok`, `warning`, `critical` or `unknown`. |
+| `previous_state` | The state before. `null` when a problem was just confirmed after SOFT results. |
+| `attempts` | The attempt that confirmed the state. |
+| `output`, `long_output` | The check output. For downtimes: which downtime it is. |
+| `time` | Time of the result, RFC 3339. |
+| `url` | Link to the service page. `null` without `public_url`. |
+| `instance` | `instance_name` from `watcher.toml`. |
 
-```toml
-[[notify]]
-contacts = ["oncall"]
-hosts = { groups = ["prod"] }
+## Delivery
+
+A webhook counts as delivered when the server answers with a 2xx status.
+On 429, 5xx or a network error, Watcher tries again after 1 second and
+after 5 seconds. Temporary SMTP errors are retried the same way.
+
+Notifications that are held back are written to the log with the reason:
+
+```
+no notification for web01/http: in downtime (hostgroup linux)
+no notification for db01/replication: acknowledged
 ```
 
-By service:
-
-```toml
-[[notify]]
-contact_groups = ["dba"]
-services = { checks = ["pgsql"] }
-```
-
-Only some states:
-
-```toml
-[[notify]]
-name = "critical-only"
-contacts = ["manager"]
-hosts = { groups = ["dc1"] }
-states = ["critical", "down"]
-```
-
-Only some types:
-
-```toml
-[[notify]]
-contacts = ["chatops"]
-on = ["problem"]              # no recoveries, no flapping
-```
-
-Except:
-
-```toml
-[[notify]]
-contacts = ["oncall"]
-hosts = { groups = ["prod"], exclude = { name = "lab*" } }
-```
-
-Off:
-
-```toml
-[[notify]]
-contacts = ["oncall"]
-enabled = false
-```
-
-| Field | Default | |
-|---|---|---|
-| `name` | | for the UI and Config Tree |
-| `contacts`, `contact_groups` | | who |
-| `hosts` | all | [host selector](../reference/selectors.md#host-selector) |
-| `services` | all | [service selector](../reference/selectors.md#service-selector) |
-| `states` | all | `warning`, `critical`, `unknown`, `down` |
-| `on` | all | `problem`, `recovery`, `flapping`, `downtime` |
-| `enabled` | `true` | |
-
-`hosts` and `services` both set: both must match.
-
-A recovery reaches a rule only if the state it recovers from is in the
-rule's `states`: a rule with `states = ["critical"]` gets CRITICAL → OK, not
-WARNING → OK.
-
-Unnamed rules show as `rule at file:line` in logs and Config Trees.
-
-## Who gets an alert
+## Who gets a notification
 
 ```sh
 watcher config explain web01/http
@@ -167,34 +154,5 @@ watcher config explain web01/http
 watcher config explain contact oncall
 ```
 
-## Webhook
-
-POST, JSON:
-
-```json
-{
-  "kind": "problem",
-  "host": "web01",
-  "address": "10.0.0.5",
-  "service": "http",
-  "host_check": false,
-  "state": "critical",
-  "previous_state": null,
-  "attempts": 3,
-  "output": "HTTP CRITICAL - Socket timeout",
-  "long_output": "",
-  "time": "2026-10-23T08:15:02Z",
-  "url": "https://watcher.example.com/services/web01/http",
-  "instance": "msp-hub"
-}
-```
-
-| Field | |
-|---|---|
-| `kind` | `problem`, `recovery`, `flappingstart`, `flappingstop`, `test` |
-| `host_check` | `true`: about the host; `critical`/`unknown` = DOWN |
-| `previous_state` | the state before; `null` when a SOFT problem was just confirmed |
-| `url` | `null` without `public_url` |
-
-2xx: delivered. 429, 5xx, network errors: retried after 1 s and 5 s. Same
-for temporary SMTP errors.
+*Not yet:* repeated notifications for ongoing problems, escalations, more
+channels.

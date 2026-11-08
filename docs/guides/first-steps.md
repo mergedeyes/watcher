@@ -1,10 +1,12 @@
 # First steps
 
-From an empty directory to a monitored host with email alerts. Needs
-[monitoring-plugins](https://www.monitoring-plugins.org) and a database
-([Installation](../install.md)).
+This guide goes from an empty directory to a monitored host that sends
+email alerts. You need the
+[monitoring plugins](https://www.monitoring-plugins.org) (for example
+`apt install monitoring-plugins`) and a database, see
+[Installation](../install.md).
 
-## 1. Setup
+## 1. Set up Watcher
 
 ```sh
 mkdir ~/watcher && cd ~/watcher
@@ -12,55 +14,62 @@ watcher init
 watcher run
 ```
 
-Open http://127.0.0.1:8080, log in with the admin account.
+`watcher init` asks a few questions and writes `watcher.toml` and the
+`conf.d/` directory. Open http://127.0.0.1:8080 and log in with the admin
+account you created.
 
-## 2. A check
+## 2. Write a check
 
+A [check](../objects/check.md) says what to run. Create
 `conf.d/checks.toml`:
 
 ```toml
-[check.ping]
-command = "check_ping -H $host.address$ -w $warn$ -c $crit$"
-vars = { warn = "100,20%", crit = "500,60%" }
-
 [check.http]
 command = "check_http -H $host.address$ -u $url$"
 vars.url = "/"
 thresholds.time = { warn = "> 500ms", crit = "> 2s" }
 ```
 
-Try it first:
+`$host.address$` will be the address of the host, and `$url$` the var
+`url`. The threshold turns the state WARNING when the page takes longer
+than 500 ms, and CRITICAL above 2 seconds.
+
+You can try a command before you configure it:
 
 ```sh
-watcher run-check -- check_ping -H 10.0.0.5 -w 100,20% -c 500,60%
+watcher run-check -- check_http -H example.com -u /
 ```
 
-## 3. Services
+## 3. Make it a service
 
-`conf.d/services.toml`:
+A [service](../objects/service.md) is a check that can be put on hosts.
+Create `conf.d/services.toml`:
 
 ```toml
-[service.ping]            # check "ping"
-[service.http]            # check "http"
+[service.http]
 ```
 
-## 4. A host
+The service `http` uses the check `http`, because they have the same name.
 
-`conf.d/hosts.toml`:
+## 4. Add a host
+
+Create `conf.d/hosts.toml`:
 
 ```toml
 [[host]]
 name = "web01"
 address = "10.0.0.5"
-services = ["ping", "http"]
-host_check = "ping"       # gives the host UP/DOWN
+services = ["http"]
 ```
 
-Saved files load within a second. Log:
+Watcher loads saved files within a second. The log shows:
 
 ```
 reloading (file change)
 ```
+
+Because the host has an address, Watcher also pings it to decide whether
+it is UP or DOWN. See [Host state](../objects/host.md#host-state).
 
 ## 5. Check the result
 
@@ -69,17 +78,19 @@ watcher config check --services
 ```
 
 ```
-OK: 3 files, 1 host, 2 checks, 2 services, 2 on hosts
+OK: 3 files, 1 host, 1 check, 1 service, 2 on hosts
 
   web01/http  every 1m     check_http -H 10.0.0.5 -u /
-  web01/ping  every 1m     check_ping -H 10.0.0.5 -w '100,20%' -c '500,60%'
+  web01/ping  every 1m     ping -H 10.0.0.5 -p 5 -w 3000,80% -c 5000,100% (built-in)
 ```
 
-Web UI: Hosts → web01. Config Tree shows where each value comes from.
+In the web UI, open Hosts → web01. The Config Tree on that page shows
+where each value comes from.
 
-## 6. Alerts
+## 6. Get alerts
 
-`conf.d/contacts.toml`:
+Create `conf.d/contacts.toml` with a [contact](../objects/contact.md) and a
+[notify rule](../objects/notify.md):
 
 ```toml
 [contact.oncall]
@@ -87,24 +98,26 @@ email = "oncall@example.com"
 
 [[notify]]
 contacts = ["oncall"]
-hosts = ["web*"]
 ```
 
-SMTP in `watcher.toml` ([reference](../reference/watcher-toml.md#smtp)),
-then:
+Email needs an SMTP server in `watcher.toml`, see
+[Notifications](notifications.md#smtp). Then send a test message:
 
 ```sh
 watcher notify test oncall
 ```
 
-## 7. Same in the web UI
+## 7. The same in the web UI
 
-Configuration → Checks / Services / Hosts → Add. Every save shows the
-changes (+ ~ −) before Apply. The UI writes to the same files.
+Everything above also works under Configuration → Checks, Services and
+Hosts → Add. Each save shows what will change (+ ~ −) before you click
+Apply. The web UI writes to the same files.
 
 ## Next
 
-- [Checks](checks.md): own scripts, output formats
-- [Hosts and services](hosts-and-services.md): host groups, service groups,
-  per-host values, one service per disk
-- [Notifications](notifications.md)
+- [How the configuration works](configuration.md): how objects fit
+  together and which value wins
+- [hostgroup](../objects/hostgroup.md): give many hosts the same services
+- [for_each](../objects/service.md#one-service-per-item-for_each): one
+  service per disk, website or queue
+- [Examples](../examples.md): complete setups

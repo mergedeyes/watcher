@@ -1,197 +1,83 @@
 # Watcher
 
-Infrastructure monitoring: hosts, services, metrics, alerts. Nagios plugins
-and any script that prints a result work as checks.
+**Infrastructure monitoring that is as simple to configure as Nagios, and
+tells you where every value comes from.**
 
-Documentation: [docs/](docs/README.md).
-
-## Requirements
-
-- Rust 1.94 or later, Node.js (LTS) to build the web UI
-- PostgreSQL, ideally with TimescaleDB (optional, see below)
-- Monitoring plugins (optional), e.g. `apt install monitoring-plugins`
-
-## Build
-
-```sh
-npm --prefix web ci
-npm --prefix web run build    # before cargo: the UI is built into the binary
-cargo build --release         # → target/release/watcher
-```
-
-## Database
-
-Optional. Without one: no history, graphs or logins, and the web UI only
-listens on 127.0.0.1.
-
-```sh
-docker run -d --name watcher-db -p 127.0.0.1:5432:5432 \
-  -e POSTGRES_USER=watcher -e POSTGRES_PASSWORD=watcher -e POSTGRES_DB=watcher \
-  timescale/timescaledb:latest-pg18
-```
-
-URL: `postgres://watcher:watcher@localhost:5432/watcher`. The schema is
-created on first start.
-
-## Setup
-
-In an empty directory:
-
-```sh
-watcher setup     # browser: open the URL from the log, enter the setup token
-watcher init      # or: questions in the terminal
-```
-
-Both ask for the database, web address, admin account, email and the alert
-contact, and can add checks for this machine. They write:
-
-```
-watcher.toml        listen address, database, SMTP
-conf.d/checks.toml    what to run
-conf.d/services.toml  checks with their settings, a service group
-conf.d/hosts.toml     the hosts and a host group
-conf.d/contacts.toml, conf.d/notify.toml   who gets alerts
-```
-
-Start:
-
-```sh
-watcher run       # reads ./watcher.toml; web UI on http://127.0.0.1:8080
-```
-
-## Adding hosts and services
-
-| Term | Meaning |
-|---|---|
-| check | what to run: a command and its defaults |
-| service | a check with its settings |
-| host | something to monitor |
-| host group | hosts that get the same services |
-| service group | services assigned together |
-
-```
-check ─▶ service ─▶ host
-            │         ▲
-            ▼         │
-     servicegroup ─▶ hostgroup
-```
-
-**Web UI:** Configuration → Checks → Add Check; Services → Add Service;
-Hosts → Add Host, pick services, service groups or host groups. Every save
-shows what changes before Apply. **Clone** copies an object; `web[03-10]`
-as names makes eight copies.
-
-**Files:** any `*.toml` below `conf.d/`. Saved changes are loaded within a
-second; with errors, the running config stays and the log says why.
-
-Check before saving, and see where a service's values come from:
-
-```sh
-watcher config check --services
-watcher config explain web01/http
-```
-
-### A check
-
-Bare plugin names are found in `checks/` next to watcher.toml and in the
-monitoring-plugins directories. `$name$` is a variable, `$host.address$`
-the host's address.
-
-```toml
-[check.ping]
-command = "check_ping -H $host.address$ -w $warn$ -c $crit$"
-vars = { warn = "100,20%", crit = "500,60%" }
-```
-
-### A service
-
-`check` defaults to the check of the same name.
-
-```toml
-[service.ping]
-
-[service.load]
-interval = "5m"
-```
-
-### A host
-
-```toml
-[[host]]
-name = "web01"
-address = "10.0.0.5"          # default: the name
-services = ["ping", "load"]
-host_check = "ping"           # gives the host UP/DOWN
-```
-
-### Groups
-
-```toml
-[servicegroup.linux]
-services = ["ping", "load"]
-
-[hostgroup.web]
-members = ["web*"]            # or groups = ["web"] on the host
-servicegroups = ["linux"]
-services = ["http"]
-host_check = "ping"
-```
-
-### One service on one host
-
-```toml
-[[host]]
-name = "db01"
-groups = ["web"]
-  [host.service.backup_age]
-  command = "/opt/scripts/backup_age.sh"
-```
-
-### Different values on one host
-
-Host values win over the host group's, the service's over the check's.
-
-```toml
-[[host]]
-name = "web02"
-groups = ["web"]
-vars.warn = "200,30%"         # used by $warn$ in ping
-  [host.service.load]
-  enabled = false             # this host doesn't get it
-```
-
-### One service per disk
-
-```toml
-[check.disk]
-command = "check_disk -w $warn$ -c $crit$ -p $path$"
-vars = { warn = "20%", crit = "10%" }
-
-[service.disk]
-for_each = "disks"
-
-[[host]]
-name = "db01"
-services = ["disk"]
-vars.disks.root = { path = "/" }                               # → disk_root
-vars.disks.data = { path = "/srv", warn = "10%", crit = "5%" } # → disk_data
-```
-
-### A script as check
-
-Exit code 0–3 is OK, WARNING, CRITICAL, UNKNOWN. `key=value` output becomes
-metrics.
-
-```toml
-[check.uptime]
-shell = true
-command = 'echo "uptime=$(cut -d" " -f1 /proc/uptime)s"'
-```
-
-### Thresholds on metrics
+Watcher checks your hosts and services, stores their metrics, and alerts
+you when something breaks. It is a single binary with a built-in web UI.
+Your existing Nagios plugins work unchanged, and so does any script that
+prints a result.
 
 ```toml
 [check.http]
-command = "check_http -H $host.address$"
+command = "check_http -H $host.address$ -u $url$"
+vars.url = "/"
 thresholds.time = { warn = "> 500ms", crit = "> 2s" }
+
+[service.http]
+
+[hostgroup.web-servers]
+members = ["web*"]
+services = ["http"]
 ```
+
+Every host whose name starts with `web` now gets an HTTP check. Hosts with
+an address are also pinged, to tell whether they are UP or DOWN.
+
+## Why Watcher
+
+| Elsewhere | Watcher |
+|---|---|
+| "Where does this value come from?" | The **Config Tree** shows every value with its file, line and layer, in the web UI and with `watcher config explain`. |
+| Inheritance surprises: the first template wins, lists get replaced | **One precedence rule**: host > host group > service > check. Two host groups that disagree are an error, not a silent pick. |
+| One edit per host, per disk, per URL | Services assigned to **host groups** with name patterns; **`for_each`** creates one service per disk, website or queue. |
+| Web UI and config files drift apart | The web UI **edits the same TOML files**, keeps your comments, and shows a diff before applying. File edits load within a second. |
+| Notification routing depends on rule order | **Notify rules** without order: every matching rule notifies, each contact gets one message. |
+| Data locked in a custom store | **PostgreSQL** (TimescaleDB optional) with plain SQL views for Grafana, BI tools and your own queries. |
+| Hours of setup | One binary. A **setup wizard** in the browser or the terminal. |
+
+## Features
+
+- **Checks:** Nagios plugins, your own scripts with Nagios, `key=value` or
+  JSON output, passive results pushed over the API, thresholds with units,
+  built-in ping.
+- **Agentless checks over SSH**, with encrypted secrets, pinned host keys
+  and scripts copied to the hosts automatically.
+- **Alerting:** SOFT/HARD states, retries, host UP/DOWN, flap detection;
+  email and webhooks.
+- **Operations:** acknowledgements, one-off and recurring downtimes,
+  muting, re-checks.
+- **Web UI:** tactical overview, problems, groups, alert history, graphs,
+  configuration forms and a file editor with live validation.
+- **Data:** PostgreSQL/TimescaleDB, SQL views, read-only logins, copies to
+  a central database.
+- **API:** everything the web UI does, with tokens.
+
+Coming next: distributed nodes reporting to a central hub, more built-in
+checks, data repair in graphs, and native IBM i, AIX, HMC and MQ checks.
+See [what works today](docs/introduction.md#what-works-today).
+
+## Quick start
+
+```sh
+npm --prefix web ci && npm --prefix web run build
+cargo build --release
+mkdir ~/watcher && cd ~/watcher
+/path/to/target/release/watcher setup    # open the URL from the log
+```
+
+Watcher runs without a database, but for history, graphs and logins you
+want PostgreSQL; see [Installation](docs/install.md). Then follow
+[First steps](docs/guides/first-steps.md) to monitor your first host.
+
+## Documentation
+
+- [Introduction](docs/introduction.md)
+- [Installation](docs/install.md)
+- [First steps](docs/guides/first-steps.md)
+- [How the configuration works](docs/guides/configuration.md)
+- [All documentation](docs/README.md)
+
+## License
+
+[AGPL-3.0-only](LICENSE)

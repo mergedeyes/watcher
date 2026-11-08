@@ -1,59 +1,70 @@
 # HTTP API
 
-JSON under `/api/v1`. The web UI uses only this API. Full spec: OpenAPI
-3.1 at `/api/v1/openapi.yaml` ([crates/hub/openapi.yaml](../../crates/hub/openapi.yaml)).
+The API speaks JSON under `/api/v1`. The web UI uses nothing but this API,
+so everything the web UI can do, a script can do too. The full
+specification is OpenAPI 3.1 at `/api/v1/openapi.yaml`
+([crates/hub/openapi.yaml](../../crates/hub/openapi.yaml)).
+
+Paths below are relative to `/api/v1`.
 
 ## Authentication
 
-| | |
+| Client | How it logs in |
 |---|---|
-| Scripts | `Authorization: Bearer wt_...` ([token](cli.md#token) or Account page) |
-| Browser | session cookie from `POST auth/login` |
-| No login | without a database, or `--no-auth` (loopback only) |
+| Scripts | `Authorization: Bearer wt_...` header with an API token (see [token](cli.md#token), or the Account page). |
+| Browser | Session cookie from `POST auth/login`. |
+| No login | Without a database, or with `--no-auth`. Only on loopback. |
 
-Public: UI files, `health`, `openapi.yaml`, `auth/status`, `auth/login`.
-Admins only: `config/*`, `users` (except your own password), `PUT
-process`, `run-check`. Everything else: any logged-in user.
+A token has the same rights as its user.
 
-Everything the web UI does is in the API; a token has the rights of its
-user.
+| Access | Endpoints |
+|---|---|
+| Public | UI files, `health`, `openapi.yaml`, `auth/status`, `auth/login` |
+| Admins only | `config/*`, `ssh/*`, `users` (except changing your own password), `PUT process`, `run-check` |
+| Any logged-in user | everything else |
 
 ```sh
 export T=wt_...
 curl -H "Authorization: Bearer $T" http://127.0.0.1:8080/api/v1/services?problems=true
 ```
 
-Errors: `{"error": "..."}` with 400, 401, 403, 404, 409, 422, 503 (needs a
-database).
+Errors come as `{"error": "..."}` with status 400, 401, 403, 404, 409, 422,
+or 503 (the endpoint needs a database).
+
+Requests with a session cookie that change something need a matching
+`Origin` header.
 
 ## Status
 
-| Method, path | |
+| Method and path | Description |
 |---|---|
-| `GET health` | status, version |
-| `GET hosts` | hosts with state |
-| `GET hosts/{host}` | host with its services |
-| `GET services` | services; filters below |
-| `GET services/{host}/{service}` | service with last result |
-| `POST services/{host}/{service}/result` | passive result |
-| `POST services/{host}/{service}/run` | run its command once, not recorded |
-| `GET groups` | host, service and downtime groups |
-| `GET stream` | live updates, Server-Sent Events |
+| `GET health` | Status and version. |
+| `GET hosts` | All hosts with their state. |
+| `GET hosts/{host}` | One host with its services. |
+| `GET services` | All services; filters below. |
+| `GET services/{host}/{service}` | One service with its last result. |
+| `POST services/{host}/{service}/result` | Submit a result for a passive service. |
+| `POST services/{host}/{service}/run` | Run the service's command once. The result is shown, not recorded. |
+| `GET groups` | Host groups, service groups and downtime groups. |
+| `GET stream` | Live updates as Server-Sent Events. |
 
-`GET services` filters:
+Filters for `GET services`:
 
-| Parameter | |
+| Parameter | Description |
 |---|---|
-| `host` | host name |
-| `state` | comma list: `ok,warning,critical,unknown,pending` |
-| `problems=true` | not OK, not PENDING |
-| `hard=true` | HARD states only |
+| `host` | Only services of this host. |
+| `state` | Comma-separated list: `ok,warning,critical,unknown,pending`. |
+| `problems=true` | Only services that are not OK and not PENDING. |
+| `hard=true` | Only HARD states. |
 
 ```sh
 curl -H "Authorization: Bearer $T" '.../api/v1/services?state=critical,unknown&hard=true'
 ```
 
-Passive result:
+Host and service objects include `acknowledged`, `muted`,
+`checks_enabled` and `downtime`.
+
+### Passive results
 
 ```sh
 curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
@@ -61,37 +72,45 @@ curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
   .../api/v1/services/backup01/backup/result
 ```
 
-Body: `exit_code` (0–3) or `state` (`ok`, `warning`, `critical`,
-`unknown`); `output` parsed like stdout.
+The body contains `exit_code` (0 to 3) or `state` (`ok`, `warning`,
+`critical`, `unknown`), and `output`, which is read like the output of a
+command. See [Passive checks](../objects/check.md#passive-checks).
 
-Stream events: `result` (service after every check), `reload` (config
-reloaded, fetch lists again), `lagged` (updates dropped, fetch again).
+### Live updates
 
 ```sh
 curl -N -H "Authorization: Bearer $T" .../api/v1/stream
 ```
 
-Service and host views carry `acknowledged`, `muted`, `checks_enabled`
-and `downtime`.
+| Event | Meaning |
+|---|---|
+| `result` | A service after each check. |
+| `reload` | The configuration was reloaded; fetch the lists again. |
+| `lagged` | Updates were dropped because the client was too slow; fetch again. |
 
 ## Commands
 
-`POST actions/{action}`:
+`POST actions/{action}` runs a command on hosts or services:
 
-| Action | |
+| Action | Description |
 |---|---|
-| `recheck` | run now (also while checks are off) |
-| `ack`, `unack` | acknowledge a problem; ends when OK |
-| `mute`, `unmute` | notifications off/on |
-| `disable-checks`, `enable-checks` | active checks off/on |
-| `downtime` | no notifications from `start` to `end`, or for `duration` |
+| `recheck` | Run the check now, even while checks are turned off. |
+| `ack`, `unack` | Acknowledge a problem, or remove the acknowledgement. An acknowledgement ends when the service is OK again. |
+| `mute`, `unmute` | Turn notifications off or on. |
+| `disable-checks`, `enable-checks` | Turn active checks off or on. |
+| `downtime` | No notifications from `start` until `end`, or for `duration`. |
 
-Body: targets `hosts`, `services` (`host/service`), `hostgroups`,
-`servicegroups`, `downtimegroups`; `comment`; for `downtime` `start`
-(default now), `end` or `duration` (`2h`). A host covers its services;
-`ack` on a host acknowledges its host check. Groups are expanded, except
-in downtimes: those keep the group, later members are covered too.
-Response: `done`, `skipped` (with reason), `downtimes`.
+| Body field | Description |
+|---|---|
+| `hosts` | Host names. A host covers all its services; `ack` on a host acknowledges its host check. |
+| `services` | Service IDs, `host/service`. |
+| `hostgroups`, `servicegroups`, `downtimegroups` | Groups. Expanded to their members, except for downtimes: a downtime keeps the group, so hosts that join later are covered too. |
+| `comment` | Text shown with the acknowledgement or downtime. |
+| `start` | `downtime` only. Start time; default now. |
+| `end`, `duration` | `downtime` only. End time, or a duration like `2h`. |
+
+The response lists what was `done`, what was `skipped` (with the reason),
+and the `downtimes` created.
 
 ```sh
 curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
@@ -102,15 +121,15 @@ curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
   -d '{"hostgroups": ["linux"]}' .../api/v1/actions/recheck
 ```
 
-| Method, path | |
+| Method and path | Description |
 |---|---|
-| `GET flags` | acknowledgements, muted, checks off |
-| `GET downtimes` | downtimes not ended, and downtime group windows |
-| `DELETE downtimes/{id}` | end or cancel a downtime |
-| `GET process` | process info: version, uptime, switches, scheduler, results/min |
-| `PUT process` | `{"notifications": bool, "checks": bool}` (admins) |
-| `GET scheduler` | scheduling queue, soonest first; `limit` |
-| `POST run-check` | `{"command", "shell", "format", "timeout"}`: run as a check (admins) |
+| `GET flags` | Acknowledgements, muted services, services with checks off. |
+| `GET downtimes` | Downtimes that haven't ended, and the windows of downtime groups. |
+| `DELETE downtimes/{id}` | End or cancel a downtime. |
+| `GET process` | Process info: version, running time, global switches, scheduler, results per minute. |
+| `PUT process` | `{"notifications": bool, "checks": bool}`: the global switches. Admins only. |
+| `GET scheduler` | The scheduling queue, soonest first. `limit` limits the number of entries. |
+| `POST run-check` | `{"command", "shell", "format", "timeout"}`: run a command like `watcher run-check`. Admins only. |
 
 ```sh
 curl -X PUT -H "Authorization: Bearer $T" -H 'content-type: application/json' \
@@ -121,73 +140,80 @@ curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
 
 ## History and metrics
 
-Need a database.
+These endpoints need a database.
 
-| Method, path | |
+| Method and path | Description |
 |---|---|
-| `GET events` | alert history, newest first |
-| `GET services/{host}/{service}/series` | metric series of a service; `warn`, `crit`: threshold bounds of the latest result |
-| `GET series/{id}/points` | points, bucketed |
+| `GET events` | Alert history, newest first. |
+| `GET services/{host}/{service}/series` | The metric series of a service, with `warn` and `crit`: the threshold bounds of the latest result. |
+| `GET series/{id}/points` | The points of a series, grouped into buckets. |
 
-`GET events`:
+Parameters for `GET events`:
 
-| Parameter | |
+| Parameter | Description |
 |---|---|
-| `host`, `service` | |
-| `type` | comma list: `service,host,flapping,ack,downtime` |
-| `state` | comma list: `ok,warning,critical,unknown,up,down` |
-| `state_type` | `soft`, `hard` |
-| `hard=true` | confirmed problems and their recoveries |
-| `since`, `before` | time |
-| `limit` | |
+| `host`, `service` | Only events of this host or service. |
+| `type` | Comma-separated list: `service,host,flapping,ack,downtime`. |
+| `state` | Comma-separated list: `ok,warning,critical,unknown,up,down`. |
+| `state_type` | `soft` or `hard`. |
+| `hard=true` | Only confirmed problems and their recoveries. |
+| `since`, `before` | Time range. |
+| `limit` | Maximum number of events. |
 
-`GET series/{id}/points`:
+Parameters for `GET series/{id}/points`:
 
-| Parameter | Default | |
+| Parameter | Default | Description |
 |---|---|---|
-| `from` | `1h` | time |
-| `to` | now | time |
-| `points` | 600 | max buckets, 1–10000 |
+| `from` | `1h` | Start time. |
+| `to` | now | End time. |
+| `points` | `600` | Maximum number of buckets, 1 to 10000. |
 
-Times: RFC 3339, unix seconds, or a duration back from now (`6h`, `7d`).
+Times can be RFC 3339, unix seconds, or a duration back from now (`6h`,
+`7d`).
 
 ```sh
 curl -H "Authorization: Bearer $T" '.../api/v1/events?host=web01&hard=true&since=7d'
 curl -H "Authorization: Bearer $T" '.../api/v1/series/42/points?from=2026-10-01T00:00:00Z&to=2026-10-02T00:00:00Z'
 ```
 
-## Auth
+## Users and tokens
 
-| Method, path | |
+| Method and path | Description |
 |---|---|
-| `GET auth/status` | login needed, current user |
-| `POST auth/login` | `{"username", "password"}`; sets the cookie. 429 when locked |
-| `POST auth/logout` | |
-| `GET tokens` | own tokens |
-| `POST tokens` | `{"name"}` → `{"token": "wt_...", "info"}`, shown once |
-| `DELETE tokens/{id}` | revoke |
-| `GET users` | accounts (admins) |
-| `POST users` | `{"username", "password", "admin"}` (admins) |
-| `PUT users/{name}` | `{"password", "admin", "disabled"}`; own password for everyone |
-| `DELETE users/{name}` | with sessions and tokens (admins, not yourself) |
+| `GET auth/status` | Whether a login is needed, and the current user. |
+| `POST auth/login` | `{"username", "password"}`. Sets the session cookie. 429 when the username is locked. |
+| `POST auth/logout` | Log out. |
+| `GET tokens` | Your API tokens. |
+| `POST tokens` | `{"name"}` → `{"token": "wt_...", "info"}`. The token is shown only once. |
+| `DELETE tokens/{id}` | Revoke a token. |
+| `GET users` | All accounts. Admins only. |
+| `POST users` | `{"username", "password", "admin"}`. Admins only. |
+| `PUT users/{name}` | `{"password", "admin", "disabled"}`. Everyone may change their own password. |
+| `DELETE users/{name}` | Delete an account with its sessions and tokens. Admins only, not yourself. |
 
-Passwords: at least 10 characters. A new password or disabling ends the
-user's sessions.
-
-Cookie requests that change something need a matching `Origin`.
+Passwords need at least 10 characters. A new password, or disabling an
+account, logs the user out everywhere.
 
 ## SSH
 
-Admins. Secret values never leave the server.
+Admins only. The values of secrets never leave the server.
 
-| Method, path | |
+| Method and path | Description |
 |---|---|
-| `GET ssh/secrets` | name, kind, public key, fingerprint, hosts using it |
-| `POST ssh/secrets` | `{"name", "kind": "generate"}`, `{"name", "kind": "key", "private_key", "passphrase"}`, `{"name", "kind": "password", "password"}`; `"replace": true` overwrites |
-| `DELETE ssh/secrets/{name}` | |
-| `GET ssh/hostkeys` | pinned keys, changed ones (`offered`) |
-| `POST ssh/hostkeys/{address}/{port}/accept` | pin the changed key |
-| `DELETE ssh/hostkeys/{address}/{port}` | forget; the next key is pinned |
+| `GET ssh/secrets` | Name, kind, public key, fingerprint, and the hosts using each secret. |
+| `POST ssh/secrets` | Create a secret, see below. `"replace": true` overwrites one of the same name. |
+| `DELETE ssh/secrets/{name}` | Delete a secret. |
+| `GET ssh/hostkeys` | Stored host keys, and keys that changed (`offered`). |
+| `POST ssh/hostkeys/{address}/{port}/accept` | Accept a changed host key. |
+| `DELETE ssh/hostkeys/{address}/{port}` | Forget a host key; the next key seen is stored. |
+
+Bodies for `POST ssh/secrets`:
+
+| Body | Creates |
+|---|---|
+| `{"name", "kind": "generate"}` | A new ed25519 key. |
+| `{"name", "kind": "key", "private_key", "passphrase"}` | An imported key. |
+| `{"name", "kind": "password", "password"}` | A password. |
 
 ```sh
 curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
@@ -197,26 +223,36 @@ curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
 
 ## Configuration
 
-Admins.
+Admins only.
 
-| Method, path | |
+| Method and path | Description |
 |---|---|
-| `GET config` | mode, files with hashes, problems on disk |
-| `GET config/files/{path}` | one file |
-| `GET config/objects` | objects as written, with file and line; `kind` filter |
-| `GET config/objects/{kind}/{name}` | one object |
-| `PUT config/objects/{kind}/{name}` | create or replace it, apply |
-| `DELETE config/objects/{kind}/{name}` | delete it, apply |
-| `POST config/reload` | read the files again |
-| `POST config/match` | `{"kind": "host"\|"service", "selectors": [...]}`: what they match now, with why |
-| `GET config/scripts` | check directories and their executables |
-| `GET config/tree/{kind}/{name}` | Config Tree; service name `host/service` |
-| `POST config/edit` | object → file change; writes nothing |
-| `POST config/edit-many` | several, e.g. clones |
-| `POST config/preview` | validate changes, effective changes |
-| `POST config/apply` | write and reload |
+| `GET config` | Config mode, files with their hashes, problems on disk. |
+| `GET config/files/{path}` | One file. |
+| `GET config/objects` | All objects as written, with file and line. `kind` filters by kind. |
+| `GET config/objects/{kind}/{name}` | One object. |
+| `PUT config/objects/{kind}/{name}` | Create or replace an object, and apply. |
+| `DELETE config/objects/{kind}/{name}` | Delete an object, and apply. |
+| `POST config/reload` | Read the files again. |
+| `POST config/match` | `{"kind": "host"\|"service", "selectors": [...]}`: what the selectors match now, and why. |
+| `GET config/scripts` | The check directories and the executables in them. |
+| `GET config/tree/{kind}/{name}` | The Config Tree. For a service on a host, the name is `host/service`. |
+| `POST config/edit` | Turn an object change into a file change. Writes nothing. |
+| `POST config/edit-many` | The same for several objects, for example clones. |
+| `POST config/preview` | Validate file changes and show their effect. |
+| `POST config/apply` | Write file changes and reload. |
 
-One call:
+Kinds: `check`, `service`, `host`, `hostgroup`, `servicegroup`, `contact`,
+`contactgroup`, `downtimegroup`, `notify`, `sink`.
+
+A notify rule without a `name` is addressed as `@path:line`, for example
+`@ui/notify.toml:4` (URL-encoded in paths), the way `GET config/objects`
+lists it.
+
+### Changing one object
+
+`PUT` takes the object's fields as they would be written in the file,
+without `name`. `?path=hosts/web.toml` puts a new object into that file.
 
 ```sh
 curl -X PUT -H "Authorization: Bearer $T" -H 'content-type: application/json' \
@@ -226,39 +262,38 @@ curl -X PUT -H "Authorization: Bearer $T" -H 'content-type: application/json' \
 curl -X DELETE -H "Authorization: Bearer $T" .../api/v1/config/objects/host/web03
 ```
 
-`PUT` body: the fields as written, without `name`. `?path=hosts/web.toml`
-puts a new object into that file. Kinds: `check`, `service`, `host`,
-`hostgroup`, `servicegroup`, `contact`, `contactgroup`, `downtimegroup`,
-`notify`, `sink`.
+### With a preview first
 
-Unnamed notify rules: `{name}` is `@path:line` (`@ui/notify.toml:4`,
-URL-encoded in paths), as `GET config/objects` lists them.
-
-With a preview first: `edit` → `preview` → `apply`.
+`edit` → `preview` → `apply`, the way the web UI does it:
 
 ```sh
-# 1. file change for a new host
+# 1. Get the file change for a new host
 curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
   -d '{"kind": "host", "fields": {"name": "web03", "address": "10.0.0.7", "groups": ["linux"]}}' \
   .../api/v1/config/edit
 # → {"path": "ui/hosts.toml", "base": "…", "text": "…"}
 
-# 2. apply it
+# 2. Apply it
 curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
   -d '{"changes": [{"path": "ui/hosts.toml", "base": "…", "text": "…"}]}' \
   .../api/v1/config/apply
 ```
 
-Edit body: `kind`, `name` (null: create), `fields` (null: delete),
-`path` (new objects; default `ui/hosts.toml`, `ui/services.toml`,
-`ui/checks.toml`, `ui/groups.toml`, `ui/contacts.toml`, `ui/notify.toml`,
-`ui/sinks.toml`).
-
-Change: `path` (relative, `.toml`, no hidden or `..` parts), `base` (file
-hash; null: new file), `text` (null: delete file).
-
-| Status | |
+| Edit body field | Description |
 |---|---|
-| 409 | file changed since `base`; body has the current file |
-| 422 | config would have errors; diagnostics with file and line, nothing written |
-| 403 | `config_mode = "files"` |
+| `kind` | Object kind. |
+| `name` | Current name; `null` creates a new object. |
+| `fields` | The object's fields; `null` deletes it. |
+| `path` | File for new objects. Default: `ui/hosts.toml`, `ui/services.toml`, `ui/checks.toml`, `ui/groups.toml`, `ui/contacts.toml`, `ui/notify.toml` or `ui/sinks.toml`, by kind. |
+
+| Change field | Description |
+|---|---|
+| `path` | Relative path ending in `.toml`, with no hidden or `..` parts. |
+| `base` | Hash of the file you started from; `null` for a new file. |
+| `text` | New content; `null` deletes the file. |
+
+| Status | Meaning |
+|---|---|
+| 409 | The file changed since `base`. The body contains the current file. |
+| 422 | The configuration would have errors. The body lists them with file and line; nothing was written. |
+| 403 | `config_mode = "files"`: the configuration is read-only. |

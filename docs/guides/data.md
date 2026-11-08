@@ -1,31 +1,34 @@
 # Data
 
-Results go to PostgreSQL: states, alert history, metrics. TimescaleDB
-optional.
+Watcher stores results in PostgreSQL: current states, the alert history and
+all metrics. TimescaleDB is optional and makes metric storage smaller and
+faster. Everything is in plain tables and views, so you can query it with
+SQL, Grafana or any BI tool.
 
 ## Database
 
 ```toml
+# watcher.toml
 [database]
 url = "postgres://watcher:secret@localhost/watcher"
 ```
 
-Or `--database URL`, or `WATCHER_DATABASE_URL`. Tables are created and
-migrated on start.
+The URL can also be given with `--database URL` or the environment variable
+`WATCHER_DATABASE_URL`. Watcher creates and updates its tables on start.
 
-| With TimescaleDB | Plain PostgreSQL |
+| With TimescaleDB | With plain PostgreSQL |
 |---|---|
-| `samples` hypertable, daily chunks, compression after 2 days (Timescale License build) | plain table |
+| `samples` is a hypertable with daily chunks, compressed after 2 days (needs the Timescale License build) | `samples` is a normal table |
 
-Without a database: current states in memory only, no history, graphs or
-logins.
+Without a database, Watcher keeps only the current states, in memory. There
+is no history, no graphs and no login.
 
-Values are stored normalized: seconds, bytes, percent
-([units](checks.md#units)).
+Values are stored in base units: seconds, bytes and percent. See
+[Units](../objects/check.md#units).
 
 ## Tables and views
 
-| | |
+| Name | Columns |
 |---|---|
 | `v_metrics` | tenant, host, service, metric, labels, unit, ts, value, flags |
 | `v_service_state` | tenant, host, service, state, state_type, attempt, last_check, last_change, last_hard_change, output, flapping |
@@ -36,30 +39,31 @@ Values are stored normalized: seconds, bytes, percent
 | `state_events` | service_id, ts, kind, from_state, to_state, state_type, hard, output |
 | `check_changes` | service_id, ts, check_hash: every change of a service's command |
 
-- `state_events.kind`: `service`, `host` (UP/DOWN), `flap_start`,
+- `state_events.kind` is `service`, `host` (UP/DOWN), `flap_start` or
   `flap_stop`.
-- `v_service_state`: state changes at once; `last_check` and `output`
-  without a change every 30 s.
-- `samples.flags`: 1 SYNTHETIC, 2 SUSPECT, 4 MASKED. `v_metrics` hides
-  MASKED.
-- Hosts and services removed from the config get `removed_at`; history
-  stays.
+- `v_service_state` gets a state change at once. Without a change,
+  `last_check` and `output` are updated every 30 seconds.
+- `samples.flags`: 1 = synthetic, 2 = suspect, 4 = masked. `v_metrics`
+  hides masked values.
+- Hosts and services removed from the configuration get a `removed_at`
+  time. Their history stays.
 
 ## Read-only login
 
-For Grafana, BI tools, SQL. Sees monitoring tables and views, not users,
-sessions or tokens.
+For Grafana, BI tools and SQL, create a database user that can only read.
+It sees the monitoring tables and views, but not users, sessions or tokens.
 
 ```sh
-watcher db reader grafana                    # generates and prints a password
-echo 'secret' | watcher db reader grafana --password-stdin
+watcher db reader grafana                                  # generates and prints a password
+echo 'secret' | watcher db reader grafana --password-stdin # sets your own password
 ```
 
-Needs a database user with CREATEROLE. Rerun after upgrades.
+Watcher's database user needs the CREATEROLE right for this. Run the
+command again after upgrades, so the reader can see new tables.
 
 ## SQL examples
 
-Last hour of a metric:
+The last hour of a metric:
 
 ```sql
 SELECT ts, value FROM v_metrics
@@ -75,7 +79,7 @@ SELECT host, service, state, output FROM v_service_state
 WHERE state <> 'ok' AND state_type = 'hard';
 ```
 
-Hourly average:
+Hourly averages:
 
 ```sql
 SELECT date_bin('1 hour', ts, '2000-01-01') AS hour, avg(value)
@@ -84,7 +88,7 @@ WHERE host = 'db01' AND service = 'disk_data' AND metric = '/srv'
 GROUP BY hour ORDER BY hour;
 ```
 
-Hard problems per host, last 30 days:
+Confirmed problems per host in the last 30 days:
 
 ```sql
 SELECT h.name, count(*)
@@ -97,8 +101,8 @@ GROUP BY h.name ORDER BY count DESC;
 
 ## Grafana
 
-Data source PostgreSQL, user `grafana` from `watcher db reader`. Panel
-query:
+Add a PostgreSQL data source with the user from `watcher db reader`. A
+panel query:
 
 ```sql
 SELECT ts AS time, value, host
@@ -114,54 +118,15 @@ curl -H "Authorization: Bearer $T" https://watcher.example.com/api/v1/services/w
 curl -H "Authorization: Bearer $T" 'https://watcher.example.com/api/v1/series/42/points?from=6h'
 ```
 
-[API reference](../reference/api.md).
+See the [API reference](../reference/api.md#history-and-metrics).
 
-## Sinks
+## Copying to another database
 
-Copy every result to another PostgreSQL, e.g. a central reporting
-database. Buffered on disk (`data_dir/sinks/<name>/`) until delivered:
-an unreachable target loses nothing up to `buffer.max_size`. Exactly-once
-delivery.
-
-```toml
-# conf.d/sinks.toml
-[[sink]]
-name = "central"
-type = "postgres"
-url = "postgres://watcher@central.example.com/watcher"
-password_file = "central.pass"          # relative to this file
-
-[sink.flush]
-mode = "interval"                       # interval | realtime
-interval = "1m"
-
-[sink.buffer]
-max_size = "1GB"
-on_full = "drop_oldest"
-```
-
-Realtime:
-
-```toml
-[[sink]]
-name = "reporting"
-type = "postgres"
-url = "postgres://watcher@reporting.example.com/watcher"
-flush.mode = "realtime"
-```
-
-- The target gets the normal schema, created on first connect.
-- Several instances may share one target; host names must be unique
-  across them.
-- Failures back off up to 5 minutes.
-- Sinks reload with the config.
-
-Fields: [reference](../reference/objects.md#sink).
-
-*Not yet:* `type = "hub"`, adaptive and scheduled flush, bandwidth limits,
-compression, `on_full = "downsample"`.
+A [sink](../objects/sink.md) copies every result to a second PostgreSQL
+database, for example a central reporting database, with a buffer on disk
+so nothing is lost while the target is down.
 
 ## Data repair
 
-*Not yet* (Phase 3): select a range in a graph and delete, interpolate,
-replace; undo; rollups and retention.
+*Not yet* (Phase 3): select a range in a graph and delete, interpolate or
+replace the values, with undo; rollups and retention.

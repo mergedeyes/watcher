@@ -1,42 +1,70 @@
 # Operations
 
-Acknowledgements, downtimes, muted notifications and disabled checks.
-Kept in the database (in memory without one), not in the config files;
-recurring downtimes are [downtime groups](#downtime-groups) in the config.
+Day-to-day actions on hosts and services: acknowledging problems,
+downtimes, muting notifications and turning checks off. These are stored in
+the database (in memory when there is no database), not in the config
+files. The exception is recurring downtimes, which are
+[downtime groups](../objects/downtimegroup.md) in the config.
 
-Web UI: right-click a host or service, or its Commands panel; System →
-Downtimes. API: [`POST actions/{action}`](../reference/api.md#commands).
+In the web UI, right-click a host or service, or use the Commands panel on
+its page. Downtimes are listed under System → Downtimes. Over the API, use
+[`POST actions/{action}`](../reference/api.md#commands).
 
-| Command | Effect | Ends |
+| Command | What it does | Ends when |
 |---|---|---|
-| Re-Check Now | runs the check now | – |
-| Acknowledge | no more problem notifications; badge ACK | OK again, or Remove |
-| Schedule Downtime | no notifications in the window; badge DOWNTIME | end time, or End |
-| Mute Notifications | no notifications; badge MUTED | Unmute |
-| Disable Active Checks | checks don't run; badge CHECKS OFF | Enable |
-| Submit Result | a result for a passive service | – |
+| Re-Check Now | Runs the check now. | – |
+| Acknowledge | Stops problem notifications; shows the badge ACK. | the service is OK again, or you remove it |
+| Schedule Downtime | No notifications during the window; shows the badge DOWNTIME. | the end time is reached, or you end it |
+| Mute Notifications | No notifications; shows the badge MUTED. | you unmute |
+| Disable Active Checks | The check doesn't run any more; shows the badge CHECKS OFF. | you enable it |
+| Submit Result | Enters a result for a passive service. | – |
 
-On a host: Acknowledge covers its host check (host DOWN); the others
-cover all its services.
+On a host, Acknowledge applies to its host check (the host is DOWN). All
+other commands apply to all its services.
 
-Held-back notifications are logged with the reason:
+The recovery after an acknowledged problem is still notified; it also ends
+the acknowledgement.
+
+Notifications that are held back are written to the log with the reason:
 
 ```
 no notification for web01/http: in downtime (hostgroup linux)
 no notification for db01/replication: acknowledged
 ```
 
-Recoveries still notify after an acknowledgement (it ends with them).
+## Acknowledging a problem
 
-## History and notifications
+Acknowledging tells the team that someone is working on a problem. It
+stops further problem notifications until the service is OK again. Add a
+comment so others know what is going on.
 
-Alerts (and the host and service pages) list acknowledgements (ACK, with
-author and comment) and downtimes starting and ending. Filter: Alert type
-Acknowledgement / Downtime; API `events?type=ack,downtime`.
+```sh
+curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
+  -d '{"services": ["db01/replication"], "comment": "on it"}' \
+  .../api/v1/actions/ack
+```
 
-A downtime starting or ending notifies like Nagios (DOWNTIMESTART,
-DOWNTIMEEND) to the notify rules that match the host or service, unless
-they leave `downtime` out of `on`, or it is muted:
+## Downtimes
+
+A downtime is a planned window without notifications, for example for
+maintenance. One-off downtimes can be scheduled for hosts, services, host
+groups, service groups and downtime groups:
+
+```sh
+curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
+  -d '{"hostgroups": ["linux"], "start": "2026-11-01T22:00:00+01:00", "duration": "4h", "comment": "kernel updates"}' \
+  .../api/v1/actions/downtime
+```
+
+A downtime for a group also covers hosts that join the group after it was
+scheduled.
+
+For recurring windows, like a weekly patch day, use a
+[downtime group](../objects/downtimegroup.md).
+
+When a downtime starts or ends, the notify rules that match the host or
+service are notified (DOWNTIMESTART, DOWNTIMEEND), unless the rule leaves
+`downtime` out of `on` or the host or service is muted:
 
 ```
 [Watcher] DOWNTIMESTART: web01 is UP
@@ -45,62 +73,29 @@ web01 is in a downtime (UP); no notifications until it ends
 hostgroup linux: kernel updates
 ```
 
-A host in a downtime counts once, not per service. Changes are noticed
-within 15 s.
+A host in a downtime is notified once, not once per service. Watcher
+notices downtimes starting or ending within 15 seconds.
 
-## Downtimes
+## History
 
-One-off, for hosts, services, host groups, service groups or downtime
-groups:
+The Alerts page and the host and service pages list acknowledgements (ACK,
+with author and comment) and the start and end of downtimes. Filter by
+Alert type Acknowledgement or Downtime, or over the API with
+`events?type=ack,downtime`.
 
-```sh
-curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
-  -d '{"hostgroups": ["linux"], "start": "2026-11-01T22:00:00+01:00", "duration": "4h", "comment": "kernel updates"}' \
-  .../api/v1/actions/downtime
-```
+## Turning everything off
 
-A downtime for a group covers hosts that join it later.
-
-## Downtime groups
-
-Hosts that share downtimes, with recurring windows in local time
-(`timezone` in [watcher.toml](../reference/watcher-toml.md), default the
-system's).
-
-```toml
-[downtimegroup.patchday]
-title = "Patch Day"
-members = ["web*", "db01"]                 # host names, * and ?
-hostgroups = ["linux"]
-schedule = [
-  { days = ["sun"], from = "02:00", to = "04:00" },
-  { days = ["sat"], from = "22:00", to = "02:00" },          # into Sunday
-  { from = "2026-12-24 00:00", to = "2026-12-27 00:00" },    # once
-]
-```
-
-| Window | |
-|---|---|
-| `days` | `mon` … `sun`; none: every day |
-| `from`, `to` | `HH:MM`; `to` not after `from`: next day |
-| dates | `YYYY-MM-DD HH:MM` in `from` and `to`: once |
-
-Also a target for one-off downtimes: Schedule Downtime → Downtime Group.
-System → Downtimes shows the current or next window of each.
-
-## Global switches
-
-System → Process Info (admins): notifications and active checks on/off
-for everything.
+System → Process Info has two global switches, for admins: notifications on
+or off, and active checks on or off, for all hosts and services at once.
 
 ```sh
 curl -X PUT -H "Authorization: Bearer $T" -H 'content-type: application/json' \
   -d '{"notifications": false}' .../api/v1/process
 ```
 
-## Process info and queue
+## Process info and scheduling queue
 
-| Page | |
+| Page | Shows |
 |---|---|
-| Process Info | version, PID, running time, config loaded, results in the last 1/5/15 min, counts of acknowledged, muted, checks off, in downtime |
-| Scheduling Queue | every service: last check, next check, interval, CHECKS OFF |
+| Process Info | Version, PID, running time, when the config was loaded, results in the last 1, 5 and 15 minutes, and how many hosts and services are acknowledged, muted, have checks off, or are in a downtime. |
+| Scheduling Queue | Every service with its last check, next check and interval, and whether its checks are off. |

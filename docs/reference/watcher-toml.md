@@ -1,14 +1,15 @@
 # watcher.toml
 
-The bootstrap file: what is needed before the object files and the
-database are read. Changes need a restart.
+`watcher.toml` holds what Watcher needs before it can read the object files
+and the database: where to listen, where the files are, the database, TLS
+and SMTP. Changes need a restart.
 
-Found at: the path given, else `./watcher.toml`, else
-`/etc/watcher/watcher.toml`. Relative paths inside are relative to this
-file. Unknown keys are errors.
+Watcher looks for it at the path you give on the command line, then at
+`./watcher.toml`, then at `/etc/watcher/watcher.toml`. Relative paths
+inside the file are relative to the file. Unknown keys are errors, so typos
+don't go unnoticed.
 
 ```toml
-role = "standalone"
 instance_name = "msp-hub"
 timezone = "Europe/Berlin"
 listen = "0.0.0.0:8443"
@@ -36,48 +37,72 @@ from = "Watcher <watcher@example.com>"
 
 ## Top level
 
-| Key | Default | |
+| Key | Default | Description |
 |---|---|---|
-| `role` | `standalone` | `standalone`, `hub`, `node` (*not yet*: hub/node behave as standalone) |
-| `instance_name` | | shown in the sidebar, page title, mail subject |
-| `timezone` | the system's | IANA name; downtime group windows |
-| `listen` | `127.0.0.1:8080` | HTTP API and web UI. Non-loopback needs a database (logins) |
-| `public_url` | | links in notifications; `https://` marks cookies Secure |
-| `conf_dir` | `conf.d` | object files, every `*.toml` below |
-| `data_dir` | `data` | sink buffers, instance id, self-signed certificate, `secret.key` ([SSH](../guides/ssh.md#secrets)) |
-| `config_mode` | `hybrid` | `hybrid`: UI and files; `files`: UI read-only; `ui`: files not watched |
-| `check_dirs` | `checks`, then the monitoring-plugins dirs | where bare command names are looked up, before `PATH` |
+| `role` | `standalone` | `standalone`, `hub` or `node`. *Not yet:* `hub` and `node` behave like `standalone`. |
+| `instance_name` | | Name of this installation, shown in the sidebar, the page title and the mail subject. |
+| `timezone` | the system's | IANA time zone name, like `Europe/Berlin`. Used for downtime group windows. |
+| `listen` | `127.0.0.1:8080` | Address and port of the web UI and API. Any address other than loopback needs a database, because logins need one. |
+| `public_url` | | The URL users open Watcher with. Used for links in notifications. With `https://`, session cookies are marked Secure. |
+| `conf_dir` | `conf.d` | Directory with the object files. Every `*.toml` below it is read. |
+| `data_dir` | `data` | Directory for sink buffers, the instance ID, the self-signed certificate and `secret.key` (see [SSH secrets](../guides/ssh.md#secrets)). |
+| `config_mode` | `hybrid` | `hybrid`: web UI and files can both change the config. `files`: the web UI is read-only. `ui`: files are not watched. See [Config mode](../guides/web-ui.md#config-mode). |
+| `check_dirs` | `checks`, then the plugin directories | Where commands without a path are looked up, before `PATH`. |
 
-Default plugin dirs (those that exist): `/usr/lib/monitoring-plugins`,
-`/usr/lib/nagios/plugins`, `/usr/lib64/nagios/plugins`,
-`/usr/local/libexec/monitoring-plugins`, `/usr/local/nagios/libexec`.
+The default plugin directories, as far as they exist:
+`/usr/lib/monitoring-plugins`, `/usr/lib/nagios/plugins`,
+`/usr/lib64/nagios/plugins`, `/usr/local/libexec/monitoring-plugins`,
+`/usr/local/nagios/libexec`.
 
 ## [database]
 
-| Key | |
-|---|---|
-| `url` | `postgres://user:password@host[:port]/db` |
+| Key | Default | Description |
+|---|---|---|
+| `url` | | `postgres://user:password@host[:port]/db` |
 
-Overridden by `--database` / `WATCHER_DATABASE_URL`.
+`--database` on the command line and the environment variable
+`WATCHER_DATABASE_URL` win over this value.
+
+Without `[database]`, Watcher runs without a database: current states only,
+in memory, no history and no logins. See [Data](../guides/data.md).
 
 ## [tls]
 
-| Key | |
-|---|---|
-| `cert` | PEM certificate chain |
-| `key` | PEM private key |
-| `self_signed` | `true`: generate in `data_dir/tls/` for localhost, hostname, listen IP, `public_url` host |
+HTTPS for the web UI and API. Set `cert` and `key`, or `self_signed`.
 
-`cert` and `key`, or `self_signed`.
+| Key | Default | Description |
+|---|---|---|
+| `cert` | | PEM file with the certificate chain. |
+| `key` | | PEM file with the private key. |
+| `self_signed` | `false` | `true`: Watcher creates a certificate in `data_dir/tls/` for localhost, the hostname, the listen IP and the `public_url` host. |
+
+```toml
+[tls]
+self_signed = true
+```
+
+Alternatively, run Watcher behind a reverse proxy, see
+[HTTPS](../install.md#https).
 
 ## [smtp]
 
-| Key | Default | |
+The mail server for email notifications.
+
+| Key | Default | Description |
 |---|---|---|
-| `host` | | required |
-| `port` | 587 / 465 / 25 | by `tls` |
-| `tls` | `starttls` | `starttls` (required), `tls` (SMTPS), `none` |
-| `username` | | |
-| `password` | | |
-| `password_file` | | file with the password |
-| `from` | | required, `Name <addr>` or `addr` |
+| `host` | | Required. Mail server. |
+| `port` | `587`, `465` or `25` | Depends on `tls`: 587 for `starttls`, 465 for `tls`, 25 for `none`. |
+| `tls` | `starttls` | `starttls`: plain connection upgraded to TLS; TLS is required. `tls`: TLS from the start (SMTPS). `none`: no encryption. |
+| `username` | | Login user. |
+| `password` | | Login password. |
+| `password_file` | | File with the login password, instead of `password`. |
+| `from` | | Required. Sender, `Name <address>` or `address`. |
+
+A local relay:
+
+```toml
+[smtp]
+host = "localhost"
+tls = "none"
+from = "watcher@example.com"
+```
