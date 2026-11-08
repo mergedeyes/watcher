@@ -30,11 +30,11 @@ login off even with a database, also only on loopback.
 | Page | Shows |
 |---|---|
 | Tactical Overview | Hosts that are DOWN, service problems, totals. |
-| Hosts | All hosts with their state and their services per state. |
+| Hosts | All hosts with their state and their services per state, with totals. Search by name, address or host group. |
 | Host | One host: its services, commands, graphs and alert history. |
-| Services | All services, can be filtered by state. |
+| Services | All services, with totals. Filter by state, or search by host, service or output. |
 | Service | One service: state, output, commands, metrics with thresholds, graphs and alert history. |
-| Problems | All services that are not OK. |
+| Problems | Hosts that are DOWN and all services that are not OK. |
 | Host Groups, Service Groups | Status totals per group. |
 | Alerts | The alert history, filtered by host, type, state, SOFT/HARD and time range. |
 | Downtimes | Schedule and end downtimes; acknowledged, muted and disabled services. |
@@ -44,8 +44,17 @@ login off even with a database, also only on loopback.
 | Account | Your user, password and API tokens. |
 | Users | Add, disable and delete accounts, set passwords and admin rights (admins). |
 
-Status totals are links to the filtered lists. Click a column header to
-sort. The number on Problems counts unhandled problems: those not
+Status totals are links to the filtered lists. On a group's list
+(`/hosts?group=linux`), the totals count only that group. Click a column
+header to sort. Names sort by their numbers, so `web2` comes before
+`web10`.
+
+Long lists are split into pages. The bar under a list shows which rows
+you see, and has buttons for the first, previous, next and last page.
+Choose how many rows a page has (50 to 500); your browser remembers it.
+Searching, filtering or sorting goes back to the first page.
+
+The number on Problems counts unhandled problems: those not
 acknowledged and not in a downtime.
 
 **Commands:** right-click a host or service row, or use the Commands panel
@@ -54,8 +63,10 @@ Notifications, Disable Active Checks, Submit Result (passive services
 only), and the matching undo commands. Hosts and services show badges
 for them: ACK, DOWNTIME, MUTED, CHECKS OFF. See [Operations](operations.md).
 
-**Live / Paused** in the top bar: pages update live. Paused keeps the page
-still; Refresh loads it once.
+**Live / Paused** in the top bar: pages update live. New results change
+the rows you see right away. When a state changes, the list is loaded
+again, so services move into or out of it. Paused keeps the page still;
+Refresh loads it once.
 
 **Graphs** show the last 15 minutes by default, with ranges down to 30
 seconds. Drag to zoom in, double-click to reset. The host page shows the

@@ -66,6 +66,3 @@ Single server:
 | Dependencies, escalations, repeated notifications | 4 |
 | Tenants, roles and permissions, TOTP, more notification channels | 4 |
 | SNMP, Prometheus, WinRM, discovery, Nagios config import | 5 |
-
-The web UI loads all services at once. That works well for hundreds of
-hosts, but not yet for thousands.
