@@ -26,7 +26,7 @@ one is an entry in a list.
 
 | Field | Default | Description |
 |---|---|---|
-| `name` | | Name of the rule. Needed to edit the rule in the web UI and for `watcher config explain notify <name>`. |
+| `name` | | Name of the rule, shown in logs and the Config Tree, and used by `watcher config explain notify <name>`. Without a name, the rule shows as `rule at file:line`; it can still be edited in the web UI. |
 | `contacts` | | Contacts that get the notifications. |
 | `contact_groups` | | Contact groups that get the notifications. |
 | `hosts` | all hosts | Which hosts the rule is about. See [Host selector](#host-selector). |

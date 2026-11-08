@@ -1,6 +1,7 @@
 use crate::sync::state_type_str;
 use crate::{Record, Result, Store, epoch};
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use watcher_core::{HostState, State, StateType};
 
 /// Identity of a series: service id, metric name, labels as JSON.
@@ -11,14 +12,93 @@ pub(crate) type SeriesKey = (i32, String, String);
 #[derive(Debug, Default)]
 pub struct SeriesCache(HashMap<SeriesKey, i32>);
 
+/// How often the current state of services without a state change is
+/// written. The hub has it in memory; the table is for restarts and SQL.
+pub(crate) const STATE_FLUSH: Duration = Duration::from_secs(30);
+
+/// Current state not written yet: the latest record of each service whose
+/// results changed nothing. State changes and flapping are written with
+/// their batch.
+#[derive(Debug)]
+pub(crate) struct StateBuffer {
+    rows: HashMap<i32, Record>,
+    flushed: Instant,
+    every: Duration,
+}
+
+impl StateBuffer {
+    pub(crate) fn new(every: Duration) -> Self {
+        StateBuffer {
+            rows: HashMap::new(),
+            flushed: Instant::now(),
+            every,
+        }
+    }
+
+    /// When the buffered rows are due; `None` when there are none.
+    pub(crate) fn due(&self) -> Option<Instant> {
+        (!self.rows.is_empty()).then_some(self.flushed + self.every)
+    }
+
+    /// Waits a full interval before the next flush, e.g. after a failed one.
+    pub(crate) fn postpone(&mut self) {
+        self.flushed = Instant::now();
+    }
+
+    /// The state rows to write with `batch`: changed services, and all of
+    /// them if `flush`.
+    fn rows<'a>(&'a self, batch: &[(i32, &'a Record)], flush: bool) -> Vec<(i32, &'a Record)> {
+        let mut out: HashMap<i32, &Record> = match flush {
+            true => self.rows.iter().map(|(&id, r)| (id, r)).collect(),
+            false => HashMap::new(),
+        };
+        for (id, (record, changed)) in latest(batch) {
+            if flush || changed {
+                out.insert(id, record);
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    /// After `batch` was committed with [`StateBuffer::rows`].
+    fn committed(&mut self, batch: &[(i32, &Record)], flushed: bool, now: Instant) {
+        if flushed {
+            self.rows.clear();
+            self.flushed = now;
+            return;
+        }
+        for (id, (record, changed)) in latest(batch) {
+            match changed {
+                true => self.rows.remove(&id),
+                false => self.rows.insert(id, record.clone()),
+            };
+        }
+    }
+}
+
+/// The latest record per service, and whether any of its records changed
+/// the state or flapping.
+fn latest<'a>(batch: &[(i32, &'a Record)]) -> HashMap<i32, (&'a Record, bool)> {
+    let mut out: HashMap<i32, (&Record, bool)> = HashMap::new();
+    for &(id, record) in batch {
+        let changed = record.change.is_some() || record.flap.is_some();
+        let entry = out.entry(id).or_insert((record, false));
+        entry.0 = record;
+        entry.1 |= changed;
+    }
+    out
+}
+
 impl Store {
     /// Writes `records` in one transaction. Records of services without an
-    /// id in `ids` (removed by a reload) are skipped.
+    /// id in `ids` (removed by a reload) are skipped. Current state without
+    /// a change goes to `state`, and is written with the batch once due.
     pub(crate) async fn write(
         &self,
         records: &[Record],
         ids: &HashMap<String, i32>,
         series: &mut SeriesCache,
+        state: &mut StateBuffer,
     ) -> Result<()> {
         let records: Vec<(i32, &Record)> = records
             .iter()
@@ -27,10 +107,28 @@ impl Store {
         if records.is_empty() {
             return Ok(());
         }
+        let now = Instant::now();
+        let flush = now >= state.flushed + state.every;
+        let rows = state.rows(&records, flush);
         let mut tx = self.pool.begin().await?;
-        let resolved = write_tx(&mut tx, &records, &series.0).await?;
+        let resolved = write_tx(&mut tx, &records, &rows, &series.0).await?;
         tx.commit().await?;
         series.0.extend(resolved);
+        state.committed(&records, flush, now);
+        Ok(())
+    }
+
+    /// Writes the buffered state.
+    pub(crate) async fn flush_state(&self, state: &mut StateBuffer) -> Result<()> {
+        let rows: Vec<(i32, &Record)> = state.rows.iter().map(|(&id, r)| (id, r)).collect();
+        if !rows.is_empty() {
+            let mut conn = self.pool.acquire().await?;
+            for chunk in rows.chunks(10_000) {
+                upsert_state(&mut conn, chunk).await?;
+            }
+        }
+        state.rows.clear();
+        state.flushed = Instant::now();
         Ok(())
     }
 
@@ -68,7 +166,11 @@ impl Store {
         let resolved = if fresh.is_empty() {
             HashMap::new()
         } else {
-            write_tx(&mut tx, &fresh, &series.0).await?
+            let rows: Vec<(i32, &Record)> = latest(&fresh)
+                .into_iter()
+                .map(|(id, (r, _))| (id, r))
+                .collect();
+            write_tx(&mut tx, &fresh, &rows, &series.0).await?
         };
         sqlx::query(
             "UPDATE sink_progress SET seq = GREATEST(seq, $2), updated = now() WHERE source = $1",
@@ -83,11 +185,13 @@ impl Store {
     }
 }
 
-/// Writes samples, current state and state changes of `records`. Returns
-/// the series ids it had to create.
+/// Writes samples and state changes of `records`, and the current state
+/// of `state` (one record per service). Returns the series ids it had to
+/// create.
 async fn write_tx(
     conn: &mut sqlx::PgConnection,
     records: &[(i32, &Record)],
+    state: &[(i32, &Record)],
     series: &HashMap<SeriesKey, i32>,
 ) -> Result<HashMap<SeriesKey, i32>> {
     // Samples, resolving series ids not in the cache first.
@@ -128,51 +232,7 @@ async fn write_tx(
     .execute(&mut *conn)
     .await?;
 
-    // Current state: only the latest record per service, since one
-    // upsert statement cannot touch a row twice.
-    let mut latest: HashMap<i32, &Record> = HashMap::new();
-    for &(id, record) in records {
-        latest.insert(id, record);
-    }
-    let mut st = StateRows::default();
-    for (&id, record) in &latest {
-        st.push(id, record);
-    }
-    sqlx::query(
-        "INSERT INTO service_state (service_id, state, state_type, attempt, last_check,
-                                    last_change, last_hard_change, output, long_output, duration,
-                                    history, history_len, flapping)
-         SELECT u.id, u.state, u.state_type, u.attempt, to_timestamp(u.last_check),
-                to_timestamp(u.last_change), to_timestamp(u.last_hard_change),
-                u.output, u.long_output, u.duration, u.history, u.history_len, u.flapping
-         FROM UNNEST($1::int[], $2::text[], $3::text[], $4::int[], $5::float8[],
-                     $6::float8[], $7::float8[], $8::text[], $9::text[], $10::float8[],
-                     $11::int8[], $12::int2[], $13::bool[])
-              AS u(id, state, state_type, attempt, last_check, last_change,
-                   last_hard_change, output, long_output, duration, history, history_len, flapping)
-         ON CONFLICT (service_id) DO UPDATE SET
-             state = EXCLUDED.state, state_type = EXCLUDED.state_type,
-             attempt = EXCLUDED.attempt, last_check = EXCLUDED.last_check,
-             last_change = EXCLUDED.last_change, last_hard_change = EXCLUDED.last_hard_change,
-             output = EXCLUDED.output, long_output = EXCLUDED.long_output,
-             duration = EXCLUDED.duration, history = EXCLUDED.history,
-             history_len = EXCLUDED.history_len, flapping = EXCLUDED.flapping",
-    )
-    .bind(&st.ids)
-    .bind(&st.states)
-    .bind(&st.types)
-    .bind(&st.attempts)
-    .bind(&st.last_check)
-    .bind(&st.last_change)
-    .bind(&st.last_hard_change)
-    .bind(&st.output)
-    .bind(&st.long_output)
-    .bind(&st.duration)
-    .bind(&st.history)
-    .bind(&st.history_len)
-    .bind(&st.flapping)
-    .execute(&mut *conn)
-    .await?;
+    upsert_state(&mut *conn, state).await?;
 
     // State changes, in order: the service's, its host's if it is the
     // host check, and flapping start/stop.
@@ -232,6 +292,54 @@ async fn write_tx(
     }
 
     Ok(resolved)
+}
+
+/// Upserts the current state of `rows`: one record per service, since one
+/// statement cannot touch a row twice.
+async fn upsert_state(conn: &mut sqlx::PgConnection, rows: &[(i32, &Record)]) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut st = StateRows::default();
+    for &(id, record) in rows {
+        st.push(id, record);
+    }
+    sqlx::query(
+        "INSERT INTO service_state (service_id, state, state_type, attempt, last_check,
+                                    last_change, last_hard_change, output, long_output, duration,
+                                    history, history_len, flapping)
+         SELECT u.id, u.state, u.state_type, u.attempt, to_timestamp(u.last_check),
+                to_timestamp(u.last_change), to_timestamp(u.last_hard_change),
+                u.output, u.long_output, u.duration, u.history, u.history_len, u.flapping
+         FROM UNNEST($1::int[], $2::text[], $3::text[], $4::int[], $5::float8[],
+                     $6::float8[], $7::float8[], $8::text[], $9::text[], $10::float8[],
+                     $11::int8[], $12::int2[], $13::bool[])
+              AS u(id, state, state_type, attempt, last_check, last_change,
+                   last_hard_change, output, long_output, duration, history, history_len, flapping)
+         ON CONFLICT (service_id) DO UPDATE SET
+             state = EXCLUDED.state, state_type = EXCLUDED.state_type,
+             attempt = EXCLUDED.attempt, last_check = EXCLUDED.last_check,
+             last_change = EXCLUDED.last_change, last_hard_change = EXCLUDED.last_hard_change,
+             output = EXCLUDED.output, long_output = EXCLUDED.long_output,
+             duration = EXCLUDED.duration, history = EXCLUDED.history,
+             history_len = EXCLUDED.history_len, flapping = EXCLUDED.flapping",
+    )
+    .bind(&st.ids)
+    .bind(&st.states)
+    .bind(&st.types)
+    .bind(&st.attempts)
+    .bind(&st.last_check)
+    .bind(&st.last_change)
+    .bind(&st.last_hard_change)
+    .bind(&st.output)
+    .bind(&st.long_output)
+    .bind(&st.duration)
+    .bind(&st.history)
+    .bind(&st.history_len)
+    .bind(&st.flapping)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
 }
 
 /// Inserts series that don't exist yet and returns the ids of all `missing`.

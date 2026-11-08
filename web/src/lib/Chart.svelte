@@ -1,6 +1,8 @@
 <!--
 	A metric over time: the average per bucket as a line, min to max as a
-	band. Gaps in the data stay gaps.
+	band. Gaps in the data stay gaps. A zoomed section is loaded again, in
+	finer buckets. Warning and critical thresholds are
+	dashed lines, and the y-axis always shows them.
 -->
 <script lang="ts">
 	import uPlot from 'uplot';
@@ -29,13 +31,14 @@
 	let readout = $state<{ time: string; avg: number; min: number; max: number } | null>(null);
 	/** A section selected by dragging (unix seconds); null shows the whole range. */
 	let zoom = $state<{ min: number; max: number } | null>(null);
-	/** The whole range of the current drawing, for resetting the zoom. */
+	/** The whole range of the current drawing and its data, for resetting the zoom. */
 	let full = { from: 0, to: 0 };
+	let fullData: uPlot.AlignedData | null = null;
 	let drawnRange = '';
 	/** The mouse button is down in the graph: a selection is being dragged. */
 	let dragging = false;
-	/** Data that arrived during a drag, drawn when the drag ends. */
-	let pending: { data: uPlot.AlignedData; from: number; to: number } | null = null;
+	/** Drawing of data that arrived during a drag, done when the drag ends. */
+	let pending: (() => void) | null = null;
 
 	const HEIGHT = 170;
 	const FONT = '11px ui-monospace, Menlo, Consolas, monospace';
@@ -53,6 +56,29 @@
 
 	function css(name: string) {
 		return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+	}
+
+	/** Dashed lines across the plot at the threshold bounds. */
+	function thresholds(u: uPlot) {
+		const { ctx, bbox } = u;
+		ctx.save();
+		ctx.lineWidth = 1.5 * devicePixelRatio;
+		ctx.setLineDash([6 * devicePixelRatio, 4 * devicePixelRatio]);
+		for (const [bounds, color] of [
+			[series.warn, css('--warn')],
+			[series.crit, css('--crit')]
+		] as const) {
+			ctx.strokeStyle = color;
+			for (const v of bounds) {
+				const y = Math.round(u.valToPos(v, 'y', true));
+				if (y < bbox.top || y > bbox.top + bbox.height) continue;
+				ctx.beginPath();
+				ctx.moveTo(bbox.left, y);
+				ctx.lineTo(bbox.left + bbox.width, y);
+				ctx.stroke();
+			}
+		}
+		ctx.restore();
 	}
 
 	/** Columns for uPlot, with nulls where the data has a gap. */
@@ -86,12 +112,14 @@
 	 */
 	function draw(data: uPlot.AlignedData, from: number, to: number) {
 		if (dragging) {
-			pending = { data, from, to };
+			pending = () => draw(data, from, to);
 			return;
 		}
 		full = { from, to };
+		fullData = data;
 		if (plot) {
-			plot.setData(data);
+			// A zoomed section has its own data.
+			if (!zoom) plot.setData(data);
 			return;
 		}
 		const ink = css('--link');
@@ -109,7 +137,17 @@
 				// Double-click resets the zoom, like the button.
 				bind: { dblclick: () => () => (resetZoom(), null) }
 			},
-			scales: { x: { time: true, range: () => (zoom ? [zoom.min, zoom.max] : [full.from, full.to]) } },
+			scales: {
+				x: { time: true, range: () => (zoom ? [zoom.min, zoom.max] : [full.from, full.to]) },
+				// The data and the thresholds, padded like uPlot's default.
+				y: {
+					range: (_u, min, max) => {
+						const all = [min, max, ...series.warn, ...series.crit].filter((v) => v != null && isFinite(v));
+						if (all.length === 0) return [0, 1];
+						return uPlot.rangeNum(Math.min(...all), Math.max(...all), 0.1, true);
+					}
+				}
+			},
 			axes: [
 				{
 					...axis,
@@ -135,6 +173,7 @@
 			],
 			bands: [{ series: [3, 2], fill: `color-mix(in srgb, ${ink} 18%, transparent)` }],
 			hooks: {
+				draw: [thresholds],
 				init: [(u) => u.over.addEventListener('mousedown', () => (dragging = true))],
 				// Dragging selects a section; uPlot then sets the scale to it.
 				setSelect: [
@@ -174,9 +213,9 @@
 			dragging = false;
 			setTimeout(() => {
 				if (pending && !dragging) {
-					const { data, from, to } = pending;
+					const run = pending;
 					pending = null;
-					draw(data, from, to);
+					run();
 				}
 			});
 		};
@@ -186,8 +225,32 @@
 
 	function resetZoom() {
 		zoom = null;
+		if (fullData) plot?.setData(fullData);
 		plot?.setScale('x', { min: full.from, max: full.to });
 	}
+
+	// A zoomed section, loaded again: the whole range has too few buckets
+	// to show its detail.
+	$effect(() => {
+		void tick;
+		const section = zoom;
+		if (!section) return;
+		const controller = new AbortController();
+		const [from, to] = [String(Math.floor(section.min)), String(Math.ceil(section.max))];
+		api.points(series.id, from, 300, controller.signal, to).then(
+			(p) => {
+				const show = () => {
+					if (zoom === section) plot?.setData(columns(p.points));
+				};
+				if (dragging) pending = show;
+				else show();
+			},
+			(e) => {
+				if (e.name !== 'AbortError') failed = e.message;
+			}
+		);
+		return () => controller.abort();
+	});
 
 	$effect(() => {
 		// Re-run when the range or tick changes.

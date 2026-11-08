@@ -15,7 +15,7 @@ mod sync;
 mod write;
 
 pub use auth::{ApiToken, TokenRef, User};
-pub use ingest::{Record, ingest};
+pub use ingest::{Record, ingest, ingest_with};
 pub use ops::{Downtime, Flag, FlagKind, OpsEvent};
 pub use query::{EventFilter, Points, Series, StateEvent};
 pub use reader::READABLE;

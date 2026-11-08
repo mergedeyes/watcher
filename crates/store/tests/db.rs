@@ -14,6 +14,7 @@ use tokio::sync::{mpsc, watch};
 use watcher_core::{Format, RawOutput, ServiceState, State, StateType, Termination, evaluate};
 use watcher_store::{
     Backend, EventFilter, HostSpec, Record, SeriesCache, ServiceSpec, Store, SyncMode, ingest,
+    ingest_with,
 };
 
 /// A database created for one test.
@@ -299,6 +300,81 @@ async fn sync_ingest_and_restore() {
                 1
             );
         }
+    })
+    .await;
+}
+
+/// Polls `check` until it holds, for up to 10 s.
+async fn eventually<F, Fut>(what: &str, check: F)
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = bool>,
+{
+    for _ in 0..200 {
+        if check().await {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("timed out waiting for {what}");
+}
+
+#[tokio::test]
+async fn unchanged_state_is_written_later() {
+    each_server(|store, _, _| async move {
+        let ids = store
+            .sync(&[host("web01", None)], &[service("web01", "disk", "h1")])
+            .await
+            .unwrap();
+        let store = Arc::new(store);
+        let output = || async {
+            sqlx::query_scalar::<_, String>("SELECT output FROM service_state")
+                .fetch_optional(store.pool())
+                .await
+                .unwrap()
+        };
+        let (_ids_tx, ids_rx) = watch::channel(Arc::new(ids));
+        let (tx, rx) = mpsc::channel(4);
+        let task = tokio::spawn(ingest_with(
+            store.clone(),
+            ids_rx,
+            rx,
+            Duration::from_secs(3),
+        ));
+
+        // The first result is a state change: written with its batch.
+        let first = record("web01/disk", 0, "DISK OK - a | a=1", None);
+        let state = first.state.clone();
+        tx.send(first).await.unwrap();
+        eventually("the first state", || async {
+            output().await.as_deref() == Some("DISK OK - a")
+        })
+        .await;
+
+        // No change: samples now, state when due.
+        let same = record("web01/disk", 0, "DISK OK - b | a=2", Some(&state));
+        let state = same.state.clone();
+        tx.send(same).await.unwrap();
+        eventually("the second sample", || async {
+            count(&store, "SELECT count(*) FROM samples").await == 2
+        })
+        .await;
+        assert_eq!(output().await.as_deref(), Some("DISK OK - a"));
+        eventually("the flush", || async {
+            output().await.as_deref() == Some("DISK OK - b")
+        })
+        .await;
+
+        // And at shutdown.
+        tx.send(record("web01/disk", 0, "DISK OK - c | a=3", Some(&state)))
+            .await
+            .unwrap();
+        drop(tx);
+        tokio::time::timeout(Duration::from_secs(20), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(output().await.as_deref(), Some("DISK OK - c"));
     })
     .await;
 }

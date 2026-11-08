@@ -4,7 +4,7 @@
 	import { untrack } from 'svelte';
 	import { api, type Change, type Kind } from '#lib/api.ts';
 	import ApplyDialog from '#lib/ApplyDialog.svelte';
-	import { config, fileHref } from '#lib/config.svelte.ts';
+	import { config, fileHref, objectId } from '#lib/config.svelte.ts';
 	import ConfigHead from '#lib/ConfigHead.svelte';
 	import Combobox from '#lib/Combobox.svelte';
 	import ConfigTree from '#lib/ConfigTree.svelte';
@@ -247,8 +247,8 @@
 			</h1>
 			{#if object}
 				<span class="head-actions">
-					{#if config.writable && object.name}<a class="btn" href="/config/{kind.path}/edit?clone={encodeURIComponent(object.name)}">Clone</a>{/if}
-					{#if kind.kind !== 'sink' && object.name}<ConfigTree kind={kind.kind} name={object.name} />{/if}
+					{#if config.writable}<a class="btn" href="/config/{kind.path}/edit?clone={encodeURIComponent(objectId(object))}">Clone</a>{/if}
+					{#if kind.kind !== 'sink'}<ConfigTree kind={kind.kind} name={objectId(object)} />{/if}
 					<a class="mono" href={fileHref(object.path, object.line)}>{object.path}:{object.line}</a>
 				</span>
 			{:else if source}
@@ -502,12 +502,6 @@
 
 	[data-severity='warning'] .sev {
 		color: var(--unknown);
-	}
-
-	.head-actions {
-		display: inline-flex;
-		align-items: center;
-		gap: 10px;
 	}
 
 	.selector {

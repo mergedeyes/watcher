@@ -170,6 +170,26 @@ pub struct Object {
     /// The keys as written, including `name` (for templates and contacts,
     /// the key).
     pub fields: Table,
+    /// Position among the `[[kind]]` tables of its file.
+    #[serde(skip)]
+    index: usize,
+}
+
+impl Object {
+    /// How editing addresses it: the name, or `@path:line` if it has none
+    /// (notify rules).
+    pub fn id(&self) -> String {
+        if self.name.is_empty() {
+            format!("@{}:{}", self.path, self.line)
+        } else {
+            self.name.clone()
+        }
+    }
+}
+
+/// The object `id` (see [`Object::id`]) of this kind.
+pub fn find<'a>(objects: &'a [Object], kind: Kind, id: &str) -> Option<&'a Object> {
+    objects.iter().find(|o| o.kind == kind && o.id() == id)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -218,7 +238,7 @@ fn parse(path: &str, text: &str) -> Result<Vec<Object>, (usize, String)> {
         )
     })?;
     let mut objects = Vec::new();
-    let mut push = |kind, name: Option<String>, spanned: toml::Spanned<Table>| {
+    let mut push = |kind, name: Option<String>, index, spanned: toml::Spanned<Table>| {
         let line = line(spanned.span().start);
         let mut fields = spanned.into_inner();
         let name = match name {
@@ -238,6 +258,7 @@ fn parse(path: &str, text: &str) -> Result<Vec<Object>, (usize, String)> {
             path: path.to_string(),
             line,
             fields,
+            index,
         });
     };
     let keyed = [
@@ -251,7 +272,7 @@ fn parse(path: &str, text: &str) -> Result<Vec<Object>, (usize, String)> {
     ];
     for (kind, map) in keyed {
         for (name, t) in map {
-            push(kind, Some(name), t);
+            push(kind, Some(name), 0, t);
         }
     }
     for (kind, list) in [
@@ -259,8 +280,8 @@ fn parse(path: &str, text: &str) -> Result<Vec<Object>, (usize, String)> {
         (Kind::Notify, file.notify),
         (Kind::Sink, file.sink),
     ] {
-        for t in list {
-            push(kind, None, t);
+        for (i, t) in list.into_iter().enumerate() {
+            push(kind, None, i, t);
         }
     }
     objects.sort_by_key(|o| o.line);
@@ -311,22 +332,26 @@ pub fn edit_many(dir: &Path, edits: &[Edit]) -> Result<Vec<Change>, EditError> {
     // Path -> (hash it was read with, current text), in first-use order.
     let mut texts: Vec<(String, Option<String>, String)> = Vec::new();
     for e in edits {
-        let path = match (&e.name, &e.path) {
+        let (path, target) = match (&e.name, &e.path) {
             (None, Some(path)) => {
                 files::resolve(dir, path)?;
-                path.clone()
+                (path.clone(), Target::New)
             }
-            (None, None) => e.kind.ui_file().to_string(),
-            (Some(name), _) => {
+            (None, None) => (e.kind.ui_file().to_string(), Target::New),
+            (Some(id), _) => {
                 if found.is_none() {
                     found = Some(objects(dir).map_err(io)?.0);
                 }
-                found
-                    .as_ref()
-                    .and_then(|list| list.iter().find(|o| o.kind == e.kind && o.name == *name))
-                    .ok_or_else(|| EditError::NotFound(e.kind.key(), name.clone()))?
-                    .path
-                    .clone()
+                let o = found
+                    .as_deref()
+                    .and_then(|list| find(list, e.kind, id))
+                    .ok_or_else(|| EditError::NotFound(e.kind.key(), id.clone()))?;
+                let target = if o.name.is_empty() {
+                    Target::Index(o.index, id)
+                } else {
+                    Target::Name(id)
+                };
+                (o.path.clone(), target)
             }
         };
         let i = match texts.iter().position(|(p, _, _)| *p == path) {
@@ -341,17 +366,18 @@ pub fn edit_many(dir: &Path, edits: &[Edit]) -> Result<Vec<Change>, EditError> {
                 texts.len() - 1
             }
         };
-        let new = edit_text(&texts[i].2, e.kind, e.name.as_deref(), e.fields.as_ref()).map_err(
-            |err| match err {
-                EditError::Exists(k, n, _) => EditError::Exists(k, n, path.clone()),
-                EditError::Inline(k, n, _) => EditError::Inline(k, n, path.clone()),
-                EditError::Parse { message, .. } => EditError::Parse {
-                    path: path.clone(),
-                    message,
+        let new =
+            edit_target(&texts[i].2, e.kind, target, e.fields.as_ref()).map_err(
+                |err| match err {
+                    EditError::Exists(k, n, _) => EditError::Exists(k, n, path.clone()),
+                    EditError::Inline(k, n, _) => EditError::Inline(k, n, path.clone()),
+                    EditError::Parse { message, .. } => EditError::Parse {
+                        path: path.clone(),
+                        message,
+                    },
+                    other => other,
                 },
-                other => other,
-            },
-        )?;
+            )?;
         texts[i].2 = new;
     }
     Ok(texts
@@ -364,6 +390,15 @@ pub fn edit_many(dir: &Path, edits: &[Edit]) -> Result<Vec<Change>, EditError> {
         .collect())
 }
 
+/// The object an edit changes.
+#[derive(Clone, Copy)]
+enum Target<'a> {
+    New,
+    Name(&'a str),
+    /// An unnamed `[[kind]]` table by position, and its id for errors.
+    Index(usize, &'a str),
+}
+
 /// [`edit`] on the text of one file.
 pub fn edit_text(
     text: &str,
@@ -371,6 +406,19 @@ pub fn edit_text(
     name: Option<&str>,
     fields: Option<&Table>,
 ) -> Result<String, EditError> {
+    edit_target(text, kind, name.map_or(Target::New, Target::Name), fields)
+}
+
+fn edit_target(
+    text: &str,
+    kind: Kind,
+    target: Target,
+    fields: Option<&Table>,
+) -> Result<String, EditError> {
+    let name = match target {
+        Target::New => None,
+        Target::Name(id) | Target::Index(_, id) => Some(id),
+    };
     let mut doc: DocumentMut =
         text.parse()
             .map_err(|e: toml_edit::TomlError| EditError::Parse {
@@ -436,10 +484,13 @@ pub fn edit_text(
     } else {
         let position = match doc.get(key) {
             None => None,
-            Some(Item::ArrayOfTables(list)) => name.and_then(|name| {
-                list.iter()
-                    .position(|t| t.get("name").and_then(Item::as_str) == Some(name))
-            }),
+            Some(Item::ArrayOfTables(list)) => match target {
+                Target::New => None,
+                Target::Name(name) => list
+                    .iter()
+                    .position(|t| t.get("name").and_then(Item::as_str) == Some(name)),
+                Target::Index(i, _) => (i < list.len()).then_some(i),
+            },
             Some(_) => return Err(inline()),
         };
         // A new name must not be taken by another object in this file.
@@ -823,6 +874,51 @@ name = "db01""#,
             ..clone("x")
         };
         assert!(matches!(edit_many(&dir, &[bad]), Err(EditError::File(_))));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn unnamed_notify_rules_by_path_and_line() {
+        let dir = std::env::temp_dir().join(format!("watcher-edit-unnamed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let text = "[[notify]]\ncontacts = [\"a\"]\n\n[[notify]]\n# keep\ncontacts = [\"b\"]\n";
+        std::fs::write(dir.join("notify.toml"), text).unwrap();
+        let (found, _) = objects(&dir).unwrap();
+        let ids: Vec<_> = found.iter().map(Object::id).collect();
+        assert_eq!(ids, ["@notify.toml:1", "@notify.toml:4"]);
+
+        let update = Edit {
+            kind: Kind::Notify,
+            name: Some("@notify.toml:4".into()),
+            fields: Some(fields("contacts = [\"c\"]")),
+            path: None,
+        };
+        let out = edit_many(&dir, &[update]).unwrap().remove(0).text.unwrap();
+        assert_eq!(
+            out,
+            "[[notify]]\ncontacts = [\"a\"]\n\n[[notify]]\n# keep\ncontacts = [\"c\"]\n"
+        );
+
+        let delete = Edit {
+            kind: Kind::Notify,
+            name: Some("@notify.toml:1".into()),
+            fields: None,
+            path: None,
+        };
+        let out = edit_many(&dir, &[delete]).unwrap().remove(0).text.unwrap();
+        assert!(!out.contains("\"a\"") && out.contains("\"b\""), "{out}");
+
+        let missing = Edit {
+            kind: Kind::Notify,
+            name: Some("@notify.toml:2".into()),
+            fields: None,
+            path: None,
+        };
+        assert!(matches!(
+            edit_many(&dir, &[missing]),
+            Err(EditError::NotFound(..))
+        ));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

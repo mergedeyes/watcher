@@ -41,6 +41,8 @@ Values are stored in base units: seconds, bytes and percent. See
 
 - `state_events.kind` is `service`, `host` (UP/DOWN), `flap_start` or
   `flap_stop`.
+- `v_service_state` gets a state change at once. Without a change,
+  `last_check` and `output` are updated every 30 seconds.
 - `samples.flags`: 1 = synthetic, 2 = suspect, 4 = masked. `v_metrics`
   hides masked values.
 - Hosts and services removed from the configuration get a `removed_at`

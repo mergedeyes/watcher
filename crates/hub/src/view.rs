@@ -293,3 +293,42 @@ impl HostView {
         }
     }
 }
+
+/// A recorded series with the thresholds of its metric in the latest
+/// result, for lines in its graph.
+#[derive(Debug, Clone, Serialize)]
+pub struct SeriesView {
+    #[serde(flatten)]
+    pub series: watcher_store::Series,
+    /// Bounds in the series' unit; configured thresholds, else the
+    /// plugin's. Empty without thresholds.
+    pub warn: Vec<f64>,
+    pub crit: Vec<f64>,
+}
+
+impl SeriesView {
+    pub fn new(series: watcher_store::Series, live: Option<&LiveService>) -> Self {
+        let metric = live.and_then(|l| l.result.as_ref()).and_then(|r| {
+            r.metrics.iter().find(|m| {
+                m.metric.name == series.metric
+                    && serde_json::to_value(&m.metric.labels).ok().as_ref() == Some(&series.labels)
+            })
+        });
+        let bounds = |evaluated: Option<&watcher_core::Threshold>,
+                      plugin: Option<&watcher_core::Threshold>| {
+            evaluated
+                .or(plugin)
+                .map(watcher_core::Threshold::bounds)
+                .unwrap_or_default()
+        };
+        SeriesView {
+            warn: metric.map_or_else(Vec::new, |m| {
+                bounds(m.metric.warn.as_ref(), m.perf_warn.as_ref())
+            }),
+            crit: metric.map_or_else(Vec::new, |m| {
+                bounds(m.metric.crit.as_ref(), m.perf_crit.as_ref())
+            }),
+            series,
+        }
+    }
+}

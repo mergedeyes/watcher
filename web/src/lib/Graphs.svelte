@@ -62,6 +62,8 @@
 	});
 
 	$effect(() => {
+		// Again after a reload: the thresholds may have changed.
+		void live.reloads;
 		const [h, s] = [host, service];
 		api.series(h, s).then(
 			(list) => (series = list),

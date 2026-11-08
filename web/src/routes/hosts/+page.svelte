@@ -2,6 +2,9 @@
 	import { page } from '$app/state';
 	import { actions } from '#lib/actions.svelte.ts';
 	import { hostHref, type HostView } from '#lib/api.ts';
+	import { auth } from '#lib/auth.svelte.ts';
+	import { editHref } from '#lib/config.svelte.ts';
+	import ConfigTree from '#lib/ConfigTree.svelte';
 	import Flags from '#lib/Flags.svelte';
 	import { datetime, hostSeverity, since } from '#lib/format.ts';
 	import { live } from '#lib/live.svelte.ts';
@@ -59,7 +62,13 @@
 <div class="content">
 	<div class="page-head">
 		<h1>Hosts{group ? ` · ${group}` : ''}{filter ? ` · ${filter.toUpperCase()}` : ''}</h1>
-		<input type="search" placeholder="Search name, address, group" bind:value={query} aria-label="Search" />
+		<span class="head-actions">
+			{#if group && auth.admin}
+				<a class="btn" href={editHref('hostgroups', group)}>Edit Config</a>
+				<ConfigTree kind="hostgroup" name={group} />
+			{/if}
+			<input type="search" placeholder="Search name, address, group" bind:value={query} aria-label="Search" />
+		</span>
 	</div>
 
 	{#if !live.loaded}

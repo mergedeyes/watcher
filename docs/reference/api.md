@@ -145,7 +145,7 @@ These endpoints need a database.
 | Method and path | Description |
 |---|---|
 | `GET events` | Alert history, newest first. |
-| `GET services/{host}/{service}/series` | The metric series of a service. |
+| `GET services/{host}/{service}/series` | The metric series of a service, with `warn` and `crit`: the threshold bounds of the latest result. |
 | `GET series/{id}/points` | The points of a series, grouped into buckets. |
 
 Parameters for `GET events`:
@@ -244,6 +244,10 @@ Admins only.
 
 Kinds: `check`, `service`, `host`, `hostgroup`, `servicegroup`, `contact`,
 `contactgroup`, `downtimegroup`, `notify`, `sink`.
+
+A notify rule without a `name` is addressed as `@path:line`, for example
+`@ui/notify.toml:4` (URL-encoded in paths), the way `GET config/objects`
+lists it.
 
 ### Changing one object
 

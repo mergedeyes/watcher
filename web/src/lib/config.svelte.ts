@@ -34,9 +34,15 @@ class ConfigState {
 		return this.objects.filter((o) => o.kind === kind);
 	}
 
-	find(kind: Kind, name: string) {
-		return this.objects.find((o) => o.kind === kind && o.name === name);
+	/** The object with this name or {@link objectId}. */
+	find(kind: Kind, id: string) {
+		return this.objects.find((o) => o.kind === kind && objectId(o) === id);
 	}
+}
+
+/** How the edit API addresses an object: its name, or `@path:line` for an unnamed notify rule. */
+export function objectId(o: ConfigObject) {
+	return o.name || `@${o.path}:${o.line}`;
 }
 
 export const config = new ConfigState();

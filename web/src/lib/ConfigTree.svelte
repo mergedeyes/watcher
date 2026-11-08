@@ -33,8 +33,6 @@
 			const [host, ...rest] = node.name.split('/');
 			return serviceHref(host ?? '', rest.join('/'));
 		}
-		// Unnamed notify rules have no form.
-		if (node.kind === 'notify' && node.name.startsWith('rule at ')) return undefined;
 		const path = KINDS.find((k) => k.kind === node.kind)?.path;
 		return path ? editHref(path, node.name) : undefined;
 	}

@@ -141,6 +141,13 @@ code,
 	margin-bottom: 12px;
 }
 
+.head-actions {
+	display: inline-flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+
 .panel {
 	background: var(--panel);
 	border: 1px solid var(--line);
