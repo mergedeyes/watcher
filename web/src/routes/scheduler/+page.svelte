@@ -34,9 +34,14 @@
 		return secs < 3600 ? `in ${duration(secs)}` : datetime(t);
 	}
 
+	/** The service's commands; its current state decides which. */
 	function menu(e: MouseEvent, j: Scheduled) {
-		const s = live.find(j.host, j.service);
-		if (s) actions.open(e, { service: s });
+		e.preventDefault();
+		const { clientX: x, clientY: y } = e;
+		api.service(j.host, j.service).then(
+			(s) => (actions.menu = { x, y, target: { service: s } }),
+			(err) => actions.say(err instanceof Error ? err.message : String(err), true)
+		);
 	}
 </script>
 
@@ -66,7 +71,7 @@
 					{#each shown as j (`${j.host}/${j.service}`)}
 						<tr oncontextmenu={(e) => menu(e, j)}>
 							<td class="nowrap"><a href={hostHref(j.host)}>{j.host}</a></td>
-							<td class="nowrap"><a href={serviceHref(j.host, j.service)}>{live.title(j.host, j.service)}</a></td>
+							<td class="nowrap"><a href={serviceHref(j.host, j.service)}>{j.title ?? j.service}</a></td>
 							<td class="nowrap">{datetime(j.last_check)}</td>
 							<td class="nowrap">{j.running ? 'running' : next(j.next_check)}</td>
 							<td class="nowrap hide-narrow">{j.passive ? '' : duration(j.interval_s)}</td>

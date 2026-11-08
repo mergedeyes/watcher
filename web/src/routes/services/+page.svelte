@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import type { Counts } from '#lib/api.ts';
 	import { auth } from '#lib/auth.svelte.ts';
 	import { editHref } from '#lib/config.svelte.ts';
 	import ConfigTree from '#lib/ConfigTree.svelte';
-	import { live } from '#lib/live.svelte.ts';
-	import ServiceTable from '#lib/ServiceTable.svelte';
+	import { Debounced } from '#lib/list.svelte.ts';
+	import ServicePanel from '#lib/ServicePanel.svelte';
 	import Totals from '#lib/Totals.svelte';
 
 	const STATES = ['ok', 'warning', 'critical', 'unknown', 'pending'] as const;
@@ -14,25 +15,22 @@
 		const s = page.url.searchParams.get('state');
 		return (STATES as readonly string[]).includes(s ?? '') ? (s as Filter) : null;
 	});
-	let query = $state('');
+	const search = new Debounced();
 	/** Only services of this service group. */
 	let group = $derived(page.url.searchParams.get('group'));
 
-	let counts = $derived.by(() => {
-		const c = { ok: 0, warning: 0, critical: 0, unknown: 0, pending: 0 };
-		for (const s of live.services) c[s.state ?? 'pending']++;
-		return c;
-	});
+	/** Per state, of the services the group and search allow. */
+	let counts = $state<Counts | null>(null);
+	let all = $derived(counts ? Object.values(counts).reduce((a, b) => a + b, 0) : 0);
 
-	let shown = $derived.by(() => {
-		const q = query.trim().toLowerCase();
-		return live.services.filter(
-			(s) =>
-				(filter === null || (s.state ?? 'pending') === filter) &&
-				(!group || s.groups.includes(group)) &&
-				(!q || `${s.host} ${s.service} ${s.title ?? ''} ${s.output}`.toLowerCase().includes(q))
-		);
-	});
+	/** Totals links keep the group. */
+	function href(state?: string) {
+		const params = new URLSearchParams();
+		if (group) params.set('group', group);
+		if (state) params.set('state', state);
+		const q = params.toString();
+		return q ? `/services?${q}` : '/services';
+	}
 </script>
 
 <div class="content">
@@ -43,7 +41,7 @@
 				<a class="btn" href={editHref('servicegroups', group)}>Edit Config</a>
 				<ConfigTree kind="servicegroup" name={group} />
 			{/if}
-			<input type="search" placeholder="Search host, service, output" bind:value={query} aria-label="Search" />
+			<input type="search" placeholder="Search host, service, output" bind:value={search.value} aria-label="Search" />
 		</span>
 	</div>
 
@@ -51,24 +49,23 @@
 		<Totals
 			title="Service Status Totals"
 			items={[
-				{ key: 'all', label: 'All', count: live.services.length, href: '/services' },
-				{ key: 'ok', label: 'OK', count: counts.ok, href: '/services?state=ok', state: 'ok' },
-				{ key: 'warning', label: 'Warning', count: counts.warning, href: '/services?state=warning', state: 'warning' },
-				{ key: 'critical', label: 'Critical', count: counts.critical, href: '/services?state=critical', state: 'critical' },
-				{ key: 'unknown', label: 'Unknown', count: counts.unknown, href: '/services?state=unknown', state: 'unknown' },
-				{ key: 'pending', label: 'Pending', count: counts.pending, href: '/services?state=pending' }
+				{ key: 'all', label: 'All', count: all, href: href() },
+				{ key: 'ok', label: 'OK', count: counts?.ok ?? 0, href: href('ok'), state: 'ok' },
+				{ key: 'warning', label: 'Warning', count: counts?.warning ?? 0, href: href('warning'), state: 'warning' },
+				{ key: 'critical', label: 'Critical', count: counts?.critical ?? 0, href: href('critical'), state: 'critical' },
+				{ key: 'unknown', label: 'Unknown', count: counts?.unknown ?? 0, href: href('unknown'), state: 'unknown' },
+				{ key: 'pending', label: 'Pending', count: counts?.pending ?? 0, href: href('pending') }
 			]}
 		/>
 	</div>
 
-	{#if !live.loaded}
-		<p class="notice">Loading…</p>
-	{:else}
-		<section class="panel">
-			<div class="panel-title">Service Status Details <span class="muted">{shown.length}/{live.services.length}</span></div>
-			<ServiceTable rows={shown} empty={live.services.length === 0 ? 'No services configured.' : 'No matches.'} />
-		</section>
-	{/if}
+	<ServicePanel
+		title="Service Status Details"
+		filter={{ state: filter ?? undefined, group: group ?? undefined, q: search.settled || undefined }}
+		none={group || search.settled ? undefined : 'No services configured.'}
+		empty="No matches."
+		onlist={(l) => (counts = l.counts)}
+	/>
 </div>
 
 <style>

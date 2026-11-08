@@ -42,6 +42,12 @@
 	});
 
 	let scripts = $state<{ dirs: string[]; scripts: { name: string; dir: string }[] } | null>(null);
+	/** Names of the services on hosts. */
+	let serviceNames = $state<string[]>([]);
+	$effect(() => {
+		void live.reloads;
+		api.names().then((n) => (serviceNames = n.services), () => (serviceNames = []));
+	});
 	$effect(() => {
 		if (kind && SCHEMAS[kind.kind].some((g) => g.fields.some((f) => f.scripts)))
 			api.configScripts().then((s) => (scripts = s), () => (scripts = null));
@@ -129,7 +135,7 @@
 	}
 
 	let suggest = $derived(
-		new Suggest(config.objects, [...new Set(live.services.map((s) => s.service))], scripts?.scripts ?? [])
+		new Suggest(config.objects, serviceNames, scripts?.scripts ?? [])
 	);
 
 	/** Services the host gets (as written), by name: where from. Host services with these names override them. */

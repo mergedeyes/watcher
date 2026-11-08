@@ -1,7 +1,12 @@
 <!--
 	Service status details, as in Nagios: one row per service, the host name
-	only on the first row of each host when sorted by host.
+	only on the first row of each host when sorted by host. Sorts the rows
+	itself, or with `sorter` shows them as given (sorted on the server).
 -->
+<script module lang="ts">
+	export type ServiceSortKey = 'host' | 'service' | 'status' | 'last_check' | 'duration' | 'attempt';
+</script>
+
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { actions } from './actions.svelte.ts';
@@ -12,25 +17,28 @@
 	import { Sorter } from './sort.svelte.ts';
 	import Status from './Status.svelte';
 
-	type Key = 'host' | 'service' | 'status' | 'last_check' | 'duration' | 'attempt';
+	type Key = ServiceSortKey;
 
 	interface Props {
 		rows: ServiceView[];
 		showHost?: boolean;
 		/** Initial sort column. */
 		sort?: Key;
+		/** Sorted elsewhere: the rows are in this order already. */
+		sorter?: Sorter<Key>;
 		empty?: string;
 	}
 
-	let { rows, showHost = true, sort = 'host', empty = 'No services.' }: Props = $props();
+	let { rows, showHost = true, sort = 'host', sorter: outer, empty = 'No services.' }: Props = $props();
 
 	// The initial sort only; the user changes it afterwards.
-	const sorter = untrack(() => new Sorter<Key>(sort, sort === 'status'));
+	const own = untrack(() => new Sorter<Key>(sort, sort === 'status'));
+	let sorter = $derived(outer ?? own);
 	const time = (s: string | null) => (s ? Date.parse(s) : 0);
 	const text = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
 
 	let sorted = $derived(
-		sorter.apply(rows, {
+		outer ? rows : sorter.apply(rows, {
 			host: (a, b) => text(a.host, b.host),
 			service: (a, b) => text(a.title ?? a.service, b.title ?? b.service),
 			status: (a, b) => severity(a.state) - severity(b.state),

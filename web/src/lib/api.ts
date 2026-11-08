@@ -74,6 +74,71 @@ export interface HostView {
 	downtime: boolean;
 }
 
+export interface HostCounts {
+	up: number;
+	down: number;
+	pending: number;
+}
+
+/** Host and service totals; `generation` changes when states, flags or the config change. */
+export interface Summary {
+	generation: number;
+	hosts: HostCounts & { total: number; unhandled: number };
+	services: Counts & { total: number; unhandled: number };
+}
+
+/** Filters, sort and page of `GET /services`. */
+export interface ServiceQuery {
+	host?: string;
+	hostgroup?: string;
+	group?: string;
+	/** Comma-separated states, `pending` included. */
+	state?: string;
+	problems?: boolean;
+	hard?: boolean;
+	unhandled?: boolean;
+	q?: string;
+	sort?: 'host' | 'service' | 'status' | 'last_check' | 'duration' | 'attempt';
+	desc?: boolean;
+	offset?: number;
+	limit?: number;
+}
+
+/** Filters, sort and page of `GET /hosts`. */
+export interface HostQuery {
+	/** Comma-separated: up, down, pending. */
+	state?: string;
+	group?: string;
+	unhandled?: boolean;
+	q?: string;
+	sort?: 'host' | 'status' | 'address' | 'last_check' | 'duration';
+	desc?: boolean;
+	offset?: number;
+	limit?: number;
+}
+
+export interface ServiceList {
+	/** Of the services that match every filter but `state`. */
+	counts: Counts;
+	/** Services that match every filter. */
+	total: number;
+	services: ServiceView[];
+}
+
+export interface HostList {
+	counts: HostCounts;
+	total: number;
+	hosts: HostView[];
+}
+
+/** What a stream opened with `watch` gets results of. */
+export interface Watch {
+	/** `host/service` ids. */
+	services?: string[];
+	/** All services of these hosts. */
+	hosts?: string[];
+}
+
 /** Acknowledgement, mute or disabled checks on a host or service. */
 export interface Flag {
 	kind: 'ack' | 'mute' | 'no_checks';
@@ -145,6 +210,7 @@ export interface ProcessInfo {
 export interface Scheduled {
 	host: string;
 	service: string;
+	title: string | null;
 	next_check: string | null;
 	last_check: string | null;
 	running: boolean;
@@ -239,6 +305,8 @@ export interface StateEvent {
 	state_type: StateType;
 	hard: boolean;
 	output: string;
+	/** The service's title now. */
+	title: string | null;
 }
 
 export interface EventQuery {
@@ -462,10 +530,21 @@ function send<T>(method: string, path: string, body?: unknown): Promise<T> {
 
 const seg = encodeURIComponent;
 
+/** Query parameters, leaving out unset, empty and false values. */
+function params(q: object): URLSearchParams {
+	const out = new URLSearchParams();
+	for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== '' && v !== false) out.set(k, String(v));
+	return out;
+}
+
 export const api = {
 	health: () => get<{ status: string; version?: string; instance?: string | null }>('/health'),
-	services: () => get<{ counts: Counts; services: ServiceView[] }>('/services'),
-	hosts: () => get<HostView[]>('/hosts'),
+	services: (q: ServiceQuery = {}) => get<ServiceList>(`/services?${params(q)}`),
+	hosts: (q: HostQuery = {}) => get<HostList>(`/hosts?${params(q)}`),
+	summary: () => get<Summary>('/summary'),
+	/** All host names and the distinct service names. */
+	names: () => get<{ hosts: string[]; services: string[] }>('/names'),
+	watch: (stream: string, watch: Watch) => send<unknown>('PUT', `/stream/${seg(stream)}`, watch),
 	host: (name: string) =>
 		get<{ host: HostView; services: ServiceView[]; origin: string; flags: Flag[] }>(`/hosts/${seg(name)}`),
 	service: (host: string, service: string) =>
@@ -475,11 +554,7 @@ export const api = {
 	/** `from`, `to`: RFC 3339, unix seconds or a duration back from now; `to` defaults to now. */
 	points: (id: number, from: string, points: number, signal?: AbortSignal, to?: string) =>
 		get<Points>(`/series/${id}/points?from=${seg(from)}${to ? `&to=${seg(to)}` : ''}&points=${points}`, { signal }),
-	events: (q: EventQuery) => {
-		const params = new URLSearchParams();
-		for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== '') params.set(k, String(v));
-		return get<StateEvent[]>(`/events?${params}`);
-	},
+	events: (q: EventQuery) => get<StateEvent[]>(`/events?${params(q)}`),
 
 	action: (action: Action, body: ActionBody) => send<ActionResult>('POST', `/actions/${action}`, body),
 	/** A passive result, e.g. from the Submit Result dialog. */
@@ -521,8 +596,8 @@ export const api = {
 	configObjects: () => get<{ objects: ConfigObject[]; diagnostics: Problem[] }>('/config/objects'),
 	groups: () =>
 		get<{
-			hostgroups: { name: string; title: string | null }[];
-			servicegroups: { name: string; title: string | null }[];
+			hostgroups: { name: string; title: string | null; hosts: HostCounts; services: Counts }[];
+			servicegroups: { name: string; title: string | null; services: Counts }[];
 			downtimegroups: { name: string; title: string | null; schedule: string[] }[];
 		}>('/groups'),
 	configTree: (kind: TreeKind, name: string) =>

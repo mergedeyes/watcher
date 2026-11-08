@@ -1,42 +1,59 @@
-// Live state of all services: loaded once, then patched from the hub's
-// event stream. After a reconnect or a config reload the lists are fetched
-// again, so nothing missed while disconnected stays stale.
+// Live status from the hub's event stream: the host and service totals,
+// a generation that changes with every state change, and results of the
+// rows pages show. Lists are fetched by the pages themselves, a page at a
+// time (see list.svelte.ts); they refetch when `generation` or `reloads`
+// changes and patch their rows from watched results in between.
 //
-// Paused, the stream is closed and the lists only change on refresh(). Pages
-// refetch their own data when the lists change, so they hold still too.
+// Paused, the stream is closed and nothing changes until refresh().
 
-import { api, type HostView, type ServiceView } from './api.ts';
+import { api, type ServiceView, type Summary, type Watch } from './api.ts';
 
 export type Connection = 'connecting' | 'live' | 'offline' | 'paused';
 
+interface Listener {
+	services: Set<string>;
+	hosts: Set<string>;
+	onResult: (view: ServiceView) => void;
+}
+
 class Live {
-	services = $state<ServiceView[]>([]);
-	hosts = $state<HostView[]>([]);
+	summary = $state<Summary | null>(null);
 	connection = $state<Connection>('connecting');
-	loaded = $state(false);
 	error = $state<string | null>(null);
 	/** Ticks every 10 s, for ages like "12m". */
 	now = $state(Date.now());
-	/** Counts config reloads on the server. */
+	/** Counts config reloads, commands, reconnects and refreshes: refetch everything. */
 	reloads = $state(0);
+	/** Changes with states, flags and the config: lists refetch their page. */
+	generation = $state(0);
 
-	#index = new Map<string, number>();
 	#source: EventSource | null = null;
 	#timer: ReturnType<typeof setInterval> | undefined;
 	#started = false;
+	/** Opened before: a new open is a reconnect. */
+	#opened = false;
+	#listeners = new Set<Listener>();
+	/** The stream's id from its `hello`. */
+	#stream: string | null = null;
+	/** The watch last sent, to skip unchanged ones. */
+	#sent = '';
+	#syncing = false;
+
+	get loaded() {
+		return this.summary !== null;
+	}
 
 	start() {
 		if (this.#started) return;
 		this.#started = true;
 		this.#timer = setInterval(() => (this.now = Date.now()), 10_000);
-		if (this.connection === 'paused') this.reload();
+		if (this.connection === 'paused') this.#fetchSummary();
 		else this.#connect();
 	}
 
 	/** Stops updates until resume(); refresh() fetches once. */
 	pause() {
-		this.#source?.close();
-		this.#source = null;
+		this.#close();
 		this.connection = 'paused';
 	}
 
@@ -48,110 +65,117 @@ class Live {
 
 	async refresh() {
 		this.now = Date.now();
-		await this.reload();
+		this.reloads++;
+		await this.#fetchSummary();
 	}
 
 	/** Disconnects and forgets everything, e.g. after logging out. */
 	stop() {
-		this.#source?.close();
-		this.#source = null;
+		this.#close();
 		this.#started = false;
+		this.#opened = false;
 		clearInterval(this.#timer);
-		this.services = [];
-		this.hosts = [];
-		this.#index.clear();
-		this.loaded = false;
+		this.summary = null;
 		this.error = null;
 		this.connection = 'connecting';
 	}
 
-	/** A service's title, else its name. */
-	title(host: string, service: string): string {
-		return this.find(host, service)?.title ?? service;
+	/**
+	 * Calls `onResult` with every new result of the watched services (and
+	 * all services of the watched hosts) until the returned function is
+	 * called. Meant as the return value of an `$effect`.
+	 */
+	watch(watch: Watch, onResult: (view: ServiceView) => void): () => void {
+		const listener: Listener = {
+			services: new Set(watch.services ?? []),
+			hosts: new Set(watch.hosts ?? []),
+			onResult
+		};
+		this.#listeners.add(listener);
+		this.#sync();
+		return () => {
+			this.#listeners.delete(listener);
+			this.#sync();
+		};
 	}
 
-	find(host: string, service: string): ServiceView | undefined {
-		// Read the reactive list first: callers must depend on it even while
-		// it is still empty, or they never see it load.
-		const services = this.services;
-		const i = this.#index.get(`${host}/${service}`);
-		return i === undefined ? undefined : services[i];
-	}
-
-	async reload() {
+	async #fetchSummary() {
 		try {
-			const [services, hosts] = await Promise.all([api.services(), api.hosts()]);
-			this.services = services.services;
-			this.hosts = hosts;
-			this.#index = new Map(this.services.map((s, i) => [`${s.host}/${s.service}`, i]));
+			this.#setSummary(await api.summary());
 			this.error = null;
-			this.loaded = true;
 		} catch (e) {
 			this.error = e instanceof Error ? e.message : String(e);
 		}
 	}
 
+	#setSummary(summary: Summary) {
+		this.summary = summary;
+		if (summary.generation !== this.generation) this.generation = summary.generation;
+	}
+
+	#close() {
+		this.#source?.close();
+		this.#source = null;
+		this.#stream = null;
+		this.#sent = '';
+	}
+
 	#connect() {
-		const source = new EventSource('/api/v1/stream');
+		const source = new EventSource('/api/v1/stream?watch=true');
 		this.#source = source;
 		source.onopen = () => {
 			this.connection = 'live';
-			this.reload();
+			this.error = null;
+			// Events may have been missed while disconnected.
+			if (this.#opened) this.reloads++;
+			this.#opened = true;
 		};
-		// EventSource reconnects by itself; onopen then reloads.
+		// EventSource reconnects by itself, with a new stream id.
 		source.onerror = () => {
 			this.connection = 'offline';
-			if (!this.loaded) this.reload();
+			this.#stream = null;
+			this.#sent = '';
+			if (!this.loaded) this.#fetchSummary();
 		};
-		source.addEventListener('result', (e) => this.#patch(JSON.parse(e.data)));
-		source.addEventListener('reload', () => {
-			this.reloads++;
-			this.reload();
+		source.addEventListener('hello', (e) => {
+			this.#stream = JSON.parse(e.data).id;
+			this.#sent = '';
+			this.#sync();
 		});
-		source.addEventListener('lagged', () => this.reload());
+		source.addEventListener('summary', (e) => this.#setSummary(JSON.parse(e.data)));
+		source.addEventListener('result', (e) => this.#dispatch(JSON.parse(e.data)));
+		source.addEventListener('reload', () => this.reloads++);
+		source.addEventListener('lagged', () => this.reloads++);
 	}
 
-	#patch(view: ServiceView) {
-		const i = this.#index.get(`${view.host}/${view.service}`);
-		if (i === undefined) {
-			this.reload();
-			return;
-		}
-		this.services[i] = view;
-		const host = this.hosts.find((h) => h.name === view.host);
-		if (host) this.#recount(host);
+	#dispatch(view: ServiceView) {
+		const id = `${view.host}/${view.service}`;
+		for (const l of this.#listeners) if (l.services.has(id) || l.hosts.has(view.host)) l.onResult(view);
 	}
 
-	/** Host counts, worst service state and host state, from the live service list. */
-	#recount(host: HostView) {
-		const counts = { ok: 0, warning: 0, critical: 0, unknown: 0, pending: 0 };
-		let worst: HostView['worst'] = null;
-		const rank = { ok: 0, warning: 1, unknown: 2, critical: 3 } as const;
-		for (const s of this.services) {
-			if (s.host !== host.name) continue;
-			if (s.service === host.check) this.#hostState(host, s);
-			if (s.state === null) {
-				counts.pending++;
-				continue;
+	/** Sends the union of all watches, once per task. */
+	#sync() {
+		if (this.#syncing) return;
+		this.#syncing = true;
+		queueMicrotask(() => {
+			this.#syncing = false;
+			const stream = this.#stream;
+			if (!stream) return;
+			const services = new Set<string>();
+			const hosts = new Set<string>();
+			for (const l of this.#listeners) {
+				for (const s of l.services) services.add(s);
+				for (const h of l.hosts) hosts.add(h);
 			}
-			counts[s.state]++;
-			if (worst === null || rank[s.state] > rank[worst]) worst = s.state;
-		}
-		host.services = counts;
-		host.worst = worst;
-	}
-
-	/** The host state from its host check: OK/WARNING is UP (confirmed), else DOWN. */
-	#hostState(host: HostView, check: ServiceView) {
-		const up = check.state === 'ok' || check.state === 'warning';
-		host.state = check.state === null ? null : up ? 'up' : 'down';
-		host.state_type = up ? 'hard' : check.state_type;
-		host.attempt = check.attempt;
-		host.max_attempts = check.max_attempts;
-		host.last_check = check.last_check;
-		host.last_change = check.last_change;
-		host.output = check.output;
-		host.flapping = check.flapping;
+			const watch = { services: [...services].sort(), hosts: [...hosts].sort() };
+			const key = JSON.stringify(watch);
+			if (key === this.#sent) return;
+			this.#sent = key;
+			api.watch(stream, watch).catch(() => {
+				// The stream is gone; its reconnect sends the watch again.
+				if (this.#sent === key) this.#sent = '';
+			});
+		});
 	}
 }
 

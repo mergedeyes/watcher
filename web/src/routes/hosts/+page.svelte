@@ -1,54 +1,55 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { actions } from '#lib/actions.svelte.ts';
-	import { hostHref, type HostView } from '#lib/api.ts';
+	import { api, hostHref, type HostCounts, type HostQuery } from '#lib/api.ts';
 	import { auth } from '#lib/auth.svelte.ts';
 	import { editHref } from '#lib/config.svelte.ts';
 	import ConfigTree from '#lib/ConfigTree.svelte';
 	import Flags from '#lib/Flags.svelte';
-	import { datetime, hostSeverity, since } from '#lib/format.ts';
+	import { datetime, since } from '#lib/format.ts';
+	import { Debounced, Paging, ServerList, checkId, patchHost } from '#lib/list.svelte.ts';
 	import { live } from '#lib/live.svelte.ts';
+	import Pager from '#lib/Pager.svelte';
 	import { Sorter } from '#lib/sort.svelte.ts';
 	import Status from '#lib/Status.svelte';
+	import Totals from '#lib/Totals.svelte';
 
-	type Key = 'host' | 'status' | 'address' | 'last_check' | 'duration';
+	type Key = NonNullable<HostQuery['sort']>;
 	const sorter = new Sorter<Key>('host');
-	let query = $state('');
+	const search = new Debounced();
 
-	let filter = $derived(page.url.searchParams.get('state'));
+	const STATES = ['up', 'down', 'pending'];
+	let filter = $derived.by(() => {
+		const s = page.url.searchParams.get('state') ?? '';
+		return STATES.includes(s) ? s : null;
+	});
 	/** Only hosts of this host group. */
 	let group = $derived(page.url.searchParams.get('group'));
 
-	function matches(h: HostView) {
-		switch (filter) {
-			case 'up':
-				return h.state === 'up';
-			case 'down':
-				return h.state === 'down';
-			case 'pending':
-				return h.state === null;
-			default:
-				return true;
+	let query = $derived<HostQuery>({ state: filter ?? undefined, group: group ?? undefined, q: search.settled || undefined });
+	const paging = new Paging(() => JSON.stringify([query, sorter.key, sorter.desc]));
+	const list = new ServerList(
+		() => ({ ...query, sort: sorter.key, desc: sorter.desc, offset: paging.offset, limit: paging.limit }),
+		api.hosts,
+		{
+			watch: (d) => ({ services: d.hosts.map(checkId).filter((id) => id !== null) }),
+			patch: (d, view) => {
+				for (const h of d.hosts) patchHost(h, view);
+			}
 		}
-	}
+	);
 
-	let shown = $derived.by(() => {
-		const q = query.trim().toLowerCase();
-		const rows = live.hosts.filter(
-			(h) =>
-				matches(h) &&
-				(!group || h.groups.includes(group)) &&
-				(!q || [h.name, h.address, ...h.groups].some((v) => v.toLowerCase().includes(q)))
-		);
-		const text = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
-		return sorter.apply(rows, {
-			host: (a, b) => text(a.name, b.name),
-			status: (a, b) => hostSeverity(a.state) - hostSeverity(b.state),
-			address: (a, b) => text(a.address, b.address),
-			last_check: (a, b) => (a.last_check ?? '').localeCompare(b.last_check ?? ''),
-			duration: (a, b) => (b.last_change ?? '').localeCompare(a.last_change ?? '')
-		});
-	});
+	let counts = $derived<HostCounts>(list.data?.counts ?? { up: 0, down: 0, pending: 0 });
+	let all = $derived(counts.up + counts.down + counts.pending);
+
+	/** Totals links keep the group. */
+	function href(state?: string) {
+		const params = new URLSearchParams();
+		if (group) params.set('group', group);
+		if (state) params.set('state', state);
+		const q = params.toString();
+		return q ? `/hosts?${q}` : '/hosts';
+	}
 
 	const COUNTS = [
 		['ok', 'OK'],
@@ -67,17 +68,31 @@
 				<a class="btn" href={editHref('hostgroups', group)}>Edit Config</a>
 				<ConfigTree kind="hostgroup" name={group} />
 			{/if}
-			<input type="search" placeholder="Search name, address, group" bind:value={query} aria-label="Search" />
+			<input type="search" placeholder="Search name, address, group" bind:value={search.value} aria-label="Search" />
 		</span>
 	</div>
 
-	{#if !live.loaded}
+	<div class="totals">
+		<Totals
+			title="Host Status Totals"
+			items={[
+				{ key: 'all', label: 'All', count: all, href: href() },
+				{ key: 'up', label: 'Up', count: counts.up, href: href('up'), state: 'ok' },
+				{ key: 'down', label: 'Down', count: counts.down, href: href('down'), state: 'critical' },
+				{ key: 'pending', label: 'Pending', count: counts.pending, href: href('pending') }
+			]}
+		/>
+	</div>
+
+	{#if list.error && !list.data}
+		<p class="notice error">{list.error}</p>
+	{:else if !list.data}
 		<p class="notice">Loading…</p>
 	{:else}
 		<section class="panel">
-			<div class="panel-title">Host Status Details <span class="muted">{shown.length}/{live.hosts.length}</span></div>
-			{#if shown.length === 0}
-				<div class="empty">{live.hosts.length === 0 ? 'No hosts configured.' : 'No matches.'}</div>
+			<div class="panel-title">Host Status Details <span class="muted">{list.data.total}</span></div>
+			{#if list.data.total === 0}
+				<div class="empty">{all === 0 && !group && !search.settled ? 'No hosts configured.' : 'No matches.'}</div>
 			{:else}
 				<table class="grid">
 					<thead>
@@ -92,7 +107,7 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each shown as h (h.name)}
+						{#each list.data.hosts as h (h.name)}
 							<tr data-host={h.state} oncontextmenu={(e) => actions.open(e, { host: h })}>
 								<td class="nowrap">
 									<a href={hostHref(h.name)}>{h.name}</a>
@@ -116,12 +131,17 @@
 						{/each}
 					</tbody>
 				</table>
+				<Pager {paging} total={list.data.total} />
 			{/if}
 		</section>
 	{/if}
 </div>
 
 <style>
+	.totals {
+		margin-bottom: 16px;
+	}
+
 	.count {
 		display: inline-block;
 		margin-right: 4px;

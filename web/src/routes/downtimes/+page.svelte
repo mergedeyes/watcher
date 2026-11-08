@@ -40,12 +40,38 @@
 	let length = $state('2h');
 	let comment = $state('');
 
+	let hostNames = $state<string[]>([]);
+	$effect(() => {
+		void live.reloads;
+		api.names().then((n) => (hostNames = n.hosts));
+	});
+
+	// Services are many: suggest those matching what is typed.
+	let serviceIds = $state<string[]>([]);
+	$effect(() => {
+		if (kind !== 'services') return;
+		const typed = (names.split(',').at(-1) ?? '').trim();
+		// `host/serv`: services of that host matching `serv`.
+		const slash = typed.indexOf('/');
+		const host = slash >= 0 ? typed.slice(0, slash) : undefined;
+		const q = slash >= 0 ? typed.slice(slash + 1) : typed;
+		const later = setTimeout(
+			() =>
+				api.services({ host, q: q || undefined, sort: 'host', limit: 50 }).then(
+					(l) => (serviceIds = l.services.map((s) => `${s.host}/${s.service}`)),
+					() => (serviceIds = [])
+				),
+			typed ? 200 : 0
+		);
+		return () => clearTimeout(later);
+	});
+
 	let options = $derived.by(() => {
 		switch (kind) {
 			case 'hosts':
-				return live.hosts.map((h) => h.name);
+				return hostNames;
 			case 'services':
-				return live.services.map((s) => `${s.host}/${s.service}`);
+				return serviceIds;
 			case 'hostgroups':
 				return (groups?.hostgroups ?? []).map((g) => ({ value: g.name, hint: g.title ?? undefined }));
 			case 'servicegroups':

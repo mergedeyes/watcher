@@ -1,25 +1,21 @@
 //! HTTP API, version 1. All responses are JSON; errors are
 //! `{"error": "..."}` with a matching status code.
 
-use crate::view::{Counts, HostFlags, HostView, SeriesView, ServiceDetail, ServiceView};
-use crate::{Hub, Update};
-use crate::{auth, config, ops, ssh};
+use crate::list::{self, HostList, HostQuery, ServiceList, ServiceQuery};
+use crate::view::{SeriesView, ServiceDetail};
+use crate::{Hub, auth, config, ops, ssh, stream};
 use axum::extract::{Path, Query, State as AxState};
 use axum::http::StatusCode;
 use axum::middleware;
-use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::convert::Infallible;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::oneshot;
-use tokio_stream::StreamExt;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use watcher_core::{RawOutput, State, Termination};
 use watcher_exec::scheduler::Control;
 use watcher_store::{EventFilter, FlagKind, Points, StateEvent, Store};
@@ -69,7 +65,10 @@ pub fn router(hub: Arc<Hub>) -> Router {
             put(auth::update_user).delete(auth::delete_user),
         )
         .route("/api/v1/groups", get(groups))
-        .route("/api/v1/stream", get(stream))
+        .route("/api/v1/summary", get(summary))
+        .route("/api/v1/names", get(names))
+        .route("/api/v1/stream", get(stream::stream))
+        .route("/api/v1/stream/{id}", put(stream::set_watch))
         .route("/api/v1/auth/status", get(auth::status))
         .route("/api/v1/auth/login", post(auth::login))
         .route("/api/v1/auth/logout", post(auth::logout))
@@ -179,66 +178,19 @@ async fn openapi() -> impl IntoResponse {
     )
 }
 
-/// All services as views, in config order.
-fn service_views(hub: &Hub) -> Vec<ServiceView> {
-    let live = hub.read();
-    let now = SystemTime::now();
-    live.config
-        .services
-        .iter()
-        .map(|s| {
-            let status = live.ops.status(&live.config, s, now);
-            ServiceView::new(&live.config, s, live.services.get(&s.id), &status)
-        })
-        .collect()
-}
-
-fn host_flags(hub: &Hub, host: &watcher_config::Host) -> HostFlags {
-    let live = hub.read();
-    let ops = &live.ops;
-    HostFlags {
-        acknowledged: ops.flag(FlagKind::Ack, &host.name).is_some(),
-        muted: ops.flag(FlagKind::Mute, &host.name).is_some(),
-        checks_enabled: ops.checks && ops.flag(FlagKind::NoChecks, &host.name).is_none(),
-        downtime: !ops
-            .downtimes_of(&live.config, host, None, SystemTime::now())
-            .is_empty(),
-    }
-}
-
-async fn hosts(AxState(hub): Shared) -> Json<Vec<HostView>> {
-    let views = service_views(&hub);
-    let config = hub.config();
-    let hosts = config
-        .hosts
-        .iter()
-        .map(|h| {
-            let own: Vec<&ServiceView> = views.iter().filter(|v| v.host == h.name).collect();
-            HostView::new(h, &own, &host_flags(&hub, h))
-        })
-        .collect();
-    Json(hosts)
+/// `GET /hosts`: filtered, sorted and paged.
+async fn hosts(AxState(hub): Shared, Query(q): Query<HostQuery>) -> ApiResult<HostList> {
+    Ok(Json(list::hosts(&hub.read(), &q)?))
 }
 
 async fn host(AxState(hub): Shared, Path(name): Path<String>) -> ApiResult<serde_json::Value> {
-    let config = hub
-        .live
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
+    let live = hub.read();
+    let (index, host) = live
         .config
-        .clone();
-    let host = config
-        .hosts
-        .iter()
-        .find(|h| h.name == name)
+        .host_named(&name)
         .ok_or_else(|| ApiError::NotFound(format!("no host {name:?}")))?;
-    let views: Vec<ServiceView> = service_views(&hub)
-        .into_iter()
-        .filter(|v| v.host == name)
-        .collect();
-    let refs: Vec<&ServiceView> = views.iter().collect();
-    let flags: Vec<watcher_store::Flag> = hub
-        .read()
+    let (view, services) = list::host_view(&live, index, SystemTime::now());
+    let flags: Vec<watcher_store::Flag> = live
         .ops
         .flags
         .values()
@@ -246,26 +198,39 @@ async fn host(AxState(hub): Shared, Path(name): Path<String>) -> ApiResult<serde
         .cloned()
         .collect();
     Ok(Json(json!({
-        "host": HostView::new(host, &refs, &host_flags(&hub, host)),
+        "host": view,
         "flags": flags,
-        "services": views,
+        "services": services,
         "origin": host.origin.to_string(),
     })))
 }
 
-/// Host, service and downtime groups with their titles; host and service
-/// group members are in the host and service views (`groups`).
+/// Host, service and downtime groups with their titles and status totals;
+/// host and service group members are in the host and service views
+/// (`groups`).
 async fn groups(AxState(hub): Shared) -> Json<serde_json::Value> {
-    let config = hub.config();
-    let list = |groups: &[watcher_config::Group]| -> Vec<serde_json::Value> {
+    let live = hub.read();
+    let (mut hostgroups, mut servicegroups) = list::group_counts(&live);
+    let config = &live.config;
+    let list = |groups: &[watcher_config::Group],
+                counts: &mut std::collections::HashMap<String, list::GroupCounts>|
+     -> Vec<serde_json::Value> {
         groups
             .iter()
-            .map(|g| json!({ "name": g.name, "title": g.title }))
+            .map(|g| {
+                let mut out = json!({ "name": g.name, "title": g.title });
+                let c = counts.remove(&g.name).unwrap_or_default();
+                if let Some(hosts) = c.hosts {
+                    out["hosts"] = json!(hosts);
+                }
+                out["services"] = json!(c.services);
+                out
+            })
             .collect()
     };
     Json(json!({
-        "hostgroups": list(&config.hostgroups),
-        "servicegroups": list(&config.servicegroups),
+        "hostgroups": list(&config.hostgroups, &mut hostgroups),
+        "servicegroups": list(&config.servicegroups, &mut servicegroups),
         "downtimegroups": config
             .downtimegroups
             .iter()
@@ -278,48 +243,27 @@ async fn groups(AxState(hub): Shared) -> Json<serde_json::Value> {
     }))
 }
 
-#[derive(Debug, Deserialize)]
-struct ServiceFilter {
-    host: Option<String>,
-    /// Comma-separated: `ok,warning,critical,unknown,pending`.
-    state: Option<String>,
-    /// Only services that are not OK (and not pending).
-    #[serde(default)]
-    problems: bool,
-    /// Only confirmed (hard) states.
-    #[serde(default)]
-    hard: bool,
+/// `GET /summary`: host and service totals, as in the stream's `summary`.
+async fn summary(AxState(hub): Shared) -> Response {
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        hub.summary_json().to_string(),
+    )
+        .into_response()
 }
 
-async fn services(
-    AxState(hub): Shared,
-    Query(f): Query<ServiceFilter>,
-) -> ApiResult<serde_json::Value> {
-    let states: Option<Vec<Option<State>>> = match &f.state {
-        None => None,
-        Some(list) => Some(
-            list.split(',')
-                .map(|s| match s.trim() {
-                    "pending" => Ok(None),
-                    other => State::parse(other)
-                        .map(Some)
-                        .ok_or_else(|| ApiError::BadRequest(format!("unknown state {other:?}"))),
-                })
-                .collect::<Result<_, _>>()?,
-        ),
-    };
-    let views: Vec<ServiceView> = service_views(&hub)
-        .into_iter()
-        .filter(|v| f.host.as_ref().is_none_or(|h| *h == v.host))
-        .filter(|v| states.as_ref().is_none_or(|s| s.contains(&v.state)))
-        .filter(|v| !f.problems || v.state.is_some_and(|s| s != State::Ok))
-        .filter(|v| !f.hard || v.state_type == Some(watcher_core::StateType::Hard))
-        .collect();
-    let mut counts = Counts::default();
-    for v in &views {
-        counts.add(v.state);
-    }
-    Ok(Json(json!({ "counts": counts, "services": views })))
+/// `GET /names`: all host names and the distinct service names, for
+/// suggestions.
+async fn names(AxState(hub): Shared) -> Json<serde_json::Value> {
+    let config = hub.config();
+    let hosts: Vec<&str> = config.hosts.iter().map(|h| h.name.as_str()).collect();
+    let services: BTreeSet<&str> = config.services.iter().map(|s| s.name.as_str()).collect();
+    Json(json!({ "hosts": hosts, "services": services }))
+}
+
+/// `GET /services`: filtered, sorted and paged.
+async fn services(AxState(hub): Shared, Query(q): Query<ServiceQuery>) -> ApiResult<ServiceList> {
+    Ok(Json(list::services(&hub.read(), &q)?))
 }
 
 async fn service(
@@ -493,7 +437,15 @@ fn list_param(name: &str, value: Option<&str>, known: &[&str]) -> Result<Vec<Str
         .collect()
 }
 
-async fn events(AxState(hub): Shared, Query(q): Query<EventsQuery>) -> ApiResult<Vec<StateEvent>> {
+/// An alert with the service's current title.
+#[derive(Debug, Serialize)]
+struct EventView {
+    #[serde(flatten)]
+    event: StateEvent,
+    title: Option<String>,
+}
+
+async fn events(AxState(hub): Shared, Query(q): Query<EventsQuery>) -> ApiResult<Vec<EventView>> {
     let now = SystemTime::now();
     let time = |s: &Option<String>| s.as_deref().map(|s| parse_time(s, now)).transpose();
     let known = ["service", "host", "flapping", "ack", "downtime"];
@@ -522,25 +474,19 @@ async fn events(AxState(hub): Shared, Query(q): Query<EventsQuery>) -> ApiResult
         hard_only: q.hard,
         limit: q.limit.unwrap_or(100),
     };
-    Ok(Json(store(&hub)?.events(&filter).await?))
-}
-
-/// Server-sent events: `result` with a service view after every check,
-/// `reload` after a configuration reload, `lagged` if the client fell
-/// behind and should refetch.
-async fn stream(
-    AxState(hub): Shared,
-) -> Sse<impl tokio_stream::Stream<Item = Result<SseEvent, Infallible>>> {
-    let updates = BroadcastStream::new(hub.updates.subscribe()).map(|msg| {
-        Ok(match msg {
-            Ok(Update::Result(json)) => SseEvent::default().event("result").data(&*json),
-            Ok(Update::Reload) => SseEvent::default().event("reload").data("{}"),
-            Err(BroadcastStreamRecvError::Lagged(n)) => {
-                SseEvent::default().event("lagged").data(n.to_string())
-            }
-        })
-    });
-    Sse::new(updates).keep_alive(KeepAlive::default())
+    let list = store(&hub)?.events(&filter).await?;
+    let config = hub.config();
+    Ok(Json(
+        list.into_iter()
+            .map(|event| {
+                let title = (!event.service.is_empty())
+                    .then(|| config.service(&format!("{}/{}", event.host, event.service)))
+                    .flatten()
+                    .and_then(|s| s.title.clone());
+                EventView { event, title }
+            })
+            .collect(),
+    ))
 }
 
 /// RFC 3339, unix seconds, `now`, or a duration back from `now` (`6h`).

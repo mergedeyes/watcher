@@ -55,10 +55,7 @@
 	}
 
 	/** Unhandled problems: not acknowledged, not in a downtime. */
-	let problems = $derived(
-		live.services.filter((s) => s.state !== null && s.state !== 'ok' && !s.acknowledged && !s.downtime).length +
-			live.hosts.filter((h) => h.state === 'down' && !h.acknowledged && !h.downtime).length
-	);
+	let problems = $derived(live.summary ? live.summary.services.unhandled + live.summary.hosts.unhandled : 0);
 	let bare = $derived(page.url.pathname === '/login' || page.url.pathname === '/setup' || !auth.allowed);
 
 	const NAV = [

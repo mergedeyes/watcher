@@ -147,7 +147,9 @@ async fn health_and_lists() {
     let (status, _) = call(&hub, "GET", "/api/v1/services?state=bad", None).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
-    let (_, hosts) = call(&hub, "GET", "/api/v1/hosts", None).await;
+    let (_, list) = call(&hub, "GET", "/api/v1/hosts", None).await;
+    assert_eq!(list["total"], 2);
+    let hosts = &list["hosts"];
     assert_eq!(hosts[0]["name"], "web01");
     // No host check: UP. The worst service state is separate.
     assert_eq!(hosts[0]["state"], "up");
@@ -258,16 +260,183 @@ async fn stream_sends_results() {
         .unwrap();
     assert_eq!(resp.headers()["content-type"], "text/event-stream");
     let mut body = resp.into_body();
+    // A summary first, then results.
+    let first = next_event(&mut body).await;
+    assert!(first.starts_with("event: summary\ndata: {"), "{first}");
+    assert!(first.contains(r#""pending":3"#), "{first}");
 
     hub.record(&event("web01/http", 0, "HTTP OK"));
-    let frame = tokio::time::timeout(Duration::from_secs(5), body.frame())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    let text = String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap();
+    let text = next_event(&mut body).await;
     assert!(text.starts_with("event: result\ndata: {"), "{text}");
     assert!(text.contains(r#""output":"HTTP OK""#), "{text}");
+    // The state changed: a new summary within a second.
+    let text = next_event(&mut body).await;
+    assert!(text.starts_with("event: summary\n"), "{text}");
+    assert!(text.contains(r#""ok":1"#), "{text}");
+}
+
+/// The next server-sent event, skipping keep-alive comments.
+async fn next_event(body: &mut Body) -> String {
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(5), body.frame())
+            .await
+            .expect("an event within 5 s")
+            .unwrap()
+            .unwrap();
+        let text = String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap();
+        if !text.starts_with(':') {
+            return text;
+        }
+    }
+}
+
+#[tokio::test]
+async fn watched_stream_gets_only_watched_results() {
+    let hub = hub();
+    let resp = hub
+        .clone()
+        .router()
+        .oneshot(
+            Request::get("/api/v1/stream?watch=true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut body = resp.into_body();
+    let hello = next_event(&mut body).await;
+    assert!(hello.starts_with("event: hello\n"), "{hello}");
+    let data = hello
+        .lines()
+        .nth(1)
+        .unwrap()
+        .strip_prefix("data: ")
+        .unwrap();
+    let id = serde_json::from_str::<Value>(data).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(next_event(&mut body).await.starts_with("event: summary\n"));
+
+    let watch = json!({ "services": ["db01/dump"] });
+    let uri = format!("/api/v1/stream/{id}");
+    let (status, set) = call(&hub, "PUT", &uri, Some(watch)).await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    assert_eq!(set["services"], 1);
+    let (status, _) = call(&hub, "PUT", "/api/v1/stream/nope", Some(json!({}))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Same state as before: no summary, and web01/http isn't watched.
+    hub.record(&event("web01/http", 0, "HTTP OK"));
+    hub.record(&event("db01/dump", 0, "DUMP OK"));
+    let mut seen = Vec::new();
+    while seen.len() < 2 {
+        seen.push(next_event(&mut body).await);
+    }
+    let results: Vec<&String> = seen
+        .iter()
+        .filter(|e| e.starts_with("event: result"))
+        .collect();
+    assert_eq!(results.len(), 1, "{seen:?}");
+    assert!(results[0].contains(r#""service":"dump""#), "{seen:?}");
+}
+
+#[tokio::test]
+async fn lists_filter_sort_and_page() {
+    let hub = hub();
+    hub.record(&event("web01/http", 2, "HTTP CRITICAL - down"));
+    hub.record(&event("db01/dump", 1, "DUMP WARNING - slow"));
+
+    let get = |uri: &'static str| {
+        let hub = hub.clone();
+        async move {
+            let (status, body) = call(&hub, "GET", uri, None).await;
+            assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+            body
+        }
+    };
+    let names = |list: &Value| -> Vec<String> {
+        list["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| {
+                format!(
+                    "{}/{}",
+                    s["host"].as_str().unwrap(),
+                    s["service"].as_str().unwrap()
+                )
+            })
+            .collect()
+    };
+
+    let all = get("/api/v1/services?sort=status&desc=true").await;
+    assert_eq!(names(&all), ["web01/http", "db01/dump", "db01/backup"]);
+    let page = get("/api/v1/services?sort=status&desc=true&offset=1&limit=1").await;
+    assert_eq!(page["total"], 3);
+    assert_eq!(names(&page), ["db01/dump"]);
+    let by_host = get("/api/v1/services?sort=host").await;
+    assert_eq!(names(&by_host), ["db01/backup", "db01/dump", "web01/http"]);
+
+    // Counts ignore the state filter, so totals boxes stay complete.
+    let warning = get("/api/v1/services?state=warning").await;
+    assert_eq!(names(&warning), ["db01/dump"]);
+    assert_eq!(warning["counts"]["critical"], 1);
+    assert_eq!(warning["counts"]["pending"], 1);
+    assert_eq!(warning["total"], 1);
+
+    assert_eq!(names(&get("/api/v1/services?q=SLOW").await), ["db01/dump"]);
+    assert_eq!(
+        names(&get("/api/v1/services?host=web01").await),
+        ["web01/http"]
+    );
+    assert_eq!(
+        names(&get("/api/v1/services?hostgroup=web").await),
+        ["web01/http"]
+    );
+    assert_eq!(
+        names(&get("/api/v1/services?host=nope").await),
+        Vec::<String>::new()
+    );
+    let unhandled = get("/api/v1/services?unhandled=true&sort=service").await;
+    assert_eq!(names(&unhandled), ["db01/dump", "web01/http"]);
+
+    // An acknowledged problem is handled.
+    let body = json!({ "services": ["web01/http"], "comment": "known" });
+    let (status, r) = call(&hub, "POST", "/api/v1/actions/ack", Some(body)).await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+    assert_eq!(
+        names(&get("/api/v1/services?unhandled=true").await),
+        ["db01/dump"]
+    );
+    let summary = get("/api/v1/summary").await;
+    assert_eq!(summary["services"]["unhandled"], 1);
+    assert_eq!(summary["services"]["total"], 3);
+    assert_eq!(summary["services"]["critical"], 1);
+    assert_eq!(summary["hosts"]["total"], 2);
+    assert_eq!(summary["hosts"]["up"], 1);
+    assert_eq!(summary["hosts"]["pending"], 1);
+
+    let (status, _) = call(&hub, "GET", "/api/v1/services?sort=bad", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let hosts = get("/api/v1/hosts?sort=status&desc=true").await;
+    assert_eq!(hosts["hosts"][0]["name"], "db01");
+    let up = get("/api/v1/hosts?state=up&q=WEB").await;
+    assert_eq!(up["total"], 1);
+    assert_eq!(up["counts"]["up"], 1);
+    assert_eq!(up["hosts"][0]["services"]["critical"], 1);
+    let (status, _) = call(&hub, "GET", "/api/v1/hosts?state=ok", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let groups = get("/api/v1/groups").await;
+    assert_eq!(groups["hostgroups"][0]["name"], "web");
+    assert_eq!(groups["hostgroups"][0]["hosts"]["up"], 1);
+    assert_eq!(groups["hostgroups"][0]["services"]["critical"], 1);
+
+    let names = get("/api/v1/names").await;
+    assert_eq!(names["hosts"], json!(["web01", "db01"]));
+    assert_eq!(names["services"], json!(["backup", "dump", "http"]));
 }
 
 #[tokio::test]
@@ -365,7 +534,7 @@ async fn actions_flags_and_downtimes() {
     assert_eq!(list[0]["active"], true);
     assert_eq!(list[0]["services"], 1);
     let (_, hosts) = call(&hub, "GET", "/api/v1/hosts", None).await;
-    let web = hosts
+    let web = hosts["hosts"]
         .as_array()
         .unwrap()
         .iter()

@@ -2,8 +2,10 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import { untrack } from 'svelte';
 	import { api, ApiError, HISTORY_DELAY, type StateEvent } from '#lib/api.ts';
 	import AlertTable from '#lib/AlertTable.svelte';
+	import Combobox from '#lib/Combobox.svelte';
 	import { live } from '#lib/live.svelte.ts';
 
 	const PAGE = 100;
@@ -91,23 +93,14 @@
 
 	// Refetch the first page when filters change, and after state changes
 	// once they are in the database.
-	let changes = $derived.by(() => {
-		let latest = '';
-		let flapping = 0;
-		for (const s of live.services) {
-			if (s.last_change && s.last_change > latest) latest = s.last_change;
-			if (s.flapping) flapping++;
-		}
-		return `${latest}|${flapping}`;
-	});
 	$effect(() => {
 		const _ = filter;
 		query().then((list) => loaded(list, false), error);
 	});
-	let seen = '';
+	let seen = -1;
 	$effect(() => {
-		const current = changes;
-		if (seen === '' || current === seen) {
+		const current = live.generation;
+		if (seen === -1 || current === seen) {
 			seen = current;
 			return;
 		}
@@ -121,7 +114,21 @@
 		if (last) query(last.ts).then((list) => loaded(list, true), error);
 	}
 
-	let hosts = $derived(live.hosts.map((h) => h.name).sort());
+	let hosts = $state<string[]>([]);
+	$effect(() => {
+		void live.reloads;
+		api.names().then((n) => (hosts = n.hosts));
+	});
+
+	// The host input filters once it names a host, or is cleared.
+	let hostInput = $state(untrack(() => filter.host));
+	$effect(() => {
+		hostInput = filter.host;
+	});
+	$effect(() => {
+		const v = hostInput.trim();
+		if (v !== filter.host && (v === '' || hosts.includes(v))) set('host', v);
+	});
 </script>
 
 <div class="content">
@@ -132,11 +139,7 @@
 	<div class="filters">
 		<label>
 			Host
-			<select value={filter.host} onchange={(e) => set('host', e.currentTarget.value)}>
-				<option value="">All</option>
-				{#each hosts as h (h)}<option value={h}>{h}</option>{/each}
-				{#if filter.host && !hosts.includes(filter.host)}<option value={filter.host}>{filter.host}</option>{/if}
-			</select>
+			<Combobox bind:value={hostInput} options={hosts} placeholder="All" label="Host" />
 		</label>
 		{#if filter.service}
 			<label>
