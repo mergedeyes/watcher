@@ -26,6 +26,8 @@ fn notification(service: &str) -> Notification {
         output: "DISK CRITICAL - free space: / 120 MB (2%)".into(),
         long_output: String::new(),
         time: SystemTime::now(),
+        since: None,
+        repeat: false,
         url: None,
         instance: None,
     }

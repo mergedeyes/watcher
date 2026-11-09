@@ -4,7 +4,7 @@ use lettre::message::header::ContentType;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use std::fmt::Write;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use watcher_config::{Smtp, SmtpTls};
 
 /// Sends notification emails over SMTP.
@@ -80,16 +80,17 @@ impl Mailer {
     }
 }
 
-/// `[Watcher] PROBLEM: web01/disk is CRITICAL`
+/// `[Watcher] PROBLEM: web01/disk is CRITICAL`; repeats say `is still`.
 pub(crate) fn subject(n: &Notification) -> String {
     let tag = match &n.instance {
         Some(name) => format!("[Watcher {name}]"),
         None => "[Watcher]".to_string(),
     };
+    let is = if n.repeat { "is still" } else { "is" };
     match n.kind {
         Kind::Test => format!("{tag} TEST"),
         kind => format!(
-            "{tag} {}: {} is {}",
+            "{tag} {}: {} {is} {}",
             kind.as_str(),
             n.service_id(),
             n.state_name()
@@ -103,6 +104,10 @@ pub(crate) fn body(n: &Notification) -> String {
     let state = n.state_name();
     let _ = match (n.kind, n.previous_state_name()) {
         (Kind::Test, _) => writeln!(b, "TEST"),
+        (Kind::Problem, _) if n.repeat => match n.since {
+            Some(since) => writeln!(b, "{id} is still {state} ({})", open_for(since, n.time)),
+            None => writeln!(b, "{id} is still {state}"),
+        },
         (Kind::FlappingStart, _) => writeln!(
             b,
             "{id} is flapping ({state}); notifications are held back until it settles"
@@ -130,7 +135,7 @@ pub(crate) fn body(n: &Notification) -> String {
     } else {
         format!("{} ({})", n.host, n.address)
     };
-    let state = if n.kind == Kind::Problem && n.attempts > 1 {
+    let state = if n.kind == Kind::Problem && n.attempts > 1 && !n.repeat {
         format!("{state}, confirmed after {} attempts", n.attempts)
     } else {
         state.to_string()
@@ -142,6 +147,9 @@ pub(crate) fn body(n: &Notification) -> String {
         (false, _) => writeln!(b, "Service:  {}", n.service),
     };
     let _ = writeln!(b, "State:    {state}");
+    if let Some(since) = n.since.filter(|_| n.repeat) {
+        let _ = writeln!(b, "Since:    {}", humantime::format_rfc3339_seconds(since));
+    }
     let _ = writeln!(b, "Time:     {}", humantime::format_rfc3339_seconds(n.time));
     if let Some(url) = &n.url {
         let _ = writeln!(b, "Details:  {url}");
@@ -149,10 +157,16 @@ pub(crate) fn body(n: &Notification) -> String {
     b
 }
 
+/// `for 2h 10m`: whole minutes from `since` to `now`.
+fn open_for(since: SystemTime, now: SystemTime) -> String {
+    let secs = now.duration_since(since).unwrap_or_default().as_secs();
+    let minutes = Duration::from_secs((secs / 60).max(1) * 60);
+    format!("for {}", humantime::format_duration(minutes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::SystemTime;
     use watcher_core::State;
 
     fn notification() -> Notification {
@@ -168,6 +182,8 @@ mod tests {
             output: "DISK CRITICAL - free space: / 120 MB (2%)".into(),
             long_output: "/boot 68 MB (69%)".into(),
             time: SystemTime::UNIX_EPOCH,
+            since: Some(SystemTime::UNIX_EPOCH),
+            repeat: false,
             url: Some("https://w.example/services/web01/disk".into()),
             instance: None,
         }
@@ -194,6 +210,34 @@ mod tests {
              Service:  disk\n\
              State:    CRITICAL, confirmed after 3 attempts\n\
              Time:     1970-01-01T00:00:00Z\n\
+             Details:  https://w.example/services/web01/disk\n"
+        );
+    }
+
+    #[test]
+    fn formats_repeats() {
+        let start = SystemTime::UNIX_EPOCH;
+        let n = Notification {
+            repeat: true,
+            previous_state: None,
+            long_output: String::new(),
+            since: Some(start),
+            time: start + Duration::from_secs(2 * 3600 + 10 * 60 + 42),
+            ..notification()
+        };
+        assert_eq!(
+            subject(&n),
+            "[Watcher] PROBLEM: web01/disk is still CRITICAL"
+        );
+        assert_eq!(
+            body(&n),
+            "web01/disk is still CRITICAL (for 2h 10m)\n\n\
+             DISK CRITICAL - free space: / 120 MB (2%)\n\n\
+             Host:     web01 (10.0.0.5)\n\
+             Service:  disk\n\
+             State:    CRITICAL\n\
+             Since:    1970-01-01T00:00:00Z\n\
+             Time:     1970-01-01T02:10:42Z\n\
              Details:  https://w.example/services/web01/disk\n"
         );
     }

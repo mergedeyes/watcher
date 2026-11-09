@@ -284,6 +284,80 @@ fn notify_rules_add_up() {
 }
 
 #[test]
+fn notify_repeat() {
+    let base = r#"
+[contact.ops]
+[contact.boss]
+
+[[host]]
+name = "a"
+  [host.service.disk]
+  command = "true"
+"#;
+    let config = ok(&[(
+        "a.toml",
+        &format!(
+            r#"{base}
+[[notify]]
+contacts = ["ops", "boss"]
+repeat = "4h"
+
+[[notify]]
+contacts = ["ops"]
+states = ["critical"]
+repeat = "30m"
+
+[[notify]]
+contacts = ["boss"]
+repeat = "0"
+"#
+        ),
+    )]);
+    assert_eq!(config.notify[2].repeat, None);
+    let s = config.service("a/disk").unwrap();
+    let every = |state| -> Vec<(String, u64)> {
+        config
+            .repeat_recipients(s, false, state)
+            .into_iter()
+            .map(|(c, d)| (c.name.clone(), d.as_secs() / 60))
+            .collect()
+    };
+    // The shortest interval of the rules that take the state.
+    assert_eq!(
+        every("critical"),
+        [("ops".into(), 30), ("boss".into(), 240)]
+    );
+    assert_eq!(
+        every("warning"),
+        [("ops".into(), 240), ("boss".into(), 240)]
+    );
+
+    let (_, diags) = compile(&[(
+        "a.toml",
+        &format!(
+            r#"{base}
+[[notify]]
+contacts = ["ops"]
+repeat = "30s"
+
+[[notify]]
+contacts = ["ops"]
+on = ["recovery"]
+repeat = "1h"
+
+[[notify]]
+contacts = ["ops"]
+repeat = "soon"
+"#
+        ),
+    )]);
+    let text = messages(&diags).join("\n");
+    assert!(text.contains("repeat: must be at least 1m"), "{text}");
+    assert!(text.contains("on doesn't include problem"), "{text}");
+    assert!(text.contains("invalid duration \"soon\""), "{text}");
+}
+
+#[test]
 fn precedence_host_over_group_over_service_over_check() {
     let config = ok(&[(
         "a.toml",

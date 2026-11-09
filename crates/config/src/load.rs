@@ -2109,6 +2109,14 @@ impl<'a> Compiler<'a> {
                     }
                 }
             }
+            // `0` turns repeating off.
+            let repeat = def.repeat.filter(|d| !d.is_zero());
+            if repeat.is_some_and(|d| d < Duration::from_secs(60)) {
+                error("repeat: must be at least 1m (or 0 for no repeats)".into());
+            }
+            if repeat.is_some() && !on.problem {
+                error("repeat: repeats problems, but on doesn't include problem".into());
+            }
             let hosts = def.hosts.as_ref().and_then(|v| {
                 HostSelector::parse(v)
                     .map_err(|e| error(format!("hosts: {e}")))
@@ -2130,6 +2138,7 @@ impl<'a> Compiler<'a> {
                 services,
                 states: def.states,
                 on,
+                repeat,
                 enabled: def.enabled,
                 origin: raw.origin.clone(),
             });
@@ -2495,6 +2504,8 @@ struct NotifyDef {
     #[serde(default)]
     states: Vec<String>,
     on: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "duration")]
+    repeat: Option<Duration>,
     #[serde(default = "yes")]
     enabled: bool,
 }
