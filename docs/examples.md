@@ -237,8 +237,9 @@ title = "Websites"
 ## Customers (MSP)
 
 A service provider with several customers. Each customer has a host group
-that matches their host names. The NOC gets every notification; each
-customer only gets critical problems of their own hosts.
+that matches their host names. The NOC gets every notification, and open
+problems again every hour until someone acknowledges them; each customer
+only gets critical problems of their own hosts.
 
 The host group `windows` has no `members`: hosts join it themselves with
 `groups = ["windows"]`.
@@ -319,6 +320,7 @@ email = "it@acme.example"
 [[notify]]
 name = "noc"
 contacts = ["noc"]
+repeat = "1h"
 
 [[notify]]
 name = "acme"

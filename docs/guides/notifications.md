@@ -60,6 +60,7 @@ The subject names the event, the host or service, and its state:
 
 ```
 [Watcher] PROBLEM: web01/http is CRITICAL
+[Watcher] PROBLEM: web01/http is still CRITICAL
 [Watcher] RECOVERY: web01/http is OK
 [Watcher] PROBLEM: web01 is DOWN
 [Watcher] DOWNTIMESTART: web01 is UP
@@ -81,9 +82,25 @@ Details:  https://watcher.example.com/services/web01/http
 
 The `Details` link is only there if `public_url` is set.
 
+A repeated notification (a rule with [`repeat`](../objects/notify.md#repeat))
+says how long the problem has been open, and since when:
+
+```
+web01/http is still CRITICAL (for 2h 10m)
+
+HTTP CRITICAL - Socket timeout
+
+Host:     web01 (10.0.0.5)
+Service:  http
+State:    CRITICAL
+Since:    2026-10-23T08:15:02Z
+Time:     2026-10-23T10:25:40Z
+Details:  https://watcher.example.com/services/web01/http
+```
+
 | Event | Sent when |
 |---|---|
-| PROBLEM | A host or service has a confirmed (HARD) problem, or the problem got worse (WARNING → CRITICAL). |
+| PROBLEM | A host or service has a confirmed (HARD) problem, or the problem got worse (WARNING → CRITICAL). With `repeat`: again while it is still open. |
 | RECOVERY | A confirmed problem is back to OK or UP. |
 | FLAPPINGSTART, FLAPPINGSTOP | A service starts or stops flapping. |
 | DOWNTIMESTART, DOWNTIMEEND | A downtime starts or ends. |
@@ -106,6 +123,8 @@ JSON body:
   "output": "HTTP CRITICAL - Socket timeout",
   "long_output": "",
   "time": "2026-10-23T08:15:02Z",
+  "since": "2026-10-23T08:15:02Z",
+  "repeat": false,
   "url": "https://watcher.example.com/services/web01/http",
   "instance": "msp-hub"
 }
@@ -122,6 +141,8 @@ JSON body:
 | `attempts` | The attempt that confirmed the state. |
 | `output`, `long_output` | The check output. For downtimes: which downtime it is. |
 | `time` | Time of the result, RFC 3339. |
+| `since` | For problems: when the host or service changed to this state, RFC 3339. `null` for other kinds. |
+| `repeat` | `true`: a problem sent again because it is still open (see [`repeat`](../objects/notify.md#repeat)). |
 | `url` | Link to the service page. `null` without `public_url`. |
 | `instance` | `instance_name` from `watcher.toml`. |
 
@@ -154,5 +175,17 @@ watcher config explain web01/http
 watcher config explain contact oncall
 ```
 
-*Not yet:* repeated notifications for ongoing problems, escalations, more
-channels.
+## Reminders for open problems
+
+A rule with `repeat` sends a problem again while it is still open:
+
+```toml
+[[notify]]
+contacts = ["oncall"]
+repeat = "1h"
+```
+
+Acknowledge the problem to stop the reminders. Details:
+[repeat](../objects/notify.md#repeat).
+
+*Not yet:* escalations, more channels.

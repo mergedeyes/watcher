@@ -35,8 +35,10 @@ no notification for db01/replication: acknowledged
 ## Acknowledging a problem
 
 Acknowledging tells the team that someone is working on a problem. It
-stops further problem notifications until the service is OK again. Add a
-comment so others know what is going on.
+stops further problem notifications until the service is OK again,
+including the reminders of rules with
+[`repeat`](../objects/notify.md#repeat). Add a comment so others know what
+is going on.
 
 ```sh
 curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \

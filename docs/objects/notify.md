@@ -2,7 +2,8 @@
 
 A notify rule decides which [contacts](contact.md) get which
 notifications. Each rule says who (`contacts`, `contact_groups`), about
-what (`hosts`, `services`), and for which events (`states`, `on`).
+what (`hosts`, `services`), for which events (`states`, `on`), and whether
+open problems are sent again (`repeat`).
 
 ```toml
 [[notify]]
@@ -33,6 +34,7 @@ one is an entry in a list.
 | `services` | all services | Which services the rule is about. See [Service selector](#service-selector). A rule with `services` gets no host notifications. |
 | `states` | all problem states | Only problems in these states, and recoveries from them: `warning`, `critical`, `unknown`, `down`. |
 | `on` | all events | Only these events: `problem`, `recovery`, `flapping`, `downtime`. |
+| `repeat` | off | Send an open problem again this often, for example `"1h"`. At least `1m`; `"0"` turns it off. See [repeat](#repeat). |
 | `enabled` | `true` | `false`: the rule is ignored. |
 
 ### states
@@ -58,6 +60,47 @@ Flapping and downtime notifications don't depend on `states`.
 | `recovery` | RECOVERY: back to OK or UP |
 | `flapping` | FLAPPINGSTART, FLAPPINGSTOP: a service starts or stops flapping |
 | `downtime` | DOWNTIMESTART, DOWNTIMEEND: a downtime starts or ends |
+
+### repeat
+
+With `repeat`, the rule's contacts get a problem again and again while it
+is still open, until it is OK (or UP) again:
+
+```toml
+[[notify]]
+contacts = ["oncall"]
+repeat = "1h"
+```
+
+`oncall` gets the PROBLEM when it happens, then "still CRITICAL" every
+hour. The subject says `is still`:
+
+```
+[Watcher] PROBLEM: web01/http is still CRITICAL
+```
+
+How the time is counted:
+
+- The hour counts from the last notification about the problem that the
+  contact got. A change, for example WARNING → CRITICAL, is a new PROBLEM
+  and starts the hour again.
+- A contact that never got the problem, for example because it started
+  during a downtime, gets it once `repeat` has passed since the problem
+  started. So problems hidden by a downtime are sent when the downtime is
+  over, if they have been open long enough.
+- If several rules with `repeat` give a contact the same problem, the
+  shortest time applies.
+- After a restart, the time starts again for problems that are already
+  open. A restart never sends a wave of repeated notifications.
+
+No repeats are sent while the problem is acknowledged, in a downtime,
+muted, or flapping, while its host is DOWN, or while notifications are
+turned off. The time keeps running: when the acknowledgement is removed
+and the hour is over, the next repeat goes out within a minute.
+
+`repeat` works together with `states` and `on`: a rule with
+`states = ["critical"]` repeats only CRITICAL problems, and `on` must
+include `problem`.
 
 ## Examples
 
@@ -94,6 +137,31 @@ states = ["critical", "down"]
 ```
 
 Include `down` if the rule should also get hosts that are DOWN.
+
+### Remind until someone acknowledges
+
+```toml
+[[notify]]
+contacts = ["oncall"]
+repeat = "30m"
+```
+
+### Remind the manager only about critical problems
+
+```toml
+[[notify]]
+contacts = ["oncall"]
+
+[[notify]]
+name = "manager-reminder"
+contacts = ["manager"]
+states = ["critical", "down"]
+on = ["problem"]
+repeat = "4h"
+```
+
+`oncall` gets every notification once. `manager` gets critical problems
+and hosts that are DOWN, and again every 4 hours while they last.
 
 ### No recoveries
 
@@ -315,6 +383,8 @@ A notification is sent when:
 - a confirmed problem goes back to OK or UP (RECOVERY)
 - a service starts or stops flapping (FLAPPINGSTART, FLAPPINGSTOP)
 - a downtime starts or ends (DOWNTIMESTART, DOWNTIMEEND)
+- a problem is still open after `repeat`, if the rule has one (PROBLEM,
+  "is still"; see [repeat](#repeat))
 
 No notification is sent for:
 
@@ -332,7 +402,8 @@ No notification is sent for:
 
 The host check notifies as the host: "web01 is DOWN".
 
-*Not yet:* repeated notifications for ongoing problems, escalations.
+*Not yet:* escalations (notifying other contacts when a problem stays
+open).
 
 ## Checking a rule
 
@@ -353,6 +424,9 @@ watcher config explain web01/http
    └─ notify rule at conf.d/notify.toml:1: matched: host: group prod  notify.toml:1
       └─ contact oncall                                             contacts.toml:1
 ```
+
+A rule with `repeat` adds it to the line, for example
+`matched: host: group prod; repeats every 1h`.
 
 Unknown hosts, groups, checks or nodes in a selector give a warning, since
 they are usually typos.
