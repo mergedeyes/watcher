@@ -1371,6 +1371,10 @@ impl<'a> Compiler<'a> {
         };
 
         let mut layered = Layered::default();
+        // The same without host and host group vars: what built-in checks
+        // read, so a host var `port` meant for something else doesn't
+        // change them.
+        let mut own = Layered::default();
         let mut layers = Vec::new();
         let add_paths = |layered: &mut Layered, from: &Layered| {
             for (path, src) in &from.sources {
@@ -1398,10 +1402,12 @@ impl<'a> Compiler<'a> {
             };
             let check_layer = Layered::default().with(table, &src);
             add_paths(&mut layered, &check_layer);
+            add_paths(&mut own, &check_layer);
             layers.push(src);
         }
         if let (Some(obj), Some(name), Some(o)) = (&object, &plan.object, &object_origin) {
             add_paths(&mut layered, obj);
+            add_paths(&mut own, obj);
             layers.push(Source {
                 layer: Layer::Service,
                 name: name.clone(),
@@ -1446,12 +1452,14 @@ impl<'a> Compiler<'a> {
             let mut t = Table::new();
             t.insert("vars".into(), Value::Table(vars.clone()));
             layered.add(&t, &src);
+            own.add(&t, &src);
             layers.push(src);
             (var.clone(), key.clone())
         });
         for (table, src) in &overrides {
             let o = Layered::default().with(table, src);
             add_paths(&mut layered, &o);
+            add_paths(&mut own, &o);
             layers.push(src.clone());
         }
 
@@ -1481,6 +1489,8 @@ impl<'a> Compiler<'a> {
             };
             value.ok_or_else(|| format!("${m}$ is not set"))
         };
+        // A built-in check's vars, which replace the service's below.
+        let mut builtin_vars = None;
         let command = match (&def.command, settings.passive) {
             _ if def.builtin.is_some() => {
                 let name = def.builtin.as_deref().unwrap_or_default();
@@ -1491,7 +1501,42 @@ impl<'a> Compiler<'a> {
                     );
                     return None;
                 }
-                match Builtin::new(name, &host.address, &vars) {
+                // Its settings: vars of the check, the service and the
+                // host's service, not host vars. Macros in them expand as
+                // in commands.
+                let mut vars: BTreeMap<String, String> = own
+                    .table
+                    .get("vars")
+                    .and_then(Value::as_table)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(k, v)| {
+                        let text = match v {
+                            Value::String(s) => s.clone(),
+                            Value::Integer(_) | Value::Float(_) | Value::Boolean(_) => {
+                                v.to_string()
+                            }
+                            _ => return None,
+                        };
+                        Some((k.clone(), text))
+                    })
+                    .collect();
+                for key in builtin::vars_of(name) {
+                    let Some(text) = vars.get(*key) else { continue };
+                    match macros::expand_text(text, lookup) {
+                        Ok(v) => {
+                            vars.insert((*key).to_string(), v);
+                        }
+                        Err(msg) => {
+                            self.sink
+                                .error(Some(&origin), format!("{what}: vars.{key}: {msg}"));
+                            return None;
+                        }
+                    }
+                }
+                let built = Builtin::new(name, &host.address, &vars);
+                builtin_vars = Some(vars);
+                match built {
                     Ok(b) => Some(CommandLine::Builtin(b)),
                     Err(msg) => {
                         self.sink.error(Some(&origin), format!("{what}: {msg}"));
@@ -1604,6 +1649,20 @@ impl<'a> Compiler<'a> {
             }
         }
 
+        // Built-in checks show the vars they use, with where they're set.
+        let (vars, sources) = match builtin_vars {
+            Some(own_vars) => {
+                let mut sources = layered.sources;
+                sources.retain(|path, _| !path.starts_with("vars."));
+                sources.extend(
+                    own.sources
+                        .into_iter()
+                        .filter(|(path, _)| path.starts_with("vars.")),
+                );
+                (own_vars, sources)
+            }
+            None => (vars, layered.sources),
+        };
         Some(Service {
             id: format!("{}/{name}", host.name),
             name: name.to_string(),
@@ -1624,7 +1683,7 @@ impl<'a> Compiler<'a> {
             vars,
             groups,
             origin,
-            sources: layered.sources,
+            sources,
             layers,
         })
     }

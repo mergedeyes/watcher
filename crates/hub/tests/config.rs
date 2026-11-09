@@ -505,11 +505,10 @@ async fn files_open_in_an_editor() {
     assert_eq!(taken["others"][0]["via"], "vim");
     let req = Request::builder()
         .method("DELETE")
-        .uri("/api/v1/config/objects/check/http")
+        .uri("/api/v1/config/objects/host/web01")
         .header("x-watcher-lease", taken["lease"].as_str().unwrap())
         .body(Body::empty())
         .unwrap();
     let status = s.hub.clone().router().oneshot(req).await.unwrap().status();
-    // Past the lock: refused only because the service still uses the check.
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(status, StatusCode::OK);
 }
