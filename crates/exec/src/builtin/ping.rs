@@ -1,23 +1,11 @@
-//! Checks that run in-process instead of as a plugin: `ping`.
-//!
-//! They print plugin output (Nagios format with perfdata) and an exit code,
-//! so their results go through the same evaluation as any plugin's.
+//! `ping`: ICMP echo, like `check_ping`.
 
-use std::collections::BTreeMap;
+use super::{Vars, resolve};
 use std::fmt;
-use std::net::IpAddr;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use surge_ping::{Client, Config, ICMP, PingIdentifier, PingSequence};
 use tokio::task::JoinSet;
-
-/// The built-in checks, by name.
-pub const NAMES: [&str; 1] = ["ping"];
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Builtin {
-    Ping(Ping),
-}
 
 /// ICMP echo, like `check_ping -H <address> -p <packets> -w <warn> -c <crit>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,53 +53,31 @@ impl fmt::Display for Limits {
     }
 }
 
-impl Builtin {
-    /// Builds built-in check `name` for a host at `address`. Its vars:
-    /// `packets`, `warn`, `crit`.
-    pub fn new(name: &str, address: &str, vars: &BTreeMap<String, String>) -> Result<Self, String> {
-        match name {
-            "ping" => {
-                let var = |key: &str, default: &str| {
-                    vars.get(key).map_or(default, String::as_str).to_string()
-                };
-                let packets = var("packets", "5");
-                let packets = match packets.trim().parse::<u16>() {
-                    Ok(n @ 1..=100) => n,
-                    _ => return Err(format!("packets {packets:?}: expected 1 to 100")),
-                };
-                Ok(Builtin::Ping(Ping {
-                    address: address.to_string(),
-                    packets,
-                    warn: Limits::parse(&var("warn", "3000,80%"))
-                        .map_err(|e| format!("warn {e}"))?,
-                    crit: Limits::parse(&var("crit", "5000,100%"))
-                        .map_err(|e| format!("crit {e}"))?,
-                }))
-            }
-            _ => Err(format!(
-                "unknown builtin {name:?} (known: {})",
-                NAMES.join(", ")
-            )),
-        }
-    }
-
-    /// Runs the check: the exit code and plugin output.
-    pub async fn run(&self) -> (i32, String) {
-        match self {
-            Builtin::Ping(p) => p.run().await,
-        }
+impl Ping {
+    /// Vars: `packets`, `warn`, `crit`.
+    pub(super) fn new(address: &str, vars: &Vars<'_>) -> Result<Self, String> {
+        let var = |key: &str, default: &str| vars.get(key).unwrap_or(default).to_string();
+        let packets = var("packets", "5");
+        let packets = match packets.parse::<u16>() {
+            Ok(n @ 1..=100) => n,
+            _ => return Err(format!("packets {packets:?}: expected 1 to 100")),
+        };
+        Ok(Ping {
+            address: address.to_string(),
+            packets,
+            warn: Limits::parse(&var("warn", "3000,80%")).map_err(|e| format!("warn {e}"))?,
+            crit: Limits::parse(&var("crit", "5000,100%")).map_err(|e| format!("crit {e}"))?,
+        })
     }
 }
 
-impl fmt::Display for Builtin {
+impl fmt::Display for Ping {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Builtin::Ping(p) => write!(
-                f,
-                "ping -H {} -p {} -w {} -c {} (built-in)",
-                p.address, p.packets, p.warn, p.crit
-            ),
-        }
+        write!(
+            f,
+            "ping -H {} -p {} -w {} -c {}",
+            self.address, self.packets, self.warn, self.crit
+        )
     }
 }
 
@@ -125,7 +91,7 @@ const PAYLOAD: [u8; 56] = [0; 56];
 static IDENT: AtomicU16 = AtomicU16::new(0);
 
 impl Ping {
-    async fn run(&self) -> (i32, String) {
+    pub(super) async fn run(&self) -> (i32, String) {
         let ip = match resolve(&self.address).await {
             Ok(ip) => ip,
             Err(e) => return (2, format!("PING CRITICAL - {}: {e}", self.address)),
@@ -206,46 +172,26 @@ fn ms(d: Duration) -> String {
     text.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
-async fn resolve(address: &str) -> Result<IpAddr, String> {
-    if let Ok(ip) = address.parse() {
-        return Ok(ip);
-    }
-    let mut addrs = tokio::net::lookup_host((address, 0))
-        .await
-        .map_err(|e| format!("cannot resolve: {e}"))?;
-    addrs
-        .next()
-        .map(|a| a.ip())
-        .ok_or_else(|| "cannot resolve: no address".into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::builtin::{Builtin, vars};
 
-    fn vars(list: &[(&str, &str)]) -> BTreeMap<String, String> {
-        list.iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
+    fn ping(address: &str, list: &[(&str, &str)]) -> Result<Ping, String> {
+        Ping::new(address, &Vars(&vars(list)))
     }
 
     #[test]
     fn ping_settings_from_vars() {
-        let Builtin::Ping(p) = Builtin::new("ping", "h", &vars(&[])).unwrap();
+        let p = ping("h", &[]).unwrap();
         assert_eq!(
             (p.packets, p.warn.to_string(), p.crit.to_string()),
             (5, "3000,80%".into(), "5000,100%".into())
         );
-        let Builtin::Ping(p) = Builtin::new(
-            "ping",
-            "h",
-            &vars(&[("packets", "3"), ("warn", "100.5, 20%")]),
-        )
-        .unwrap();
+        let p = ping("h", &[("packets", "3"), ("warn", "100.5, 20%")]).unwrap();
         assert_eq!((p.packets, p.warn.rta), (3, Duration::from_micros(100_500)));
-        assert!(Builtin::new("ping", "h", &vars(&[("crit", "500")])).is_err());
-        assert!(Builtin::new("ping", "h", &vars(&[("packets", "0")])).is_err());
-        assert!(Builtin::new("dns", "h", &vars(&[])).is_err());
+        assert!(ping("h", &[("crit", "500")]).is_err());
+        assert!(ping("h", &[("packets", "0")]).is_err());
     }
 
     #[test]
@@ -260,8 +206,7 @@ mod tests {
 
     #[tokio::test]
     async fn ping_localhost() {
-        let Builtin::Ping(p) =
-            Builtin::new("ping", "127.0.0.1", &vars(&[("packets", "2")])).unwrap();
+        let p = ping("127.0.0.1", &[("packets", "2")]).unwrap();
         let (code, out) = p.run().await;
         // Without ICMP sockets (ping_group_range, CAP_NET_RAW): UNKNOWN.
         assert!(
@@ -284,7 +229,7 @@ mod tests {
     async fn unresolvable_is_critical() {
         let (code, out) = Builtin::new("ping", "nonexistent.invalid", &vars(&[]))
             .unwrap()
-            .run()
+            .run(Duration::from_secs(10))
             .await;
         assert_eq!(code, 2, "{out}");
         assert!(

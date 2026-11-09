@@ -29,6 +29,8 @@ clap = { version = "4", features = ["derive", "env"] }
 getrandom = "0.4"
 http-body-util = "0.1"
 humantime = "2"
+# DNS lookups for the built-in dns check (UDP/TCP, no DNSSEC).
+hickory-resolver = { version = "0.26", default-features = false, features = ["tokio", "system-config"] }
 # Local time and time zones, for downtime schedules.
 jiff = "0.2"
 # TLS uses rustls with the ring provider throughout (as sqlx does); the
@@ -44,6 +46,8 @@ ring = "0.17"
 rpassword = "7"
 rust-embed = { version = "8", features = ["mime-guess"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+# The system's trust store, for the built-in tls check (as reqwest uses).
+rustls-platform-verifier = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
@@ -57,12 +61,15 @@ surge-ping = "0.9"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "macros", "json"] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "sync", "signal", "net"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 tokio-stream = { version = "0.1", features = ["sync", "time"] }
 toml = "1"
 toml_edit = "0.25"
 tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Certificate dates and names for the built-in tls check.
+x509-parser = "0.18"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

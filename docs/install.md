@@ -6,7 +6,7 @@
 |---|---|
 | Build | Rust 1.94 or later, Node.js LTS |
 | Database | PostgreSQL, ideally with TimescaleDB. Optional, but needed for history, graphs and logins. |
-| Plugins | Optional, for example `apt install monitoring-plugins` |
+| Plugins | Optional. Ping, TCP, HTTP, DNS and TLS checks are built in; for more, for example `apt install monitoring-plugins` |
 | OS | Linux |
 
 ## Build

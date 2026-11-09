@@ -115,6 +115,11 @@ Hosts and host groups can only set `vars` for their services. To change
 another setting such as `interval` or `thresholds` on one host, use a host
 service.
 
+[Built-in checks](../objects/check.md#built-in-checks) don't take host
+and host group vars (3 and 4), so a host var like `port` can't change them
+by accident. Use a macro such as `$host.vars.ssh_port$` in the service's
+vars to pass one on.
+
 **Tables** like `vars` and `thresholds` are merged key by key: a host that
 sets `vars.url` keeps the check's `vars.port`.
 

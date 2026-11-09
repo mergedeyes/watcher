@@ -24,13 +24,13 @@ A check that no service uses gives a warning.
 |---|---|---|
 | `title` | | Name shown in the web UI. Can contain [macros](#macros). |
 | `command` | | The command to run. Required, unless `builtin` or `passive` is set. Can contain [macros](#macros). |
-| `builtin` | | Use a check built into Watcher instead of a command. Only value so far: `ping`. See [Built-in checks](#built-in-checks). |
+| `builtin` | | Use a check built into Watcher instead of a command: `ping`, `tcp`, `http`, `dns` or `tls`. See [Built-in checks](#built-in-checks). |
 | `shell` | `false` | `true` runs the command with `/bin/sh -c`, needed for pipes, `$(...)` or `&&`. See [Shell](#shell). |
 | `run_on` | `local` | Where the command runs. `local`: on the Watcher machine. `host`: on the monitored host over SSH, see [Checks over SSH](../guides/ssh.md). |
 | `copy` | `false` | With `run_on = "host"`: upload the script to the host before running it. See [Copying scripts](../guides/ssh.md#copying-scripts). |
 | `passive` | `false` | `true`: Watcher runs nothing and waits for results sent over the API. See [Passive checks](#passive-checks). |
 | `format` | `auto` | How the output is read: `auto`, `nagios`, `key_value` or `json`. See [Output formats](#output-formats). |
-| `vars` | | Values for the `$name$` macros in the command. Text, numbers, or tables. |
+| `vars` | | Values for the `$name$` macros in the command, or the settings of a [built-in check](#built-in-checks). Text, numbers, or tables. |
 | `thresholds.<metric>` | | Limits for a metric: `{ warn = "...", crit = "..." }`. See [Thresholds](#thresholds). |
 | `interval` | `1m` | Time between two checks. |
 | `retry_interval` | `interval`, at most `1m` | Time between checks while a problem is not yet confirmed (SOFT). |
@@ -202,6 +202,9 @@ vars.url = "/health"          # this host runs: check_http -H shop -u /health
 Which value wins is explained in
 [Which value wins](../guides/configuration.md#which-value-wins).
 
+Built-in checks read their settings from vars too, but not from host and
+host group vars. See [Built-in checks](#built-in-checks).
+
 ## Exit codes
 
 | Exit code | State |
@@ -363,20 +366,63 @@ flap_detection = false
 
 ## Built-in checks
 
-Built-in checks run inside Watcher and need no plugin. A check named `ping`
-always exists, even without any configuration. If you write your own
-`[check.ping]`, it replaces the built-in one.
+Built-in checks run inside Watcher and need no plugin. The checks `ping`,
+`tcp`, `http`, `dns` and `tls` always exist, even without any
+configuration. If you write your own check with one of these names (for
+example `[check.http]` with a `check_http` command), it replaces the
+built-in one.
+
+You set them up with vars, on the service or on the host's service:
 
 ```toml
 [service.ping]                 # uses the built-in check "ping"
 vars.crit = "500,60%"
+
+[service.ssh]
+check = "tcp"
+vars = { port = "22", expect = "SSH-" }
+
+[service.web]
+check = "http"
+vars = { url = "/health", content = "ok", crit = "2s" }
+
+[service.cert]
+check = "tls"
+vars = { name = "www.example.com" }
+
+[service.dns]                  # on a DNS server: does it answer for our domain?
+vars = { name = "example.com", expect = "10.0.0.5" }
 ```
 
-| Builtin | Var | Default | Description |
-|---|---|---|---|
-| `ping` | `packets` | `5` | Number of ICMP echo requests, sent 200 ms apart. |
-| | `warn` | `3000,80%` | WARNING at this average round trip time (ms) or packet loss. |
-| | `crit` | `5000,100%` | CRITICAL at this average round trip time (ms) or packet loss. |
+Built-in checks read the vars of the check, the service and the host
+service (`[host.service.<name>]`). Host and host group vars don't apply, so
+a host var like `port` that you set for something else can't change them.
+To use a host var, write it as a macro: `port = "$host.vars.ssh_port$"`.
+Macros work in all of these vars, for example `name = "$host.name$"`.
+
+Every built-in check also takes `address`: it then connects there instead
+of the host's address (for `dns`, that is the server it asks). This is
+useful for hosts that stand for several sites, see
+[Many websites](../examples.md#many-websites).
+
+`warn` and `crit` of `tcp`, `http` and `dns` are response times: seconds
+(`0.5`) or a duration (`500ms`, `2s`). Without them, the response time
+doesn't change the state. A check also ends shortly before its `timeout`
+and reports CRITICAL ("no answer within ...") instead of being stopped.
+
+The metrics of built-in checks work like a plugin's: you can set
+[thresholds](#thresholds) on them (`thresholds.time = { crit = "> 2s" }`)
+and see them in graphs.
+
+### ping
+
+ICMP echo, like `check_ping`.
+
+| Var | Default | Description |
+|---|---|---|
+| `packets` | `5` | Number of ICMP echo requests, sent 200 ms apart. |
+| `warn` | `3000,80%` | WARNING at this average round trip time (ms) or packet loss. |
+| `crit` | `5000,100%` | CRITICAL at this average round trip time (ms) or packet loss. |
 
 The result looks like the one of `check_ping`, with the metrics `rta`
 (round trip average, ms) and `pl` (packet loss, %). DNS names are resolved
@@ -387,12 +433,108 @@ distributions allow it by default; otherwise allow it with
 `sysctl net.ipv4.ping_group_range="0 2147483647"` or give Watcher
 `CAP_NET_RAW`.
 
+### tcp
+
+Connects to a port of the host, like `check_tcp`. Optionally sends
+something and checks the answer.
+
+| Var | Default | Description |
+|---|---|---|
+| `port` | | The port. Required. |
+| `send` | | Text to send after connecting. `\r`, `\n`, `\t` and `\\` are written as such. |
+| `expect` | | Text the answer must contain, for example `SSH-` or `220`. Without it, nothing is read. |
+| `warn` | | WARNING at this response time. |
+| `crit` | | CRITICAL at this response time. |
+
+A refused connection or a missing `expect` text gives CRITICAL. Watcher
+reads the answer until `expect` shows up, the server closes the
+connection, or nothing more comes for a second. Metric: `time` (s).
+
+```
+TCP OK - 10.0.0.5:22 answered in 1.3 ms: SSH-2.0-OpenSSH_9.6
+```
+
+### http
+
+Requests a URL, like `check_http`.
+
+| Var | Default | Description |
+|---|---|---|
+| `url` | `/` | A full URL (`https://www.example.com/login`), or a path on the host's address (`/health`). |
+| `method` | `GET` | `GET`, `HEAD`, `POST`, ... (sent without a body). |
+| `status` | | Status codes that are OK, for example `200` or `200,301-302`. Others give CRITICAL. Without it: 2xx and 3xx are OK, 4xx WARNING, 5xx CRITICAL. |
+| `content` | | Text the body must contain. Only the first MiB of the body is searched. |
+| `follow` | `false` | Follow redirects (up to 10). Without it, a redirect is the answer. |
+| `verify` | `true` | Check the server's certificate. `false` accepts any certificate. |
+| `warn` | | WARNING at this response time. |
+| `crit` | | CRITICAL at this response time. |
+
+Certificates are checked against the system's trust store, so internal
+CAs that the system trusts work. Proxy settings from the environment
+(`HTTP_PROXY`) are not used. Metrics: `time` (s) and `size` (bytes).
+
+```
+HTTP OK - HTTP/2.0 200 OK, 577 bytes in 87 ms
+```
+
+### dns
+
+Looks up a name at a DNS server, like `check_dns`. By default the
+server is the host itself.
+
+| Var | Default | Description |
+|---|---|---|
+| `name` | | The name to look up. Required. |
+| `type` | `A` | `A`, `AAAA`, `CNAME`, `MX`, `NS`, `PTR`, `SOA` or `TXT`. |
+| `server` | the host's address | The server to ask. `system` uses the servers in `/etc/resolv.conf`. |
+| `port` | `53` | The server's port. |
+| `expect` | | Values that must all be in the answer, comma-separated: `10.0.0.5, 10.0.0.6`. For MX answers, the mail server's name is enough. |
+| `warn` | | WARNING at this response time. |
+| `crit` | | CRITICAL at this response time. |
+
+A name that doesn't exist, an empty answer, or a missing `expect` value
+gives CRITICAL. The answer is never cached. Metric: `time` (s).
+
+```
+DNS OK - example.com A 10.0.0.5 in 2.1 ms (10.0.0.53)
+```
+
+### tls
+
+Connects with TLS and checks the server's certificate: whether it is
+trusted, whether it is valid for the name, and how many days are left
+until it expires. Like `check_ssl_cert`.
+
+| Var | Default | Description |
+|---|---|---|
+| `port` | `443` | The port. |
+| `name` | the host's address | The name the certificate must be valid for. It is also sent to the server (SNI), so servers with several certificates show the right one. |
+| `warn` | `30` | WARNING at this many days before expiry. |
+| `crit` | `14` | CRITICAL at this many days before expiry. |
+| `verify` | `true` | An untrusted certificate, or one not valid for `name`, gives CRITICAL. `false` only checks the dates. |
+
+Most certificates are issued for names, not addresses. If the host's
+address is an IP address, set `name`. An expired certificate gives
+CRITICAL. Certificates are checked against the system's trust store.
+Metric: `days`. Only TLS from the start is supported; STARTTLS (SMTP,
+IMAP) isn't yet.
+
+```
+TLS OK - www.example.com: valid until 2027-02-02 (85 days), issued by R11
+```
+
+### Under another name
+
 A built-in check under another name, with other defaults:
 
 ```toml
 [check.ping_fast]
 builtin = "ping"
 vars = { packets = "2", warn = "100,20%", crit = "500,60%" }
+
+[check.https]
+builtin = "http"
+vars = { url = "https://$host.name$/", status = "200" }
 ```
 
 Built-in checks always run on the Watcher machine, never over SSH.

@@ -543,7 +543,7 @@ services = ["ping"]
         "a.toml",
         r#"
 [check.x]
-builtin = "dns"
+builtin = "smtp"
 
 [check.y]
 builtin = "ping"
@@ -557,7 +557,7 @@ host_check = true
     assert_eq!(
         messages(&diags),
         [
-            "a.toml:2: error: check \"x\": unknown builtin \"dns\" (known: ping)",
+            "a.toml:2: error: check \"x\": unknown builtin \"smtp\" (known: ping, tcp, http, dns, tls)",
             "a.toml:5: error: check \"y\": builtin \"ping\" runs without command or passive",
             "a.toml:9: error: host \"h\": host_check: a service name, or false for none",
         ]
@@ -1003,4 +1003,77 @@ services = ["script", "copied", "pinger", "pushed"]
     has("service \"copied\": copy needs run_on = \"host\"");
     has("service \"pinger\": built-in checks run locally");
     has("service \"pushed\": passive services have nothing to run on the host");
+}
+
+#[test]
+fn builtin_checks_take_their_settings_from_vars() {
+    let config = ok(&[(
+        "a.toml",
+        r#"
+[service.http]
+vars = { url = "https://$host.name$/health", status = "200" }
+
+[service.cert]
+check = "tls"
+vars = { name = "$host.name$", warn = "$days$", days = "21" }
+
+[service.ssh]
+check = "tcp"
+vars = { expect = "SSH-", port = 22 }
+
+[service.ssh_alt]
+check = "tcp"
+vars.port = "$host.vars.port$"
+
+[[host]]
+name = "www.example.com"
+address = "10.0.0.5"
+vars.port = "2222"
+services = ["http", "cert", "ssh", "ssh_alt"]
+"#,
+    )]);
+    let command = |id: &str| {
+        let s = config.services.iter().find(|s| s.id == id).unwrap();
+        s.command.as_ref().unwrap().to_string()
+    };
+    assert_eq!(
+        command("www.example.com/http"),
+        "http GET https://www.example.com/health status=200 (built-in)"
+    );
+    assert_eq!(
+        command("www.example.com/cert"),
+        "tls 10.0.0.5:443 name=www.example.com warn=21d crit=14d (built-in)"
+    );
+    // Host vars don't reach built-in checks, except through macros.
+    assert_eq!(
+        command("www.example.com/ssh"),
+        "tcp 10.0.0.5:22 expect=\"SSH-\" (built-in)"
+    );
+    assert_eq!(
+        command("www.example.com/ssh_alt"),
+        "tcp 10.0.0.5:2222 (built-in)"
+    );
+
+    let (_, diags) = compile(&[(
+        "a.toml",
+        r#"
+[service.dns]
+vars.name = "$nope$"
+
+[service.tcp]
+
+[[host]]
+name = "h"
+services = ["dns", "tcp"]
+"#,
+    )]);
+    assert_eq!(
+        messages(&diags),
+        [
+            "a.toml:2: error: host \"h\": service \"dns\": vars.name: $nope$ is not set",
+            "a.toml:2: warning: service \"dns\" is on no host",
+            "a.toml:5: error: host \"h\": service \"tcp\": vars.port is not set: the port",
+            "a.toml:5: warning: service \"tcp\" is on no host",
+        ]
+    );
 }

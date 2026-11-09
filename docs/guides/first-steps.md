@@ -40,6 +40,12 @@ You can try a command before you configure it:
 watcher run-check -- check_http -H example.com -u /
 ```
 
+**No plugins installed?** Leave out `checks.toml`. Watcher has a
+[built-in `http` check](../objects/check.md#http), and the service in the
+next step uses it automatically. It takes the path from `vars.url` and
+time limits from `vars.warn` and `vars.crit` (for example `"500ms"` and
+`"2s"`), set on the service.
+
 ## 3. Make it a service
 
 A [service](../objects/service.md) is a check that can be put on hosts.
