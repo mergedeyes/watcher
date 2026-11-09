@@ -1,9 +1,12 @@
 <script lang="ts">
 	import { beforeNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import { untrack } from 'svelte';
 	import { api, ApiError, type Change, type Changes, type ConfigFile, type Conflict, type Problem } from '#lib/api.ts';
 	import ApplyDialog from '#lib/ApplyDialog.svelte';
 	import { config, fileHref } from '#lib/config.svelte.ts';
+	import { FileLease } from '#lib/lease.svelte.ts';
+	import LockNotice from '#lib/LockNotice.svelte';
 	import TomlEditor from '#lib/TomlEditor.svelte';
 
 	let path = $derived(page.url.searchParams.get('path') ?? '');
@@ -23,6 +26,9 @@
 	let error = $state<string | null>(null);
 	let saved = $state(false);
 	let editor = $state<TomlEditor>();
+	/** The edit lease on this file; editing needs it. */
+	let lease = $state<FileLease | null>(null);
+	let editable = $derived(config.writable && lease?.held === true);
 
 	let dirty = $derived(loaded && text !== (file?.text ?? ''));
 	let mine = $derived(problems.filter((p) => p.path === path));
@@ -50,6 +56,20 @@
 		loaded = false;
 		config.load();
 		load();
+	});
+
+	// Someone else may have changed the file while it was locked: read it again once free.
+	$effect(() => {
+		if (!config.writable) return;
+		const p = path;
+		const l = untrack(
+			() =>
+				new FileLease(p, () => {
+					if (!dirty) load();
+				})
+		);
+		lease = l;
+		return () => l.stop();
 	});
 
 	// Check while typing.
@@ -133,9 +153,9 @@
 		<h1><a href="/config/files">Files</a> / <span class="mono">{path}</span>{dirty ? ' *' : ''}</h1>
 		{#if config.writable}
 			<div class="buttons">
-				{#if file}<button type="button" class="btn danger" onclick={remove}>Delete File</button>{/if}
+				{#if file}<button type="button" class="btn danger" onclick={remove} disabled={!editable}>Delete File</button>{/if}
 				<button type="button" class="btn" onclick={load} disabled={!dirty}>Revert</button>
-				<button type="button" class="btn primary" onclick={save} disabled={!dirty && file !== null}>Save</button>
+				<button type="button" class="btn primary" onclick={save} disabled={!editable || (!dirty && file !== null)}>Save</button>
 			</div>
 		{/if}
 	</div>
@@ -144,6 +164,7 @@
 	{#if config.overview && !config.overview.writable}
 		<p class="notice">Read-only: <code>config_mode = "{config.overview.mode}"</code></p>
 	{/if}
+	{#if lease}<LockNotice {lease} />{/if}
 	{#if conflict}
 		<div class="notice conflict" role="alert">
 			<strong>{conflict.current ? 'Changed on disk.' : 'Deleted on disk.'}</strong>
@@ -159,7 +180,7 @@
 			<TomlEditor
 				bind:this={editor}
 				bind:value={text}
-				readonly={!config.writable}
+				readonly={!editable}
 				problems={mine}
 				original={conflict ? (conflict.current?.text ?? '') : null}
 				{line}

@@ -29,7 +29,7 @@ curl -H "Authorization: Bearer $T" http://127.0.0.1:8080/api/v1/services?problem
 ```
 
 Errors come as `{"error": "..."}` with status 400, 401, 403, 404, 409, 422,
-or 503 (the endpoint needs a database).
+423, or 503 (the endpoint needs a database).
 
 Requests with a session cookie that change something need a matching
 `Origin` header.
@@ -273,7 +273,7 @@ Admins only.
 
 | Method and path | Description |
 |---|---|
-| `GET config` | Config mode, files with their hashes, problems on disk. |
+| `GET config` | Config mode, files with their hashes, who is editing them, problems on disk. |
 | `GET config/files/{path}` | One file. |
 | `GET config/objects` | All objects as written, with file and line. `kind` filters by kind. |
 | `GET config/objects/{kind}/{name}` | One object. |
@@ -287,6 +287,9 @@ Admins only.
 | `POST config/edit-many` | The same for several objects, for example clones. |
 | `POST config/preview` | Validate file changes and show their effect. |
 | `POST config/apply` | Write file changes and reload. |
+| `GET config/locks` | Who is editing which file. |
+| `PUT config/locks/{path}` | Take or renew the edit lease on a file. |
+| `DELETE config/locks/{path}?lease=…` | Give the lease up. |
 
 Kinds: `check`, `service`, `host`, `hostgroup`, `servicegroup`, `contact`,
 `contactgroup`, `downtimegroup`, `notify`, `sink`.
@@ -343,3 +346,40 @@ curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
 | 409 | The file changed since `base`. The body contains the current file. |
 | 422 | The configuration would have errors. The body lists them with file and line; nothing was written. |
 | 403 | `config_mode = "files"`: the configuration is read-only. |
+| 423 | Someone else is editing the file. See [Edit locks](#edit-locks). |
+
+### Edit locks
+
+While a file is open in the web UI, the page holds an **edit lease** on it.
+Writes to that file from anyone else (`apply` and `PUT`/`DELETE` on
+objects) get status 423 with who is editing it:
+
+```json
+{"error": "anna is editing hosts.toml in the web UI",
+ "holder": {"path": "hosts.toml", "by": "anna", "via": "web", "since": "2026-11-09T09:42:00Z", "pid": 4711, "host": "mon01"}}
+```
+
+`via` is `web`, `cli` (`watcher config edit`), `vim`, `nano`, `emacs` or
+`kate`. Files open in one of these editors on the server are locked the
+same way.
+
+A script can hold a lease too, so that nobody changes a file while it
+works on it:
+
+```sh
+# Take the lease (renew it within 2 minutes with {"lease": "…"}, or it lapses)
+curl -X PUT -H "Authorization: Bearer $T" -H 'content-type: application/json' \
+  -d '{}' .../api/v1/config/locks/hosts.toml
+# → {"lease": "6f26…", "path": "hosts.toml", "others": []}
+
+# Write with the lease
+curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
+  -H 'X-Watcher-Lease: 6f26…' -d '{"changes": [...]}' .../api/v1/config/apply
+
+# Give it up
+curl -X DELETE -H "Authorization: Bearer $T" '.../api/v1/config/locks/hosts.toml?lease=6f26…'
+```
+
+`{"force": true}` takes the file over from whoever has it. A file open in
+an editor can only be written with a lease taken this way; `others` then
+lists the editors that still have it open.

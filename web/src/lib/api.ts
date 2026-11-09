@@ -422,11 +422,23 @@ export interface Problem {
 	message: string;
 }
 
+/** Someone editing an object file: in the web UI, with `watcher config edit`, or in an editor. */
+export interface Lock {
+	path: string;
+	/** User name; empty if the editor's lock file doesn't say. */
+	by: string;
+	via: 'web' | 'cli' | 'vim' | 'nano' | 'emacs' | 'kate';
+	since: string | null;
+	pid: number | null;
+	host: string | null;
+}
+
 export interface ConfigOverview {
 	mode: 'hybrid' | 'files' | 'ui';
 	writable: boolean;
 	dir: string;
 	files: { path: string; hash: string; size: number }[];
+	locks: Lock[];
 	/** Problems of the files as they are on disk. */
 	diagnostics: Problem[];
 }
@@ -530,6 +542,13 @@ function send<T>(method: string, path: string, body?: unknown): Promise<T> {
 
 const seg = encodeURIComponent;
 
+/** Edit leases this page holds; sent with config writes (see lease.svelte.ts). */
+export const heldLeases = new Set<string>();
+
+function filePath(path: string) {
+	return path.split('/').map(seg).join('/');
+}
+
 /** Query parameters, leaving out unset, empty and false values. */
 function params(q: object): URLSearchParams {
 	const out = new URLSearchParams();
@@ -616,7 +635,23 @@ export const api = {
 		send<{ total: number; matches: { name: string; why: string }[] }>('POST', '/config/match', { kind, selectors }),
 	preview: (changes: Change[]) => send<Preview>('POST', '/config/preview', { changes }),
 	apply: (changes: Change[]) =>
-		send<{ changes: Changes; diagnostics: Problem[] }>('POST', '/config/apply', { changes })
+		get<{ changes: Changes; diagnostics: Problem[] }>('/config/apply', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json', 'x-watcher-lease': [...heldLeases].join(',') },
+			body: JSON.stringify({ changes })
+		}),
+	/** Takes (no `lease`) or renews the edit lease on a file; 423 with `holder` if someone else edits it. */
+	lock: (path: string, lease: string | null, force = false) =>
+		send<{ lease: string; path: string; others: Lock[] }>('PUT', `/config/locks/${filePath(path)}`, {
+			lease: lease ?? undefined,
+			force
+		}),
+	/** Gives the lease up; also while the page unloads. */
+	unlock: (path: string, lease: string) =>
+		fetch(`/api/v1/config/locks/${filePath(path)}?lease=${seg(lease)}`, { method: 'DELETE', keepalive: true }).then(
+			() => undefined,
+			() => undefined
+		)
 };
 
 export function serviceHref(host: string, service: string) {

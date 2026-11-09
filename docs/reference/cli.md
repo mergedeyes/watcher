@@ -146,6 +146,34 @@ watcher config explain notify dba-critical
 
 See [Finding out where a value comes from](../guides/configuration.md#finding-out-where-a-value-comes-from).
 
+## config edit
+
+Opens an object file in your editor, locked against changes in the web UI
+while the editor is open. Afterwards it checks the configuration.
+
+```
+watcher config edit <FILE> [-c PATH] [--force]
+```
+
+| Option | Description |
+|---|---|
+| `FILE` | The file, relative to the config directory (`hosts.toml`, `ui/hosts.toml`) or as a path to it (`conf.d/hosts.toml`). A file that doesn't exist yet is created when you save. |
+| `-c PATH` | `watcher.toml`, or a directory of object files. Default: `./watcher.toml`, then `/etc/watcher/watcher.toml`. |
+| `--force` | Open it even if someone else is editing it. |
+
+The editor is `$VISUAL`, else `$EDITOR`, else `vi`. While it is open, a
+lock file `.hosts.toml.watcher-lock` sits next to the file.
+
+```
+$ watcher config edit hosts.toml
+anna is editing hosts.toml in the web UI since 10:42
+error: not opened; --force edits it anyway
+```
+
+The exit code is 1 if the file is locked, the editor fails, or the
+configuration has errors afterwards. See
+[Editing at the same time](../guides/configuration.md#editing-at-the-same-time).
+
 ## notify test
 
 Sends a test message to a contact, on all its channels.
