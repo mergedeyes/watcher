@@ -78,7 +78,7 @@ set it, and every alert to the rule that sent it.
 
 - **Checks:** Nagios plugins, your own scripts (Nagios output,
   `key=value` or JSON), results pushed over the API, thresholds with
-  units, built-in ping.
+  units, built-in ping, TCP, HTTP, DNS and TLS certificate checks.
 - **Remote checks over SSH** with encrypted secrets, pinned host keys and
   automatic script copies.
 - **Alerting:** SOFT and HARD states with retries, host UP/DOWN, flap
@@ -104,9 +104,8 @@ set it, and every alert to the rule that sent it.
 Watcher is in early development. A single instance monitors your
 network today; see [what works today](docs/introduction.md#what-works-today).
 
-Coming next: remote nodes reporting to a central hub, more built-in
-checks (TCP, HTTP, DNS, TLS), repairing data in graphs, and native
-checks for IBM i, AIX, HMC and MQ.
+Coming next: remote nodes reporting to a central hub, repairing data in
+graphs, and native checks for IBM i, AIX, HMC and MQ.
 
 ## Getting started
 

@@ -146,7 +146,7 @@ A host service takes the same fields as a [service](service.md):
 | `enabled` | `true` | `false`: this host doesn't get the service. |
 | `title` | the service's or check's `title` | Name shown in the web UI. Can contain [macros](check.md#macros). |
 | `command` | the service's or check's | The command to run. Can contain [macros](check.md#macros). |
-| `builtin` | the service's or check's | Use a check built into Watcher instead of a command: `ping`. See [Built-in checks](check.md#built-in-checks). |
+| `builtin` | the service's or check's | Use a check built into Watcher instead of a command: `ping`, `tcp`, `http`, `dns` or `tls`. See [Built-in checks](check.md#built-in-checks). |
 | `shell` | `false` | `true` runs the command with `/bin/sh -c`, needed for pipes, `$(...)` or `&&`. |
 | `run_on` | `local` | Where the command runs. `local`: on the Watcher machine. `host`: on the monitored host over SSH, see [Checks over SSH](../guides/ssh.md). |
 | `copy` | `false` | With `run_on = "host"`: upload the script to the host before running it. |

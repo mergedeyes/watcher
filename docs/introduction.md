@@ -38,7 +38,7 @@ Single server:
 
 - **Checks:** Nagios plugins; scripts with Nagios, `key=value` or JSON
   output; passive results over the API; thresholds with units; built-in
-  ping.
+  ping, TCP, HTTP, DNS and TLS certificate checks.
 - **Checks over SSH:** run on the hosts without an agent; keys or passwords
   stored encrypted; pinned host keys; scripts copied to the hosts.
 - **State handling:** SOFT/HARD, retries, host UP/DOWN, flap detection,
@@ -61,7 +61,6 @@ Single server:
 | Feature | Phase |
 |---|---|
 | Nodes and hub, UNREACHABLE state | 2 |
-| More built-in checks (TCP, HTTP, DNS, TLS) | 2 / 5 |
 | Data repair in graphs, rollups, retention | 3 |
 | IBM i, AIX, HMC, MQ checks | 3b |
 | Dependencies, escalations, repeated notifications | 4 |
