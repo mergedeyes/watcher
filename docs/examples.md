@@ -2,7 +2,8 @@
 
 Complete `conf.d/` setups for common cases. Each one passes
 `watcher config check`. The plugins come from the monitoring-plugins
-package.
+package; [Many websites](#many-websites) needs none, it uses
+[built-in checks](objects/check.md#built-in-checks).
 
 More in the repository: [examples/local](../examples/local),
 [examples/demo](../examples/demo) (needs no plugins), and
@@ -199,26 +200,22 @@ service and one certificate service per site: `websites/http_shop`,
 `websites/http_blog`, `websites/http_api`, `websites/cert_shop`, and so on.
 The host has no address, so it has no host check and is always UP.
 
-```toml
-# conf.d/checks.toml
-[check.http]
-command = "check_http -H $vhost$ -u $url$ -S"
-vars.url = "/"
-thresholds.time = { warn = "> 1s", crit = "> 5s" }
-
-[check.cert]
-command = "check_http -H $vhost$ -S -C 21,7"
-interval = "1h"
-```
+Both services use built-in checks, so no plugins are needed. `http` gets
+the full URL from the site's vars; `tls` connects to the site with
+`address`, since the host has no address of its own.
 
 ```toml
 # conf.d/services.toml
 [service.http]
 for_each = "sites"
 groups = ["websites"]
+vars = { url = "https://$vhost$$path$", path = "/", warn = "1s", crit = "5s" }
 
 [service.cert]
+check = "tls"
 for_each = "sites"
+interval = "1h"
+vars = { address = "$vhost$", warn = "21", crit = "7" }
 ```
 
 ```toml
@@ -227,8 +224,8 @@ for_each = "sites"
 name = "websites"
 services = ["http", "cert"]
 vars.sites.shop = { vhost = "shop.example.com" }
-vars.sites.blog = { vhost = "blog.example.com", url = "/feed" }
-vars.sites.api = { vhost = "api.example.com", url = "/v1/health" }
+vars.sites.blog = { vhost = "blog.example.com", path = "/feed" }
+vars.sites.api = { vhost = "api.example.com", path = "/v1/health" }
 ```
 
 ```toml

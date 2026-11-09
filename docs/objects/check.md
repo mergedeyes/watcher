@@ -30,7 +30,7 @@ A check that no service uses gives a warning.
 | `copy` | `false` | With `run_on = "host"`: upload the script to the host before running it. See [Copying scripts](../guides/ssh.md#copying-scripts). |
 | `passive` | `false` | `true`: Watcher runs nothing and waits for results sent over the API. See [Passive checks](#passive-checks). |
 | `format` | `auto` | How the output is read: `auto`, `nagios`, `key_value` or `json`. See [Output formats](#output-formats). |
-| `vars` | | Values for the `$name$` macros in the command. Text, numbers, or tables. |
+| `vars` | | Values for the `$name$` macros in the command, or the settings of a [built-in check](#built-in-checks). Text, numbers, or tables. |
 | `thresholds.<metric>` | | Limits for a metric: `{ warn = "...", crit = "..." }`. See [Thresholds](#thresholds). |
 | `interval` | `1m` | Time between two checks. |
 | `retry_interval` | `interval`, at most `1m` | Time between checks while a problem is not yet confirmed (SOFT). |
@@ -201,6 +201,9 @@ vars.url = "/health"          # this host runs: check_http -H shop -u /health
 
 Which value wins is explained in
 [Which value wins](../guides/configuration.md#which-value-wins).
+
+Built-in checks read their settings from vars too, but not from host and
+host group vars. See [Built-in checks](#built-in-checks).
 
 ## Exit codes
 
@@ -397,10 +400,19 @@ a host var like `port` that you set for something else can't change them.
 To use a host var, write it as a macro: `port = "$host.vars.ssh_port$"`.
 Macros work in all of these vars, for example `name = "$host.name$"`.
 
+Every built-in check also takes `address`: it then connects there instead
+of the host's address (for `dns`, that is the server it asks). This is
+useful for hosts that stand for several sites, see
+[Many websites](../examples.md#many-websites).
+
 `warn` and `crit` of `tcp`, `http` and `dns` are response times: seconds
 (`0.5`) or a duration (`500ms`, `2s`). Without them, the response time
 doesn't change the state. A check also ends shortly before its `timeout`
 and reports CRITICAL ("no answer within ...") instead of being stopped.
+
+The metrics of built-in checks work like a plugin's: you can set
+[thresholds](#thresholds) on them (`thresholds.time = { crit = "> 2s" }`)
+and see them in graphs.
 
 ### ping
 

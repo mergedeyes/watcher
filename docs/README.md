@@ -18,7 +18,7 @@ for common cases.
 
 | Object | What it is |
 |---|---|
-| [check](objects/check.md) | What to run and how to judge the result: commands, macros, output formats, thresholds, passive checks |
+| [check](objects/check.md) | What to run and how to judge the result: commands, built-in checks, macros, output formats, thresholds, passive checks |
 | [service](objects/service.md) | A check with its settings, put on hosts; `for_each` |
 | [host](objects/host.md) | A machine to monitor; host services, host state, SSH login |
 | [hostgroup](objects/hostgroup.md) | Hosts that get the same services and settings |

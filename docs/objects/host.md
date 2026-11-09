@@ -27,7 +27,7 @@ entry in a list. Each host needs a unique `name`.
 | `groups` | | Host groups the host belongs to. See [hostgroup](hostgroup.md). |
 | `services` | | Services the host gets. See [service](service.md). |
 | `servicegroups` | | Service groups the host gets; it gets all their services. See [servicegroup](servicegroup.md). |
-| `vars` | | Values for the `$name$` macros of the host's services, and the tables for `for_each`. Win over host group vars. |
+| `vars` | | Values for the `$name$` macros of the host's services, and the tables for `for_each`. Win over host group vars. [Built-in checks](check.md#built-in-checks) don't read them, except through macros like `$host.vars.port$`. |
 | `host_check` | from the host groups; otherwise `ping` if `address` is set | The service that decides whether the host is UP or DOWN. `false`: no host check, the host is always UP. See [Host state](#host-state). |
 | `graph` | the host check | The service whose graph is shown on the host page. |
 | `ssh` | from the host groups | Login for [checks over SSH](../guides/ssh.md): `{ user, secret, port }`. See [ssh](#ssh). |
@@ -152,7 +152,7 @@ A host service takes the same fields as a [service](service.md):
 | `copy` | `false` | With `run_on = "host"`: upload the script to the host before running it. |
 | `passive` | `false` | `true`: Watcher runs nothing and waits for results sent over the API. See [Passive checks](check.md#passive-checks). |
 | `format` | `auto` | How the output is read: `auto`, `nagios`, `key_value` or `json`. See [Output formats](check.md#output-formats). |
-| `vars` | | Values for the `$name$` macros in the command. Win over all other vars. |
+| `vars` | | Values for the `$name$` macros in the command, or the settings of a [built-in check](check.md#built-in-checks). Win over all other vars. |
 | `thresholds.<metric>` | | Limits for a metric: `{ warn = "...", crit = "..." }`. See [Thresholds](check.md#thresholds). |
 | `interval` | `1m` | Time between two checks. |
 | `retry_interval` | `interval`, at most `1m` | Time between checks while a problem is not yet confirmed (SOFT). |

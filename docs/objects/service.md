@@ -37,7 +37,7 @@ A service that is on no host gives a warning.
 | `copy` | `false` | With `run_on = "host"`: upload the script to the host before running it. |
 | `passive` | `false` | `true`: Watcher runs nothing and waits for results sent over the API. See [Passive checks](check.md#passive-checks). |
 | `format` | `auto` | How the output is read: `auto`, `nagios`, `key_value` or `json`. See [Output formats](check.md#output-formats). |
-| `vars` | | Values for the `$name$` macros in the command. Merged with the check's vars. |
+| `vars` | | Values for the `$name$` macros in the command, or the settings of a [built-in check](check.md#built-in-checks). Merged with the check's vars. |
 | `thresholds.<metric>` | | Limits for a metric: `{ warn = "...", crit = "..." }`. See [Thresholds](check.md#thresholds). |
 | `interval` | `1m` | Time between two checks. |
 | `retry_interval` | `interval`, at most `1m` | Time between checks while a problem is not yet confirmed (SOFT). |

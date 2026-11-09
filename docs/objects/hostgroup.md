@@ -26,7 +26,7 @@ services `http` and `https_cert`.
 | `host_check` | | The service that decides whether its hosts are UP or DOWN. `false`: no host check. See [Host state](host.md#host-state). |
 | `graph` | | The service whose graph is shown on the host pages. |
 | `ssh` | | Login for [checks over SSH](../guides/ssh.md): `{ user, secret, port }`. See [ssh](#ssh). |
-| `vars` | | Default vars for its hosts, used by `$name$` macros and `for_each`. |
+| `vars` | | Default vars for its hosts, used by `$name$` macros and `for_each`. [Built-in checks](check.md#built-in-checks) don't read them, except through macros like `$host.vars.port$`. |
 
 A host's own `host_check`, `graph`, `ssh` and `vars` win over its host
 groups'. If two host groups of the same host set one of them to different
