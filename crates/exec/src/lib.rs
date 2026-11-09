@@ -78,7 +78,7 @@ impl CommandLine {
         match self {
             CommandLine::Argv(argv) => argv.first().map_or("", String::as_str),
             CommandLine::Shell(_) => "/bin/sh",
-            CommandLine::Builtin(Builtin::Ping(_)) => "ping (built-in)",
+            CommandLine::Builtin(b) => b.program(),
         }
     }
 
@@ -146,10 +146,11 @@ pub async fn run(command: &CommandLine, opts: &ExecOptions) -> Execution {
     };
 
     if let CommandLine::Builtin(builtin) = command {
-        let (termination, stdout) = match tokio::time::timeout(opts.timeout, builtin.run()).await {
-            Ok((code, out)) => (Termination::Exited(code), out),
-            Err(_) => (Termination::TimedOut(opts.timeout), String::new()),
-        };
+        let (termination, stdout) =
+            match tokio::time::timeout(opts.timeout, builtin.run(opts.timeout)).await {
+                Ok((code, out)) => (Termination::Exited(code), out),
+                Err(_) => (Termination::TimedOut(opts.timeout), String::new()),
+            };
         return Execution {
             output: RawOutput {
                 termination,
