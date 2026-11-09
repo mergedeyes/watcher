@@ -1,5 +1,6 @@
 <!-- Status totals per host or service group, like Nagios' group summary. -->
 <script lang="ts">
+	import { count } from './format.ts';
 	import { api, type Counts, type HostCounts } from './api.ts';
 	import { live } from './live.svelte.ts';
 	import { auth } from './auth.svelte.ts';
@@ -33,7 +34,7 @@
 	<p class="notice">Loading…</p>
 {:else}
 	<section class="panel">
-		<div class="panel-title">{of === 'host' ? 'Host' : 'Service'} Group Summary <span class="muted">{groups.length}</span></div>
+		<div class="panel-title">{of === 'host' ? 'Host' : 'Service'} Group Summary <span class="muted">{count(groups.length)}</span></div>
 		{#if groups.length === 0}
 			<div class="empty">No {of} groups.</div>
 		{:else}
@@ -58,17 +59,17 @@
 							</td>
 							{#if of === 'host'}
 								<td class="nowrap">
-									{#if hosts.down}<span class="pair"><Status state="down" /> {hosts.down}</span>{/if}
-									<span class="pair"><Status state="up" /> {hosts.up}</span>
-									{#if hosts.pending}<span class="pair"><Status state={null} /> {hosts.pending}</span>{/if}
+									{#if hosts.down}<span class="pair"><Status state="down" /> {count(hosts.down)}</span>{/if}
+									<span class="pair"><Status state="up" /> {count(hosts.up)}</span>
+									{#if hosts.pending}<span class="pair"><Status state={null} /> {count(hosts.pending)}</span>{/if}
 								</td>
 							{/if}
 							<td class="nowrap">
 								{#each STATES as st (st)}
 									{@const n = services[st]}
-									{#if n > 0 || st === 'ok'}<span class="pair"><Status state={st} /> {n}</span>{/if}
+									{#if n > 0 || st === 'ok'}<span class="pair"><Status state={st} /> {count(n)}</span>{/if}
 								{/each}
-								{#if services.pending}<span class="pair"><Status state={null} /> {services.pending}</span>{/if}
+								{#if services.pending}<span class="pair"><Status state={null} /> {count(services.pending)}</span>{/if}
 							</td>
 							{#if auth.admin}
 								<td class="nowrap"><a href={editHref(of === 'host' ? 'hostgroups' : 'servicegroups', g.name)}>Edit Config</a></td>

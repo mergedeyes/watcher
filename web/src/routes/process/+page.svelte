@@ -2,7 +2,7 @@
 	import { api, type ProcessInfo } from '#lib/api.ts';
 	import { actions } from '#lib/actions.svelte.ts';
 	import { auth } from '#lib/auth.svelte.ts';
-	import { datetime, since } from '#lib/format.ts';
+	import { count, datetime, since } from '#lib/format.ts';
 	import { live } from '#lib/live.svelte.ts';
 
 	let info = $state<ProcessInfo | null>(null);
@@ -89,10 +89,10 @@
 				<div class="panel-title">Performance</div>
 				<table class="grid kv">
 					<tbody>
-						<tr><th>Scheduled Checks</th><td>{info.scheduler.jobs - info.scheduler.passive} active, {info.scheduler.passive} passive</td></tr>
-						<tr><th>Running Now</th><td>{info.scheduler.running}</td></tr>
-						<tr><th>Checks Off</th><td>{info.scheduler.paused}</td></tr>
-						<tr><th>Results</th><td>{info.results.last_1m} / {info.results.last_5m} / {info.results.last_15m} <span class="muted">last 1 / 5 / 15 min</span></td></tr>
+						<tr><th>Scheduled Checks</th><td>{count(info.scheduler.jobs - info.scheduler.passive)} active, {count(info.scheduler.passive)} passive</td></tr>
+						<tr><th>Running Now</th><td>{count(info.scheduler.running)}</td></tr>
+						<tr><th>Checks Off</th><td>{count(info.scheduler.paused)}</td></tr>
+						<tr><th>Results</th><td>{count(info.results.last_1m)} / {count(info.results.last_5m)} / {count(info.results.last_15m)} <span class="muted">last 1 / 5 / 15 min</span></td></tr>
 					</tbody>
 				</table>
 			</section>
@@ -101,10 +101,10 @@
 				<div class="panel-title">Runtime</div>
 				<table class="grid kv">
 					<tbody>
-						<tr><th>Acknowledged</th><td><a href="/downtimes">{info.acknowledged}</a></td></tr>
-						<tr><th>Muted</th><td><a href="/downtimes">{info.muted}</a></td></tr>
-						<tr><th>Checks Off</th><td><a href="/downtimes">{info.checks_off}</a> <span class="muted">hosts and services</span></td></tr>
-						<tr><th>In Downtime</th><td><a href="/downtimes">{info.in_downtime}</a> <span class="muted">services</span></td></tr>
+						<tr><th>Acknowledged</th><td><a href="/downtimes">{count(info.acknowledged)}</a></td></tr>
+						<tr><th>Muted</th><td><a href="/downtimes">{count(info.muted)}</a></td></tr>
+						<tr><th>Checks Off</th><td><a href="/downtimes">{count(info.checks_off)}</a> <span class="muted">hosts and services</span></td></tr>
+						<tr><th>In Downtime</th><td><a href="/downtimes">{count(info.in_downtime)}</a> <span class="muted">services</span></td></tr>
 						<tr><th>Scheduling Queue</th><td><a href="/scheduler">show</a></td></tr>
 					</tbody>
 				</table>

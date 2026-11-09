@@ -1,5 +1,6 @@
 <!-- Page navigation under a server-paged table: rows shown, first/previous/next/last, page size. -->
 <script lang="ts">
+	import { count } from './format.ts';
 	import { PAGE_SIZES, type Paging } from './list.svelte.ts';
 
 	let { paging, total }: { paging: Paging; total: number } = $props();
@@ -18,11 +19,11 @@
 
 {#if total > PAGE_SIZES[0] || offset > 0}
 	<div class="pager">
-		<span class="muted">{Math.min(offset + 1, total)}–{Math.min(offset + limit, total)} of {total}</span>
+		<span class="muted">{count(Math.min(offset + 1, total))}–{count(Math.min(offset + limit, total))} of {count(total)}</span>
 		<span class="nav">
 			<button type="button" class="btn" disabled={offset === 0} onclick={() => paging.go(0)} aria-label="First page">«</button>
 			<button type="button" class="btn" disabled={offset === 0} onclick={() => paging.go(offset - limit)} aria-label="Previous page">‹</button>
-			<span class="page">Page {current} of {pages}</span>
+			<span class="page">Page {count(current)} of {count(pages)}</span>
 			<button type="button" class="btn" disabled={current >= pages} onclick={() => paging.go(offset + limit)} aria-label="Next page">›</button>
 			<button type="button" class="btn" disabled={current >= pages} onclick={() => paging.go(last)} aria-label="Last page">»</button>
 		</span>

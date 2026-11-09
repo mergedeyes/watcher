@@ -6,7 +6,7 @@
 	import { editHref } from '#lib/config.svelte.ts';
 	import ConfigTree from '#lib/ConfigTree.svelte';
 	import Flags from '#lib/Flags.svelte';
-	import { datetime, since } from '#lib/format.ts';
+	import { count, datetime, since } from '#lib/format.ts';
 	import { Debounced, Paging, ServerList, checkId, patchHost } from '#lib/list.svelte.ts';
 	import { live } from '#lib/live.svelte.ts';
 	import Pager from '#lib/Pager.svelte';
@@ -90,7 +90,7 @@
 		<p class="notice">Loading…</p>
 	{:else}
 		<section class="panel">
-			<div class="panel-title">Host Status Details <span class="muted">{list.data.total}</span></div>
+			<div class="panel-title">Host Status Details <span class="muted">{count(list.data.total)}</span></div>
 			{#if list.data.total === 0}
 				<div class="empty">{all === 0 && !group && !search.settled ? 'No hosts configured.' : 'No matches.'}</div>
 			{:else}

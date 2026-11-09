@@ -1,5 +1,6 @@
 <!-- What a selector or member list matches in the running config: "12 hosts: web01 (name web*), …". -->
 <script lang="ts">
+	import { count } from './format.ts';
 	import { api, hostHref, serviceHref } from './api.ts';
 
 	interface Props {
@@ -61,7 +62,7 @@
 			{i ? ', ' : ' '}<a href={href(m.name)} title={m.why}>{m.name}</a>{#if m.why !== 'listed' && !m.why.startsWith('all')}<span class="why"> ({m.why})</span>{/if}
 		{/each}
 		{#if result.matches.length > SHOWN}
-			<button type="button" class="more" onclick={() => (all = !all)}>{all ? 'less' : `+${result.total - SHOWN} more`}</button>
+			<button type="button" class="more" onclick={() => (all = !all)}>{all ? 'less' : `+${count(result.total - SHOWN)} more`}</button>
 		{/if}
 	{/if}
 </div>

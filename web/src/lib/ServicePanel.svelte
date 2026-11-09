@@ -4,6 +4,7 @@
 	fetched again after state changes.
 -->
 <script lang="ts">
+	import { count } from './format.ts';
 	import { untrack, type Snippet } from 'svelte';
 	import { api, type ServiceList, type ServiceQuery } from './api.ts';
 	import { Paging, ServerList, patchRow, sid } from './list.svelte.ts';
@@ -53,7 +54,7 @@
 <section class="panel">
 	<div class="panel-title">
 		{title}
-		{#if list.data}<span class="muted">{list.data.total}</span>{/if}
+		{#if list.data}<span class="muted">{count(list.data.total)}</span>{/if}
 		{#if actions}<span class="right">{@render actions()}</span>{/if}
 	</div>
 	{#if list.error && !list.data}

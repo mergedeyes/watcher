@@ -10,7 +10,7 @@
 	import ConfigTree from '#lib/ConfigTree.svelte';
 	import EditMenu from '#lib/EditMenu.svelte';
 	import Graphs from '#lib/Graphs.svelte';
-	import { datetime, since } from '#lib/format.ts';
+	import { count, datetime, since } from '#lib/format.ts';
 	import { patchHost, patchRow } from '#lib/list.svelte.ts';
 	import { live } from '#lib/live.svelte.ts';
 	import ServiceTable from '#lib/ServiceTable.svelte';
@@ -187,7 +187,7 @@
 		<Commands target={{ host }} {flags} />
 
 		<section class="panel">
-			<div class="panel-title">Services <span class="muted">{services.length}</span></div>
+			<div class="panel-title">Services <span class="muted">{count(services.length)}</span></div>
 			<ServiceTable rows={services} showHost={false} sort="service" />
 		</section>
 
