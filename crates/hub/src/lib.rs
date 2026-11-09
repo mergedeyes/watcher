@@ -7,6 +7,7 @@ mod api;
 pub mod auth;
 pub mod config;
 mod list;
+mod locks;
 mod ops;
 pub mod ssh;
 mod stream;
@@ -74,6 +75,8 @@ pub struct Hub {
     started: SystemTime,
     /// Set when the object files may be read and edited over the API.
     config_files: OnceLock<ConfigFiles>,
+    /// Who has an object file open for editing; set with `config_files`.
+    leases: OnceLock<locks::Leases>,
     /// Held while a config change is written and reloaded.
     config_lock: tokio::sync::Mutex<()>,
     /// `instance_name` from watcher.toml.
@@ -131,6 +134,7 @@ impl Hub {
             limiter: auth::Limiter::default(),
             started: SystemTime::now(),
             config_files: OnceLock::new(),
+            leases: OnceLock::new(),
             config_lock: tokio::sync::Mutex::new(()),
             instance: OnceLock::new(),
             results: Mutex::new(ops::Counter::default()),
@@ -196,7 +200,15 @@ impl Hub {
 
     /// Serves the object files under `/api/v1/config` (for admins).
     pub fn enable_config_editing(&self, files: ConfigFiles) {
+        let _ = self.leases.set(locks::Leases::new(files.dir.clone()));
         let _ = self.config_files.set(files);
+    }
+
+    /// Drops edit leases that were not renewed; call every half minute.
+    pub fn sweep_leases(&self) {
+        if let Some(leases) = self.leases.get() {
+            leases.sweep();
+        }
     }
 
     /// The running configuration.

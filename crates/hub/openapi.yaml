@@ -715,6 +715,7 @@ paths:
                         path: { type: string }
                         hash: { type: string }
                         size: { type: integer }
+                  locks: { type: array, items: { $ref: "#/components/schemas/Lock" } }
                   diagnostics: { type: array, items: { $ref: "#/components/schemas/Problem" } }
         "403": { $ref: "#/components/responses/Error" }
 
@@ -771,15 +772,19 @@ paths:
           application/json:
             schema: { type: object }
             example: { address: 10.0.0.7, groups: [linux], services: [http] }
+        - { $ref: "#/components/parameters/lease" }
       responses:
         "200": { description: Applied; changes and warnings }
         "422": { description: Invalid; diagnostics }
+        "423": { $ref: "#/components/responses/Locked" }
     delete:
       summary: Delete an object and apply it (admins)
+      parameters: [{ $ref: "#/components/parameters/lease" }]
       responses:
         "200": { description: Applied; changes and warnings }
         "404": { $ref: "#/components/responses/Error" }
         "422": { description: Invalid (something still uses it); diagnostics }
+        "423": { $ref: "#/components/responses/Locked" }
 
   /config/match:
     post:
@@ -912,6 +917,7 @@ paths:
   /config/apply:
     post:
       summary: Write changes and reload (admins)
+      parameters: [{ $ref: "#/components/parameters/lease" }]
       requestBody: { $ref: "#/components/requestBodies/Changes" }
       responses:
         "200":
@@ -934,6 +940,66 @@ paths:
                 properties:
                   error: { type: string }
                   diagnostics: { type: array, items: { $ref: "#/components/schemas/Problem" } }
+        "423": { $ref: "#/components/responses/Locked" }
+
+  /config/locks:
+    get:
+      summary: Who is editing which object file (admins)
+      description: |
+        Edit leases from the web UI and API clients, `watcher config edit`,
+        and editors that leave a lock file next to the file (vim, nano with
+        `set locking`, emacs, Kate). Lock files of processes that are gone
+        are left out.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  locks: { type: array, items: { $ref: "#/components/schemas/Lock" } }
+
+  /config/locks/{path}:
+    parameters:
+      - { name: path, in: path, required: true, description: "Relative, e.g. ui/hosts.toml", schema: { type: string } }
+    put:
+      summary: Take or renew the edit lease on a file (admins)
+      description: |
+        While you hold the lease, other clients cannot write the file
+        (`config/apply` and the object endpoints give 423). Renew it every
+        30 seconds with `lease`; it lapses 2 minutes after the last renewal.
+        Send held leases in the `X-Watcher-Lease` header when writing. A
+        file open in an editor needs a lease to be written: take it with
+        `force`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                lease: { type: string, description: The lease to renew; omit to take a new one }
+                force: { type: boolean, default: false, description: Take the file over from whoever is editing it }
+            example: {}
+      responses:
+        "200":
+          description: Lease taken or renewed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lease: { type: string }
+                  path: { type: string }
+                  others: { type: array, items: { $ref: "#/components/schemas/Lock" }, description: Editors that have the file open as well }
+        "423": { $ref: "#/components/responses/Locked" }
+    delete:
+      summary: Give up an edit lease (admins)
+      parameters:
+        - { name: lease, in: query, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Released }
 
 components:
   securitySchemes:
@@ -945,6 +1011,7 @@ components:
     service: { name: service, in: path, required: true, schema: { type: string } }
     offset: { name: offset, in: query, description: Rows to skip, schema: { type: integer, default: 0 } }
     limit: { name: limit, in: query, description: Rows to return; all without, schema: { type: integer } }
+    lease: { name: X-Watcher-Lease, in: header, description: "Edit leases held, comma-separated (config/locks)", schema: { type: string } }
 
   requestBodies:
     Changes:
@@ -972,6 +1039,15 @@ components:
               error: { type: string }
               path: { type: string }
               current: { oneOf: [{ $ref: "#/components/schemas/ConfigFile" }, { type: "null" }] }
+    Locked:
+      description: Someone else is editing the file
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: { type: string, example: "anna is editing hosts.toml in vim" }
+              holder: { $ref: "#/components/schemas/Lock" }
 
   schemas:
     Error:
@@ -982,6 +1058,15 @@ components:
     HostState: { type: string, enum: [up, down] }
     StateType: { type: string, enum: [soft, hard] }
     Time: { type: string, format: date-time }
+    Lock:
+      type: object
+      properties:
+        path: { type: string, description: Relative to the object directory }
+        by: { type: string, description: User name; empty if the lock file doesn't say }
+        via: { type: string, enum: [web, cli, vim, nano, emacs, kate] }
+        since: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+        pid: { type: [integer, "null"] }
+        host: { type: [string, "null"] }
     Counts:
       type: object
       properties:

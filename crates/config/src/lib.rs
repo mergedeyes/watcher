@@ -15,6 +15,7 @@ pub mod edit;
 mod expr;
 pub mod files;
 mod load;
+pub mod locks;
 mod macros;
 pub mod schedule;
 mod select;
