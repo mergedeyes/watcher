@@ -21,7 +21,7 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 use watcher_config::{Config, Host, Service};
-use watcher_core::State as CheckState;
+use watcher_core::{HostState, State as CheckState, StateType};
 use watcher_exec::scheduler::{Control, Scheduled};
 use watcher_store::{Downtime, Flag, FlagKind};
 
@@ -71,6 +71,23 @@ pub struct DowntimeChange {
     pub state: CheckState,
     /// Which downtime, e.g. `hostgroup linux: patch day`.
     pub what: String,
+}
+
+/// A HARD problem that is still open; see [`Hub::open_problems`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenProblem {
+    /// `host/service`.
+    pub id: String,
+    pub state: CheckState,
+    pub attempts: u32,
+    pub output: String,
+    pub long_output: String,
+    pub last_check: SystemTime,
+    /// When it changed to this state (HARD).
+    pub since: SystemTime,
+    /// Why notifications are held back now (acknowledged, in a downtime,
+    /// muted, ...).
+    pub suppressed: Option<String>,
 }
 
 /// What applies to one service right now.
@@ -331,26 +348,46 @@ impl Hub {
     /// Why notifications for this result are held back, if they are. A
     /// recovery ends an acknowledgement and is still sent.
     pub fn suppressed(&self, id: &str, state: CheckState) -> Option<String> {
-        if self.host_down(id) {
-            return Some("host is DOWN".into());
-        }
         let live = self.read();
         let service = live.config.service(id)?;
-        let ops = &live.ops;
-        if !ops.notifications {
-            return Some("notifications are off".into());
+        suppression(&live, service, state, SystemTime::now())
+    }
+
+    /// Problems that are HARD now (for a host check: the host is DOWN),
+    /// for repeated notifications. Flapping counts as held back.
+    pub fn open_problems(&self) -> Vec<OpenProblem> {
+        let live = self.read();
+        let config = &live.config;
+        let now = SystemTime::now();
+        let mut out = Vec::new();
+        for service in &config.services {
+            let Some(l) = live.services.get(&service.id) else {
+                continue;
+            };
+            let st = &l.state;
+            let host_check = config.is_host_check(service);
+            let problem = match host_check {
+                true => HostState::from_check(st.state) == HostState::Down,
+                false => st.state != CheckState::Ok,
+            };
+            if !problem || st.state_type != StateType::Hard {
+                continue;
+            }
+            out.push(OpenProblem {
+                id: service.id.clone(),
+                state: st.state,
+                attempts: st.attempt,
+                output: l.output.clone(),
+                long_output: l.long_output.clone(),
+                last_check: st.last_check,
+                since: st.last_hard_change,
+                suppressed: match st.flapping {
+                    true => Some("flapping".into()),
+                    false => suppression(&live, service, st.state, now),
+                },
+            });
         }
-        let status = ops.status(&live.config, service, SystemTime::now());
-        if status.muted {
-            return Some("muted".into());
-        }
-        if let Some(d) = status.downtime.first() {
-            return Some(format!("in downtime ({d})"));
-        }
-        if status.acknowledged && state != CheckState::Ok {
-            return Some("acknowledged".into());
-        }
-        None
+        out
     }
 
     /// Why a downtime notification for a host or service is held back:
@@ -404,6 +441,33 @@ impl Hub {
             });
         }
     }
+}
+
+/// Why notifications for `service` in `state` are held back, if they are.
+fn suppression(
+    live: &crate::Live,
+    service: &Service,
+    state: CheckState,
+    now: SystemTime,
+) -> Option<String> {
+    if crate::host_down(live, &service.id) {
+        return Some("host is DOWN".into());
+    }
+    let ops = &live.ops;
+    if !ops.notifications {
+        return Some("notifications are off".into());
+    }
+    let status = ops.status(&live.config, service, now);
+    if status.muted {
+        return Some("muted".into());
+    }
+    if let Some(d) = status.downtime.first() {
+        return Some(format!("in downtime ({d})"));
+    }
+    if status.acknowledged && state != CheckState::Ok {
+        return Some("acknowledged".into());
+    }
+    None
 }
 
 type Shared = State<Arc<Hub>>;

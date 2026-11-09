@@ -27,7 +27,7 @@ use watcher_store::{HostSpec, ServiceSpec, Store, StoredState};
 
 pub use auth::AuthSettings;
 pub use config::{ConfigFiles, Reload};
-pub use ops::DowntimeChange;
+pub use ops::{DowntimeChange, OpenProblem};
 pub use ssh::{StoreVault, remote};
 /// Serves the web UI files and app shell; for routers outside the hub.
 pub use ui::serve as serve_ui;
@@ -41,6 +41,25 @@ struct LiveService {
     /// The full last result; `None` after a restart until the next check.
     result: Option<CheckResult>,
     duration: Duration,
+}
+
+/// Whether `id` is a service (not the host check) of a host that is DOWN
+/// (HARD).
+fn host_down(live: &Live, id: &str) -> bool {
+    let config = &live.config;
+    let Some(service) = config.service(id) else {
+        return false;
+    };
+    if config.is_host_check(service) {
+        return false;
+    }
+    config
+        .host_check(config.host(service))
+        .and_then(|s| live.services.get(&s.id))
+        .is_some_and(|l| {
+            HostState::from_check(l.state.state) == HostState::Down
+                && l.state.state_type == StateType::Hard
+        })
 }
 
 struct Live {
@@ -293,21 +312,7 @@ impl Hub {
     /// host is confirmed DOWN by the host check (Nagios semantics). The
     /// host check itself still notifies.
     pub fn host_down(&self, id: &str) -> bool {
-        let live = self.live.read().unwrap_or_else(|e| e.into_inner());
-        let config = &live.config;
-        let Some(service) = config.service(id) else {
-            return false;
-        };
-        if config.is_host_check(service) {
-            return false;
-        }
-        config
-            .host_check(config.host(service))
-            .and_then(|s| live.services.get(&s.id))
-            .is_some_and(|l| {
-                HostState::from_check(l.state.state) == HostState::Down
-                    && l.state.state_type == StateType::Hard
-            })
+        host_down(&self.read(), id)
     }
 
     pub fn router(self: Arc<Self>) -> axum::Router {

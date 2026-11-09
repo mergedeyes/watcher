@@ -364,6 +364,8 @@ pub struct NotifyRule {
     /// `down`); all of them when not set.
     pub states: Vec<String>,
     pub on: NotifyOn,
+    /// Send problems again this often while they last.
+    pub repeat: Option<Duration>,
     pub enabled: bool,
     pub origin: Origin,
 }
@@ -583,14 +585,48 @@ impl Config {
                 Alert::Flapping => rule.on.flapping,
                 Alert::Downtime => rule.on.downtime,
             };
-            if !takes {
-                continue;
-            }
-            names.extend(rule.contacts.iter().map(String::as_str));
-            for group in &rule.contact_groups {
-                names.extend(self.group_contacts(group).iter().map(|c| c.name.as_str()));
+            if takes {
+                names.extend(self.rule_contacts(rule));
             }
         }
+        self.contacts_named(names)
+    }
+
+    /// Who gets a problem in `state` again while it lasts, and how often:
+    /// the shortest `repeat` of the rules that give it to them.
+    pub fn repeat_recipients(
+        &self,
+        service: &Service,
+        host_alert: bool,
+        state: &str,
+    ) -> Vec<(&Contact, Duration)> {
+        let mut out: Vec<(&Contact, Duration)> = Vec::new();
+        for (rule, _) in self.matching_rules(service, host_alert) {
+            let Some(every) = rule.repeat else { continue };
+            if !rule.on.problem || !rule.takes_state(state) {
+                continue;
+            }
+            for contact in self.contacts_named(self.rule_contacts(rule)) {
+                match out.iter_mut().find(|(c, _)| c.name == contact.name) {
+                    Some((_, d)) => *d = (*d).min(every),
+                    None => out.push((contact, every)),
+                }
+            }
+        }
+        out
+    }
+
+    /// Names of a rule's contacts, directly and through groups.
+    fn rule_contacts<'a>(&'a self, rule: &'a NotifyRule) -> Vec<&'a str> {
+        let mut names: Vec<&str> = rule.contacts.iter().map(String::as_str).collect();
+        for group in &rule.contact_groups {
+            names.extend(self.group_contacts(group).iter().map(|c| c.name.as_str()));
+        }
+        names
+    }
+
+    /// The contacts with these names, each once, in order.
+    fn contacts_named<'a>(&'a self, names: Vec<&str>) -> Vec<&'a Contact> {
         let mut out: Vec<&Contact> = Vec::new();
         for name in names {
             if let Some(c) = self.contacts.iter().find(|c| c.name == name)
@@ -619,23 +655,11 @@ impl Config {
                     .hosts
                     .as_ref()
                     .is_none_or(|s| s.matches(host).is_some());
-            if !takes {
-                continue;
-            }
-            names.extend(rule.contacts.iter().map(String::as_str));
-            for group in &rule.contact_groups {
-                names.extend(self.group_contacts(group).iter().map(|c| c.name.as_str()));
+            if takes {
+                names.extend(self.rule_contacts(rule));
             }
         }
-        let mut out: Vec<&Contact> = Vec::new();
-        for name in names {
-            if let Some(c) = self.contacts.iter().find(|c| c.name == name)
-                && !out.iter().any(|o| o.name == name)
-            {
-                out.push(c);
-            }
-        }
-        out
+        self.contacts_named(names)
     }
 }
 

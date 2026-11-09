@@ -16,7 +16,7 @@ use watcher_core::StateType;
 use watcher_exec::scheduler::{Control, Event, schedule};
 use watcher_exec::ssh::Pool;
 use watcher_hub::{AuthSettings, ConfigFiles, Hub, StoreVault, jobs, specs};
-use watcher_notify::{DowntimeChange, Message, Notifier, setup_warnings};
+use watcher_notify::{DowntimeChange, Message, Notifier, OpenProblem, setup_warnings};
 use watcher_store::{Record, Store, StoredState, ingest};
 
 #[derive(clap::Args)]
@@ -252,6 +252,8 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
     };
     // Downtimes starting and ending (windows are per minute).
     let mut downtimes = tokio::time::interval(Duration::from_secs(15));
+    // Open problems, for repeated notifications (`repeat` is at least 1m).
+    let mut repeats = tokio::time::interval(Duration::from_secs(30));
     // Edit leases of closed browser tabs.
     let mut leases = tokio::time::interval(Duration::from_secs(30));
     let mut hangup = signal(SignalKind::hangup())?;
@@ -260,6 +262,7 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
         tokio::select! {
             Some(event) = events.recv() => running.record(event, args.all),
             _ = downtimes.tick() => running.downtimes().await,
+            _ = repeats.tick() => running.repeats(),
             _ = leases.tick() => hub.sweep_leases(),
             _ = hangup.recv() => {
                 snapshot = self::snapshot(&conf_dir);
@@ -365,6 +368,29 @@ impl Running<'_> {
             if self.notify_tx.try_send(Message::Downtime(change)).is_err() {
                 warn!("notification queue is full; dropped the downtime notification for {id}");
             }
+        }
+    }
+
+    /// Hands the open problems to the notifier, which sends the repeats
+    /// that are due.
+    fn repeats(&self) {
+        let open = self
+            .hub
+            .open_problems()
+            .into_iter()
+            .map(|p| OpenProblem {
+                id: p.id,
+                state: p.state,
+                attempts: p.attempts,
+                output: p.output,
+                long_output: p.long_output,
+                last_check: p.last_check,
+                since: p.since,
+                suppressed: p.suppressed.is_some(),
+            })
+            .collect();
+        if self.notify_tx.try_send(Message::Problems(open)).is_err() {
+            warn!("notification queue is full; repeated notifications are late");
         }
     }
 

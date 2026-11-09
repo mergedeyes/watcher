@@ -4,9 +4,11 @@
 //! change back to OK from a problem. Soft changes, the first OK result of a
 //! service and restored states never notify. A host check notifies as the
 //! host: DOWN and UP, not OK to WARNING. While a service flaps, only the
-//! start and end of flapping notify.
+//! start and end of flapping notify. Rules with `repeat` send open
+//! problems again (see [`Repeats`]).
 
 mod email;
+mod repeat;
 mod webhook;
 
 use serde::Serialize;
@@ -15,11 +17,12 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
-use watcher_config::{Alert, Config, Contact, Smtp, state_name};
+use watcher_config::{Alert, Config, Contact, Service, Smtp, state_name};
 use watcher_core::{HostState, State, StateType};
 use watcher_exec::scheduler::Event;
 
 pub use email::Mailer;
+pub use repeat::{OpenProblem, Repeats};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -79,6 +82,11 @@ pub struct Notification {
     pub long_output: String,
     #[serde(serialize_with = "rfc3339")]
     pub time: SystemTime,
+    /// Problems: when it changed to this state.
+    #[serde(serialize_with = "rfc3339_opt")]
+    pub since: Option<SystemTime>,
+    /// A problem sent again because it is still open.
+    pub repeat: bool,
     /// Link to the service, if `public_url` is set.
     pub url: Option<String>,
     /// `instance_name` of the sending Watcher.
@@ -100,6 +108,8 @@ impl Notification {
             output: format!("Test notification for contact {contact}."),
             long_output: String::new(),
             time: SystemTime::now(),
+            since: None,
+            repeat: false,
             url: public_url,
             instance: None,
         }
@@ -132,6 +142,50 @@ impl Notification {
 
 fn rfc3339<S: serde::Serializer>(t: &SystemTime, s: S) -> Result<S::Ok, S::Error> {
     s.collect_str(&humantime::format_rfc3339_seconds(*t))
+}
+
+fn rfc3339_opt<S: serde::Serializer>(t: &Option<SystemTime>, s: S) -> Result<S::Ok, S::Error> {
+    match t {
+        Some(t) => rfc3339(t, s),
+        None => s.serialize_none(),
+    }
+}
+
+/// A notification about `service`, with its host and link filled in.
+fn about(
+    config: &Config,
+    service: &Service,
+    host_check: bool,
+    public_url: Option<&str>,
+    kind: Kind,
+    state: State,
+) -> Notification {
+    let host = config.host(service);
+    let url = public_url.map(|base| {
+        format!(
+            "{}/services/{}/{}",
+            base.trim_end_matches('/'),
+            url_segment(&host.name),
+            url_segment(&service.name)
+        )
+    });
+    Notification {
+        kind,
+        host: host.name.clone(),
+        address: host.address.clone(),
+        service: service.name.clone(),
+        host_check,
+        state,
+        previous_state: None,
+        attempts: 1,
+        output: String::new(),
+        long_output: String::new(),
+        time: SystemTime::now(),
+        since: None,
+        repeat: false,
+        url,
+        instance: None,
+    }
 }
 
 /// Decides whether `event` notifies, and whom.
@@ -178,7 +232,6 @@ pub fn decide<'a>(
         (None, false) => event.change.and_then(|c| c.from).map(|(s, _)| s),
     };
 
-    let host = config.host(service);
     // Rules take recoveries by the problem state they end.
     let (alert, rule_state) = match kind {
         Kind::Problem => (Alert::Problem, to),
@@ -196,33 +249,19 @@ pub fn decide<'a>(
         return None;
     }
 
-    let url = public_url.map(|base| {
-        format!(
-            "{}/services/{}/{}",
-            base.trim_end_matches('/'),
-            url_segment(&host.name),
-            url_segment(&service.name)
-        )
-    });
-    let notification = Notification {
-        kind,
-        host: host.name.clone(),
-        address: host.address.clone(),
-        service: service.name.clone(),
-        host_check,
-        state: to,
-        previous_state: previous.filter(|p| *p != to),
-        attempts: match event.state.state_type {
-            StateType::Hard => event.state.attempt,
-            StateType::Soft => 1,
-        },
-        output: event.result.message.clone(),
-        long_output: event.result.long_output.clone(),
-        time: event.state.last_check,
-        url,
-        instance: None,
+    let mut n = about(config, service, host_check, public_url, kind, to);
+    n.previous_state = previous.filter(|p| *p != to);
+    n.attempts = match event.state.state_type {
+        StateType::Hard => event.state.attempt,
+        StateType::Soft => 1,
     };
-    Some((notification, contacts))
+    n.output = event.result.message.clone();
+    n.long_output = event.result.long_output.clone();
+    n.time = event.state.last_check;
+    if kind == Kind::Problem {
+        n.since = Some(event.state.last_hard_change);
+    }
+    Some((n, contacts))
 }
 
 /// A downtime that started or ended for a host or one service.
@@ -239,11 +278,13 @@ pub struct DowntimeChange {
     pub time: SystemTime,
 }
 
-/// What the notifier gets: check results and downtime changes.
+/// What the notifier gets: check results, downtime changes, and now and
+/// then all open problems, for repeats.
 #[derive(Debug, Clone)]
 pub enum Message {
     Result(Box<Event>),
     Downtime(DowntimeChange),
+    Problems(Vec<OpenProblem>),
 }
 
 /// Whom a downtime change notifies.
@@ -291,6 +332,8 @@ pub fn decide_downtime<'a>(
         output: change.what.clone(),
         long_output: String::new(),
         time: change.time,
+        since: None,
+        repeat: false,
         url,
         instance: None,
     };
@@ -408,44 +451,62 @@ pub fn setup_warnings(config: &Config, notifier: &Notifier) -> Vec<String> {
     warnings
 }
 
-/// Sends notifications for `events` until the channel closes. `config`
+/// Sends notifications for `messages` until the channel closes. `config`
 /// follows reloads.
 pub async fn run(
     notifier: Arc<Notifier>,
     config: watch::Receiver<Arc<Config>>,
     mut messages: mpsc::Receiver<Message>,
 ) {
+    let mut repeats = Repeats::default();
     while let Some(message) = messages.recv().await {
         let config = config.borrow().clone();
-        let decided = match &message {
-            Message::Result(event) => decide(event, &config, notifier.public_url()),
-            Message::Downtime(change) => decide_downtime(change, &config, notifier.public_url()),
-        };
-        let Some((mut n, contacts)) = decided else {
-            continue;
-        };
-        n.instance = notifier.instance.clone();
-        for contact in contacts {
-            let (notifier, contact, n) = (notifier.clone(), contact.clone(), n.clone());
-            // Deliveries retry with delays; don't hold up later events.
-            tokio::spawn(async move {
-                for (channel, result) in notifier.deliver(&contact, &n).await {
-                    match result {
-                        Ok(()) => info!(
-                            "notified {} by {channel}: {} {} is {}",
-                            contact.name,
-                            n.kind.as_str(),
-                            n.service_id(),
-                            n.state_name()
-                        ),
-                        Err(err) => warn!(
-                            "notifying {} about {} failed: {err}",
-                            contact.name,
-                            n.service_id()
-                        ),
+        let url = notifier.public_url();
+        let decided: Vec<(Notification, Vec<&Contact>)> = match &message {
+            Message::Result(event) => {
+                let decided = decide(event, &config, url);
+                match &decided {
+                    Some((n, contacts)) if n.kind == Kind::Problem => {
+                        let since = event.state.last_hard_change;
+                        repeats.sent(&event.id, since, contacts, SystemTime::now());
                     }
+                    Some((n, _)) if n.kind == Kind::Recovery => repeats.ended(&event.id),
+                    _ => {}
                 }
-            });
+                decided.into_iter().collect()
+            }
+            Message::Downtime(change) => {
+                decide_downtime(change, &config, url).into_iter().collect()
+            }
+            Message::Problems(open) => repeats.due(open, &config, url, SystemTime::now()),
+        };
+        for (mut n, contacts) in decided {
+            n.instance = notifier.instance.clone();
+            for contact in contacts {
+                let (notifier, contact, n) = (notifier.clone(), contact.clone(), n.clone());
+                // Deliveries retry with delays; don't hold up later events.
+                tokio::spawn(async move {
+                    for (channel, result) in notifier.deliver(&contact, &n).await {
+                        let kind = match n.repeat {
+                            true => "PROBLEM (repeat)",
+                            false => n.kind.as_str(),
+                        };
+                        match result {
+                            Ok(()) => info!(
+                                "notified {} by {channel}: {kind} {} is {}",
+                                contact.name,
+                                n.service_id(),
+                                n.state_name()
+                            ),
+                            Err(err) => warn!(
+                                "notifying {} about {} failed: {err}",
+                                contact.name,
+                                n.service_id()
+                            ),
+                        }
+                    }
+                });
+            }
         }
     }
 }

@@ -203,6 +203,28 @@ async fn passive_results() {
     assert!(!hub.host_down("db01/backup"));
     assert!(!hub.host_down("web01/http"));
 
+    // An open problem for repeats; held back once acknowledged.
+    let open = hub.open_problems();
+    assert_eq!(
+        open.iter()
+            .map(|p| (p.id.as_str(), p.suppressed.as_deref()))
+            .collect::<Vec<_>>(),
+        [("db01/backup", None)]
+    );
+    assert_eq!(open[0].output, "BACKUP CRITICAL - failed");
+    let (status, ack) = call(
+        &hub,
+        "POST",
+        "/api/v1/actions/ack",
+        Some(json!({ "hosts": ["db01"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(
+        hub.open_problems()[0].suppressed.as_deref(),
+        Some("acknowledged")
+    );
+
     let body = json!({"state": "ok", "output": "fine"});
     let (_, detail) = call(
         &hub,

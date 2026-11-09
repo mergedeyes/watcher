@@ -331,7 +331,10 @@ impl<'a> Builder<'a> {
             .into_iter()
             .map(|(rule, why)| {
                 let mut n = self.rule_link(rule);
-                n.detail = Some(format!("matched: {why}"));
+                n.detail = Some(match rule.repeat {
+                    Some(every) => format!("matched: {why}; repeats every {}", duration(every)),
+                    None => format!("matched: {why}"),
+                });
                 n.children = self.rule_targets(rule);
                 n
             })

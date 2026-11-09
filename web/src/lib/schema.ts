@@ -205,7 +205,8 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 				{ key: 'hosts', label: 'Hosts', type: 'selector', selects: 'host', help: 'none: all hosts' },
 				{ key: 'services', label: 'Services', type: 'selector', selects: 'service', help: 'set: service alerts only' },
 				{ key: 'states', label: 'States', type: 'list', help: 'warning, critical, unknown, down; none: all' },
-				{ key: 'on', label: 'On', type: 'list', help: 'problem, recovery, flapping; none: all' },
+				{ key: 'on', label: 'On', type: 'list', help: 'problem, recovery, flapping, downtime; none: all' },
+				{ key: 'repeat', label: 'Repeat', type: 'duration', placeholder: 'off, e.g. 1h', help: 'send open problems again' },
 				ENABLED
 			]
 		}
