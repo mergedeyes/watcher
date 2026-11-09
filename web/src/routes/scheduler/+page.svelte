@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { api, hostHref, serviceHref, type Scheduled } from '#lib/api.ts';
 	import { actions } from '#lib/actions.svelte.ts';
-	import { datetime, duration } from '#lib/format.ts';
+	import { count, datetime, duration } from '#lib/format.ts';
 	import { live } from '#lib/live.svelte.ts';
 
 	let queue = $state<Scheduled[]>([]);
@@ -52,7 +52,7 @@
 	</div>
 	{#if error}<p class="notice error">{error}</p>{/if}
 	<section class="panel">
-		<div class="panel-title">Checks <span class="muted">{shown.length}</span></div>
+		<div class="panel-title">Checks <span class="muted">{count(shown.length)}</span></div>
 		{#if shown.length === 0}
 			<div class="empty">No checks.</div>
 		{:else}

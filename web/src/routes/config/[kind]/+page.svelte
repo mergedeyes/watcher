@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { count } from '#lib/format.ts';
 	import { page } from '$app/state';
 	import type { ConfigObject } from '#lib/api.ts';
 	import { config, editHref, fileHref, objectId } from '#lib/config.svelte.ts';
@@ -77,7 +78,7 @@
 		<p class="notice">Unknown object type.</p>
 	{:else}
 		<div class="page-head">
-			<h1>{kind.label} <span class="muted">{rows.length}</span></h1>
+			<h1>{kind.label} <span class="muted">{count(rows.length)}</span></h1>
 			<div class="actions">
 				<input type="search" placeholder="Search" bind:value={query} aria-label="Search" />
 				{#if config.writable}

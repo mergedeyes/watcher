@@ -10,6 +10,7 @@
 	}
 
 	let { title, items }: { title: string; items: Total[] } = $props();
+	import { count } from './format.ts';
 </script>
 
 <div class="totals panel">
@@ -17,7 +18,7 @@
 	<div class="boxes">
 		{#each items as t (t.key)}
 			<a class="box" href={t.href} data-state={t.count > 0 ? t.state : undefined}>
-				<span class="count">{t.count}</span>
+				<span class="count">{count(t.count)}</span>
 				<span class="label">{t.label}</span>
 			</a>
 		{/each}

@@ -1,5 +1,6 @@
 <!-- Alert history of all hosts and services, like Nagios' Alert History. -->
 <script lang="ts">
+	import { count } from '#lib/format.ts';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { untrack } from 'svelte';
@@ -180,7 +181,7 @@
 		<p class="notice">Loading…</p>
 	{:else}
 		<section class="panel">
-			<div class="panel-title">Alert History <span class="muted">{events.length}{more ? '+' : ''}</span></div>
+			<div class="panel-title">Alert History <span class="muted">{count(events.length)}{more ? '+' : ''}</span></div>
 			<AlertTable {events} showKind showHost showService />
 			{#if more}
 				<div class="older"><button type="button" class="btn small" onclick={older}>Older</button></div>

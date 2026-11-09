@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { count } from '#lib/format.ts';
 	import '../app.css';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
@@ -101,7 +102,7 @@
 </script>
 
 <svelte:head>
-	<title>{problems > 0 ? `(${problems}) ` : ''}Watcher{instance ? ` · ${instance}` : ''}</title>
+	<title>{problems > 0 ? `(${count(problems)}) ` : ''}Watcher{instance ? ` · ${instance}` : ''}</title>
 </svelte:head>
 
 {#if unreachable}
@@ -118,7 +119,7 @@
 					{#each group.items as item (item.href)}
 						<a href={item.href} class:active={active(item.href)} aria-current={active(item.href) ? 'page' : undefined}>
 							{item.label}
-							{#if item.href === '/problems' && problems > 0}<span class="badge">{problems}</span>{/if}
+							{#if item.href === '/problems' && problems > 0}<span class="badge">{count(problems)}</span>{/if}
 						</a>
 					{/each}
 				{/each}

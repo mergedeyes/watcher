@@ -1,5 +1,6 @@
 <!-- Hosts DOWN, paged on the server and kept live from their host checks. -->
 <script lang="ts">
+	import { count } from './format.ts';
 	import { api } from './api.ts';
 	import HostProblems from './HostProblems.svelte';
 	import { Paging, ServerList, checkId, patchHost } from './list.svelte.ts';
@@ -22,7 +23,7 @@
 
 {#if !(hideEmpty && (list.data?.total ?? 0) === 0)}
 	<section class="panel">
-		<div class="panel-title">{title} {#if list.data}<span class="muted">{list.data.total}</span>{/if}</div>
+		<div class="panel-title">{title} {#if list.data}<span class="muted">{count(list.data.total)}</span>{/if}</div>
 		{#if list.error && !list.data}
 			<div class="empty error">{list.error}</div>
 		{:else if !list.data}

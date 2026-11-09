@@ -2,7 +2,7 @@
 	import { api, hostHref, serviceHref, type ActionBody, type Downtime, type Flag } from '#lib/api.ts';
 	import { actions } from '#lib/actions.svelte.ts';
 	import Combobox from '#lib/Combobox.svelte';
-	import { datetime, duration } from '#lib/format.ts';
+	import { count, datetime, duration } from '#lib/format.ts';
 	import { live } from '#lib/live.svelte.ts';
 
 	let downtimes = $state<Downtime[]>([]);
@@ -167,7 +167,7 @@
 	</section>
 
 	<section class="panel">
-		<div class="panel-title">Downtimes <span class="muted">{downtimes.length}</span></div>
+		<div class="panel-title">Downtimes <span class="muted">{count(downtimes.length)}</span></div>
 		{#if downtimes.length === 0}
 			<div class="empty">No downtimes.</div>
 		{:else}
@@ -211,7 +211,7 @@
 	</section>
 
 	<section class="panel">
-		<div class="panel-title">Acknowledged, Muted, Checks Off <span class="muted">{flags.length}</span></div>
+		<div class="panel-title">Acknowledged, Muted, Checks Off <span class="muted">{count(flags.length)}</span></div>
 		{#if flags.length === 0}
 			<div class="empty">None.</div>
 		{:else}

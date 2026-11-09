@@ -34,6 +34,13 @@ export function severity(state: State | null): number {
 	}
 }
 
+const COUNT = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+
+/** A count with thousands separators, as the UI is English: `205,976`. */
+export function count(n: number): string {
+	return COUNT.format(n);
+}
+
 function trim(n: number): string {
 	return Number(n.toFixed(3)).toString();
 }
