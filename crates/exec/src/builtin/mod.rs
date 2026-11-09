@@ -29,13 +29,15 @@ pub const NAMES: [&str; 5] = ["ping", "tcp", "http", "dns", "tls"];
 /// The vars built-in check `name` reads.
 pub fn vars_of(name: &str) -> &'static [&'static str] {
     match name {
-        "ping" => &["packets", "warn", "crit"],
-        "tcp" => &["port", "send", "expect", "warn", "crit"],
+        "ping" => &["address", "packets", "warn", "crit"],
+        "tcp" => &["address", "port", "send", "expect", "warn", "crit"],
         "http" => &[
-            "url", "method", "status", "content", "follow", "verify", "warn", "crit",
+            "address", "url", "method", "status", "content", "follow", "verify", "warn", "crit",
         ],
-        "dns" => &["name", "type", "server", "port", "expect", "warn", "crit"],
-        "tls" => &["port", "name", "warn", "crit", "verify"],
+        "dns" => &[
+            "address", "name", "type", "server", "port", "expect", "warn", "crit",
+        ],
+        "tls" => &["address", "port", "name", "warn", "crit", "verify"],
         _ => &[],
     }
 }
@@ -51,9 +53,10 @@ pub enum Builtin {
 
 impl Builtin {
     /// Builds built-in check `name` for a host at `address`, with the
-    /// settings in `vars`.
+    /// settings in `vars`. The var `address` replaces the host's.
     pub fn new(name: &str, address: &str, vars: &BTreeMap<String, String>) -> Result<Self, String> {
         let vars = Vars(vars);
+        let address = vars.get("address").unwrap_or(address);
         Ok(match name {
             "ping" => Builtin::Ping(Ping::new(address, &vars)?),
             "tcp" => Builtin::Tcp(Tcp::new(address, &vars)?),
@@ -378,6 +381,17 @@ mod tests {
             first_line("SSH-2.0-OpenSSH_9.6\r\nmore"),
             "SSH-2.0-OpenSSH_9.6"
         );
+    }
+
+    #[test]
+    fn address_var() {
+        let b = Builtin::new("tls", "websites", &vars(&[("address", "shop.example.com")])).unwrap();
+        assert_eq!(
+            b.to_string(),
+            "tls shop.example.com:443 warn=30d crit=14d (built-in)"
+        );
+        let b = Builtin::new("http", "10.0.0.5", &vars(&[("address", "::1")])).unwrap();
+        assert_eq!(b.to_string(), "http GET http://[::1]/ (built-in)");
     }
 
     #[test]
