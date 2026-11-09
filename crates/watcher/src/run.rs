@@ -252,12 +252,15 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
     };
     // Downtimes starting and ending (windows are per minute).
     let mut downtimes = tokio::time::interval(Duration::from_secs(15));
+    // Edit leases of closed browser tabs.
+    let mut leases = tokio::time::interval(Duration::from_secs(30));
     let mut hangup = signal(SignalKind::hangup())?;
     let mut terminate = signal(SignalKind::terminate())?;
     loop {
         tokio::select! {
             Some(event) = events.recv() => running.record(event, args.all),
             _ = downtimes.tick() => running.downtimes().await,
+            _ = leases.tick() => hub.sweep_leases(),
             _ = hangup.recv() => {
                 snapshot = self::snapshot(&conf_dir);
                 let _ = running.reload(&conf_dir, "SIGHUP").await;
