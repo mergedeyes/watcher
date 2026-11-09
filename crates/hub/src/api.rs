@@ -91,6 +91,11 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/config/edit-many", post(config::edit_many))
         .route("/api/v1/config/preview", post(config::preview))
         .route("/api/v1/config/apply", post(config::apply))
+        .route("/api/v1/config/locks", get(config::locks))
+        .route(
+            "/api/v1/config/locks/{*path}",
+            put(config::lock).delete(config::unlock),
+        )
         // Unknown /api paths get a JSON 404; everything else is the web UI.
         .fallback(crate::ui::serve)
         .layer(middleware::from_fn_with_state(hub.clone(), auth::require))

@@ -44,7 +44,8 @@ Single server:
 - **State handling:** SOFT/HARD, retries, host UP/DOWN, flap detection,
   freshness of passive results.
 - **Configuration:** files and web UI, services, groups, `for_each`, Config
-  Tree, validation with file and line, reload on save.
+  Tree, validation with file and line, reload on save, edit locks between
+  the web UI, `watcher config edit` and editors on the server.
 - **Web UI:** Tactical Overview, hosts, services, problems, groups, alert
   history, graphs, configuration forms and file editor.
 - **Operations:** acknowledgements, one-off and recurring downtimes, muted

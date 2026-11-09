@@ -210,3 +210,41 @@ every configuration form.
 The web UI edits the same files. New objects go to `conf.d/ui/`, changes to
 existing objects stay in the file where the object is written, and comments
 and formatting are kept. See [Web UI](web-ui.md#configuration).
+
+## Editing at the same time
+
+While someone has a file open in the web UI, nobody else can change it there
+or through the API. Others see who is editing it and since when, and get the
+file read-only. They can still click **Edit Anyway** to take it over.
+
+To edit a file on the server, use `watcher config edit`. It opens the file
+in your editor (`$VISUAL`, `$EDITOR`, or `vi`) and locks it in the web UI
+until you close the editor:
+
+```sh
+watcher config edit hosts.toml
+```
+
+If someone has the file open in the web UI, the command tells you who and
+stops. `--force` opens it anyway. After you close the editor, it checks the
+configuration and shows any errors.
+
+Watcher also notices some editors that you start yourself, because they
+leave a lock file next to the file they edit:
+
+| Editor | Lock file | Notes |
+|---|---|---|
+| vim | `.hosts.toml.swp` | Not with `set directory` pointing elsewhere. |
+| nano | `.hosts.toml.swp` | Only with `set locking` in `nanorc`. |
+| emacs | `.#hosts.toml` | |
+| Kate | `.hosts.toml.kate-swp` | Only while there are unsaved changes. |
+
+Neovim keeps its swap files in its own directory, and VS Code, `sed` and
+`sudoedit` leave no lock file, so Watcher can't see them. Copying a file
+over with `scp` isn't noticed either. In all these cases nothing is lost
+silently: if a file changed on disk after you opened it in the web UI, the
+web UI shows the differences before you save (see
+[Conflicts](web-ui.md#configuration)).
+
+Lock files of editors that crashed are ignored: Watcher checks whether the
+process that wrote the lock file still runs.

@@ -127,6 +127,14 @@ type. It marks errors at the line and summarizes what would change.
 shows the differences. You can revert single chunks, use the version on
 disk, or keep yours.
 
+**Someone else is editing:** a form or file that someone else has open is
+read-only, with a note saying who is editing it, where (web UI, `watcher
+config edit`, vim, ...) and since when. When they are done, the page
+reloads the file and you can edit. **Edit Anyway** takes the file over
+right away; the other person's page turns read-only within half a minute.
+The Files list shows who is editing each file. See
+[Editing at the same time](configuration.md#editing-at-the-same-time).
+
 ## Config mode
 
 `config_mode` in `watcher.toml` decides whether the web UI or the files are

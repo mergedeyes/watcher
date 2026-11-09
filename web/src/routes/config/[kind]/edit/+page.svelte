@@ -8,6 +8,8 @@
 	import ConfigHead from '#lib/ConfigHead.svelte';
 	import Combobox from '#lib/Combobox.svelte';
 	import ConfigTree from '#lib/ConfigTree.svelte';
+	import { FileLease } from '#lib/lease.svelte.ts';
+	import LockNotice from '#lib/LockNotice.svelte';
 	import { live } from '#lib/live.svelte.ts';
 	import { Suggest } from '#lib/suggest.ts';
 	import MatchPreview from '#lib/MatchPreview.svelte';
@@ -40,6 +42,27 @@
 	$effect(() => {
 		config.load();
 	});
+
+	/** The edit lease on the object's file; editing an existing object needs it. */
+	let lease = $state<FileLease | null>(null);
+	let leasePath = $derived(config.writable ? object?.path : undefined);
+	$effect(() => {
+		if (!leasePath) {
+			lease = null;
+			return;
+		}
+		// Once free, the object may have changed: fill the form again.
+		const p = leasePath;
+		const l = untrack(
+			() =>
+				new FileLease(p, () => {
+					config.load().then(() => (values = null));
+				})
+		);
+		lease = l;
+		return () => l.stop();
+	});
+	let editable = $derived(config.writable && (!object || lease?.held === true));
 
 	let scripts = $state<{ dirs: string[]; scripts: { name: string; dir: string }[] } | null>(null);
 	/** Names of the services on hosts. */
@@ -264,6 +287,7 @@
 			{/if}
 		</div>
 		<ConfigHead />
+		{#if lease}<LockNotice {lease} />{/if}
 		{#each own as p, i (i)}
 			<p class="notice problem" data-severity={p.severity}><span class="sev">{p.severity.toUpperCase()}</span> {p.message}</p>
 		{/each}
@@ -272,7 +296,7 @@
 			<p class="notice">No {kind.kind} "{name ?? cloneName}".</p>
 		{:else if values}
 			<form onsubmit={save}>
-				<fieldset disabled={!config.writable}>
+				<fieldset disabled={!editable}>
 					{#each SCHEMAS[kind.kind] as group (group.title)}
 						<section class="panel">
 							<div class="panel-title">{group.title}</div>
@@ -427,11 +451,11 @@
 				{#if config.writable}
 					<div class="buttons">
 						{#if object}
-							<button type="button" class="btn danger" onclick={remove}>Delete</button>
+							<button type="button" class="btn danger" onclick={remove} disabled={!editable}>Delete</button>
 						{/if}
 						<span class="spacer"></span>
 						<a class="btn" href="/config/{kind.path}">Cancel</a>
-						<button type="submit" class="btn primary">Save</button>
+						<button type="submit" class="btn primary" disabled={!editable}>Save</button>
 					</div>
 				{/if}
 			</form>

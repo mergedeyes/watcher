@@ -11,6 +11,16 @@
 		config.load();
 	});
 
+	/** Who is editing each file. */
+	let editing = $derived.by(() => {
+		const m = new Map<string, string[]>();
+		for (const l of config.overview?.locks ?? []) {
+			const who = `${l.by || 'someone'} (${l.via === 'web' ? 'web UI' : l.via === 'cli' ? 'config edit' : l.via})`;
+			m.set(l.path, [...(m.get(l.path) ?? []), who]);
+		}
+		return m;
+	});
+
 	let counts = $derived.by(() => {
 		const c = new Map<string, number>();
 		for (const o of config.objects) c.set(o.path, (c.get(o.path) ?? 0) + 1);
@@ -54,6 +64,7 @@
 						<th>File</th>
 						<th>Objects</th>
 						<th class="hide-narrow">Size</th>
+						<th>Editing</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -62,9 +73,10 @@
 							<td><a class="mono" href={fileHref(f.path)}>{f.path}</a></td>
 							<td>{counts.get(f.path) ?? 0}</td>
 							<td class="hide-narrow nowrap">{size(f.size)}</td>
+							<td class="editing">{editing.get(f.path)?.join(', ') ?? ''}</td>
 						</tr>
 					{:else}
-						<tr><td colspan="3" class="empty">No files.</td></tr>
+						<tr><td colspan="4" class="empty">No files.</td></tr>
 					{/each}
 				</tbody>
 			</table>
@@ -73,6 +85,11 @@
 </div>
 
 <style>
+	.editing {
+		color: var(--unknown);
+		font-weight: 600;
+	}
+
 	.new {
 		display: flex;
 		gap: 8px;

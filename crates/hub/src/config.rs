@@ -8,9 +8,10 @@
 use crate::Hub;
 use crate::api::ApiError;
 use crate::auth::CurrentUser;
+use crate::locks::holder_json;
 use axum::Json;
 use axum::extract::{Extension, Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -20,6 +21,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::info;
 use watcher_config::edit::{self, EditError, Kind};
 use watcher_config::files::{self, Change};
+use watcher_config::locks::Holder;
 use watcher_config::{CheckDirs, ConfigMode, Diagnostic, Loaded, Severity, diff};
 
 /// Where the object files are and who may edit them.
@@ -111,6 +113,38 @@ async fn blocking<T: Send + 'static>(
         .map_err(|e| ApiError::Internal(e.to_string()))
 }
 
+/// 423: someone else is editing a file.
+fn locked(holder: &Holder) -> Response {
+    (
+        StatusCode::LOCKED,
+        Json(json!({ "error": holder.sentence(), "holder": holder_json(holder) })),
+    )
+        .into_response()
+}
+
+/// Header with the edit leases the client holds, comma-separated.
+pub const LEASE_HEADER: &str = "x-watcher-lease";
+
+fn lease_ids(headers: &HeaderMap) -> Vec<String> {
+    headers
+        .get_all(LEASE_HEADER)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Everyone editing an object file: in the web UI, with `watcher config
+/// edit`, or in an editor that leaves a lock file.
+fn current_locks(hub: &Hub) -> Vec<serde_json::Value> {
+    hub.leases
+        .get()
+        .map(|l| l.list().iter().map(holder_json).collect())
+        .unwrap_or_default()
+}
+
 /// Errors with the details a client needs to recover.
 fn file_error(files: &ConfigFiles, err: files::Error) -> Response {
     match err {
@@ -148,6 +182,10 @@ pub async fn overview(State(hub): Shared, user: User) -> Result<Response, ApiErr
         (list, loaded)
     })
     .await?;
+    let locks = {
+        let hub = hub.clone();
+        blocking(move || current_locks(&hub)).await?
+    };
     let list =
         list.map_err(|e| ApiError::Internal(format!("cannot read the object files: {e}")))?;
     let diagnostics = match loaded {
@@ -163,6 +201,7 @@ pub async fn overview(State(hub): Shared, user: User) -> Result<Response, ApiErr
         "writable": files.mode != ConfigMode::Files,
         "dir": files.dir,
         "files": list,
+        "locks": locks,
         "diagnostics": problems(files, &diagnostics),
     }))
     .into_response())
@@ -337,6 +376,7 @@ pub async fn put_object(
     user: User,
     Path((kind, name)): Path<(Kind, String)>,
     Query(q): Query<PutQuery>,
+    headers: HeaderMap,
     Json(fields): Json<serde_json::Map<String, serde_json::Value>>,
 ) -> Result<Response, ApiError> {
     let by = admin(&hub, &user)?;
@@ -363,7 +403,7 @@ pub async fn put_object(
         path: q.path,
     };
     match blocking(move || edit::edit_many(&dir, &[e])).await? {
-        Ok(changes) => apply_changes(&hub, files, by, changes).await,
+        Ok(changes) => apply_changes(&hub, files, by, changes, lease_ids(&headers)).await,
         Err(err) => edit_error(files, err),
     }
 }
@@ -373,6 +413,7 @@ pub async fn delete_object(
     State(hub): Shared,
     user: User,
     Path((kind, name)): Path<(Kind, String)>,
+    headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let by = admin(&hub, &user)?;
     let files = files(&hub)?;
@@ -385,7 +426,7 @@ pub async fn delete_object(
         path: None,
     };
     match blocking(move || edit::edit_many(&dir, &[e])).await? {
-        Ok(changes) => apply_changes(&hub, files, by, changes).await,
+        Ok(changes) => apply_changes(&hub, files, by, changes, lease_ids(&headers)).await,
         Err(err) => edit_error(files, err),
     }
 }
@@ -541,24 +582,32 @@ pub async fn preview(
 pub async fn apply(
     State(hub): Shared,
     user: User,
+    headers: HeaderMap,
     Json(body): Json<ChangesBody>,
 ) -> Result<Response, ApiError> {
     let by = admin(&hub, &user)?;
     let files = files(&hub)?;
     writable(files)?;
-    apply_changes(&hub, files, by, body.changes).await
+    apply_changes(&hub, files, by, body.changes, lease_ids(&headers)).await
 }
 
-/// Writes changes and reloads; see [`apply`].
+/// Writes changes and reloads; see [`apply`]. 423 if someone else is
+/// editing one of the files (`leases`: the edit leases the writer holds).
 async fn apply_changes(
     hub: &Hub,
     files: &ConfigFiles,
     by: String,
     changes: Vec<Change>,
+    leases: Vec<String>,
 ) -> Result<Response, ApiError> {
     let _guard = hub.config_lock.lock().await;
     let dir = files.dir.clone();
     let paths: Vec<String> = changes.iter().map(|c| c.path.clone()).collect();
+    if let Some(l) = hub.leases.get()
+        && let Err(holder) = l.check(&paths, &leases)
+    {
+        return Ok(locked(&holder));
+    }
     let check_dirs = files.check_dirs.clone();
     let applied = blocking(move || {
         files::apply(&dir, &changes).map(|l| with_missing_commands(l, &check_dirs))
@@ -587,4 +636,74 @@ async fn apply_changes(
         "diagnostics": problems(files, &loaded.warnings),
     }))
     .into_response())
+}
+
+/// Who is editing which object file.
+pub async fn locks(State(hub): Shared, user: User) -> Result<Response, ApiError> {
+    admin(&hub, &user)?;
+    files(&hub)?;
+    let locks = blocking(move || current_locks(&hub)).await?;
+    Ok(Json(json!({ "locks": locks })).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct LockBody {
+    /// The lease to renew; absent to take a new one.
+    lease: Option<String>,
+    /// Take the file over from whoever is editing it.
+    #[serde(default)]
+    force: bool,
+}
+
+/// Takes or renews the edit lease on a file (renew every 30 seconds; it
+/// lapses after 2 minutes). 423 with the holder if someone else is
+/// editing it, unless `force`.
+pub async fn lock(
+    State(hub): Shared,
+    user: User,
+    Path(path): Path<String>,
+    Json(body): Json<LockBody>,
+) -> Result<Response, ApiError> {
+    let by = admin(&hub, &user)?;
+    let files = files(&hub)?;
+    writable(files)?;
+    files::resolve(&files.dir, &path).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let p = path.clone();
+    let result = blocking(move || {
+        let leases = hub.leases.get().expect("set with the config files");
+        leases.acquire(&p, &by, body.lease.as_deref(), body.force)
+    })
+    .await?;
+    match result {
+        Ok(granted) => Ok(Json(json!({
+            "lease": granted.id,
+            "path": path,
+            "others": granted.others.iter().map(holder_json).collect::<Vec<_>>(),
+        }))
+        .into_response()),
+        Err(holder) => Ok(locked(&holder)),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct UnlockQuery {
+    lease: String,
+}
+
+/// Gives up an edit lease.
+pub async fn unlock(
+    State(hub): Shared,
+    user: User,
+    Path(path): Path<String>,
+    Query(q): Query<UnlockQuery>,
+) -> Result<Response, ApiError> {
+    admin(&hub, &user)?;
+    files(&hub)?;
+    blocking(move || {
+        if let Some(leases) = hub.leases.get() {
+            leases.release(&path, &q.lease);
+        }
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }

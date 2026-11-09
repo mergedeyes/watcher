@@ -409,3 +409,107 @@ async fn selector_preview() {
         "{err}"
     );
 }
+
+async fn call_leased(
+    hub: &Arc<Hub>,
+    method: &str,
+    uri: &str,
+    lease: &str,
+    body: Value,
+) -> StatusCode {
+    let req = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("x-watcher-lease", lease)
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    hub.clone().router().oneshot(req).await.unwrap().status()
+}
+
+#[tokio::test]
+async fn edit_locks() {
+    let s = setup("locks", ConfigMode::Hybrid);
+    let lock = "/api/v1/config/locks/hosts.toml";
+    let (status, a) = call(&s.hub, "PUT", lock, Some(json!({}))).await;
+    assert_eq!(status, StatusCode::OK);
+    let a = a["lease"].as_str().unwrap().to_string();
+    assert!(s.dir.join(".hosts.toml.watcher-lock").exists());
+
+    // Someone else: refused, with who has it.
+    let (status, held) = call(&s.hub, "PUT", lock, Some(json!({}))).await;
+    assert_eq!(status, StatusCode::LOCKED);
+    assert_eq!(held["holder"]["via"], "web");
+    assert_eq!(
+        held["error"],
+        "local user is editing hosts.toml in the web UI"
+    );
+    let (_, file) = call(&s.hub, "GET", "/api/v1/config/files/hosts.toml", None).await;
+    let change = json!({ "changes": [{
+        "path": "hosts.toml",
+        "base": file["hash"],
+        "text": format!("{HOSTS}\n# edited\n"),
+    }] });
+    let (status, _) = call(&s.hub, "POST", "/api/v1/config/apply", Some(change.clone())).await;
+    assert_eq!(status, StatusCode::LOCKED);
+    let (status, _) = call(&s.hub, "DELETE", "/api/v1/config/objects/host/web01", None).await;
+    assert_eq!(status, StatusCode::LOCKED);
+    // The holder writes.
+    let status = call_leased(&s.hub, "POST", "/api/v1/config/apply", &a, change).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Renewing keeps the lease; taking over ends it.
+    let (status, _) = call(&s.hub, "PUT", lock, Some(json!({ "lease": a }))).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, b) = call(&s.hub, "PUT", lock, Some(json!({ "force": true }))).await;
+    assert_eq!(status, StatusCode::OK);
+    let b = b["lease"].as_str().unwrap().to_string();
+    let (status, _) = call(&s.hub, "PUT", lock, Some(json!({ "lease": a }))).await;
+    assert_eq!(status, StatusCode::LOCKED);
+    let (_, locks) = call(&s.hub, "GET", "/api/v1/config/locks", None).await;
+    assert_eq!(locks["locks"].as_array().unwrap().len(), 1);
+    let (_, overview) = call(&s.hub, "GET", "/api/v1/config", None).await;
+    assert_eq!(overview["locks"][0]["path"], "hosts.toml");
+
+    let (status, _) = call(&s.hub, "DELETE", &format!("{lock}?lease={b}"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(!s.dir.join(".hosts.toml.watcher-lock").exists());
+    let (_, locks) = call(&s.hub, "GET", "/api/v1/config/locks", None).await;
+    assert_eq!(locks["locks"], json!([]));
+}
+
+#[tokio::test]
+async fn files_open_in_an_editor() {
+    let s = setup("editor", ConfigMode::Hybrid);
+    // A vim swap file of a running process (this one).
+    let mut swap = vec![0u8; 1024];
+    swap[..9].copy_from_slice(b"b0VIM 9.1");
+    swap[24..28].copy_from_slice(&std::process::id().to_le_bytes());
+    swap[28..32].copy_from_slice(b"anna");
+    let host = watcher_config::locks::local_host().unwrap_or_default();
+    swap[68..68 + host.len()].copy_from_slice(host.as_bytes());
+    std::fs::write(s.dir.join(".hosts.toml.swp"), swap).unwrap();
+
+    let (_, locks) = call(&s.hub, "GET", "/api/v1/config/locks", None).await;
+    assert_eq!(locks["locks"][0]["via"], "vim");
+    assert_eq!(locks["locks"][0]["by"], "anna");
+    let lock = "/api/v1/config/locks/hosts.toml";
+    let (status, held) = call(&s.hub, "PUT", lock, Some(json!({}))).await;
+    assert_eq!(status, StatusCode::LOCKED);
+    assert_eq!(held["error"], "anna is editing hosts.toml in vim");
+    let (status, _) = call(&s.hub, "DELETE", "/api/v1/config/objects/host/web01", None).await;
+    assert_eq!(status, StatusCode::LOCKED);
+    // Taken over: writes with the lease go through, vim is still reported.
+    let (status, taken) = call(&s.hub, "PUT", lock, Some(json!({ "force": true }))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(taken["others"][0]["via"], "vim");
+    let req = Request::builder()
+        .method("DELETE")
+        .uri("/api/v1/config/objects/check/http")
+        .header("x-watcher-lease", taken["lease"].as_str().unwrap())
+        .body(Body::empty())
+        .unwrap();
+    let status = s.hub.clone().router().oneshot(req).await.unwrap().status();
+    // Past the lock: refused only because the service still uses the check.
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
