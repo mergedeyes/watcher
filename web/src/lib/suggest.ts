@@ -4,8 +4,8 @@
 import type { ConfigObject, Kind } from './api.ts';
 import type { Field } from './schema.ts';
 
-/** Built-in checks (crates/exec/src/builtin.rs). */
-const BUILTIN_CHECKS = ['ping'];
+/** Built-in checks (crates/exec/src/builtin/mod.rs). */
+const BUILTIN_CHECKS = ['ping', 'tcp', 'http', 'dns', 'tls'];
 
 export interface Option {
 	value: string;
