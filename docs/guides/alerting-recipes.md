@@ -189,7 +189,8 @@ on = ["problem", "recovery"]
 `teams`, `telegram` or any other [channel](notifications.md#chat-push-and-paging-services)
 works the same way. For paging, a contact with `pagerduty` in place of
 `email` opens an incident for each critical problem and resolves it on
-recovery.
+recovery; a contact with `jira` opens a ticket instead (see
+[Jira](notifications.md#jira)).
 
 ## Each team gets its own services
 
