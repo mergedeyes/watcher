@@ -172,7 +172,7 @@ A contact gets the same message on all its channels, so use two contacts:
 
 ```toml
 [contact.ops-chat]
-webhook = "https://chat.example.com/hooks/watcher"
+slack = "https://hooks.slack.com/services/T0000/B0000/XXXXXXXX"
 
 [contact.ops-mail]
 email = "ops@example.com"
@@ -185,6 +185,11 @@ contacts = ["ops-mail"]
 states = ["critical", "down"]
 on = ["problem", "recovery"]
 ```
+
+`teams`, `telegram` or any other [channel](notifications.md#chat-push-and-paging-services)
+works the same way. For paging, a contact with `pagerduty` in place of
+`email` opens an incident for each critical problem and resolves it on
+recovery.
 
 ## Each team gets its own services
 
@@ -277,7 +282,7 @@ watcher config explain web01/http
       └─ contact lead                                       contacts.toml:1
 ```
 
-Whether a contact's email or webhook works:
+Whether a contact's channels work:
 
 ```sh
 watcher notify test lead
@@ -298,8 +303,3 @@ Watcher reads from the notification log who already got which problem:
 
 Without a database, open problems start their time again after a restart,
 and escalations sent before it get no RECOVERY.
-
-## Not possible yet
-
-- **More channels** like Slack, Teams or PagerDuty directly. Use a
-  webhook to a small adapter for now.

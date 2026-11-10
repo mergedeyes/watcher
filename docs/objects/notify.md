@@ -552,5 +552,5 @@ they are usually typos.
 
 - [contact](contact.md), [contactgroup](contactgroup.md)
 - [timeperiod](timeperiod.md): when rules with `period` apply
-- [Notifications](../guides/notifications.md): SMTP, message format, webhooks
+- [Notifications](../guides/notifications.md): SMTP, message format, channels
 - [Alerting recipes](../guides/alerting-recipes.md): complete setups for common cases
