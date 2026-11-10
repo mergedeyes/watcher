@@ -196,6 +196,10 @@ host_check = "ping"
 
     const MIN: Duration = Duration::from_secs(60);
 
+    fn contact<'c>(config: &'c Config, name: &str) -> &'c Contact {
+        config.contacts.iter().find(|c| c.name == name).unwrap()
+    }
+
     /// Who gets a repeat at `now`.
     fn names(
         r: &mut Repeats,
@@ -226,7 +230,7 @@ repeat = "30m"
         let p = [problem("web01/disk", State::Critical, t0)];
         let mut r = Repeats::default();
         assert!(names(&mut r, &[], &config, t0).is_empty());
-        let ops = &config.contacts[0];
+        let ops = contact(&config, "ops");
         r.sent("web01/disk", t0, &[ops], t0);
         assert!(names(&mut r, &p, &config, t0 + 29 * MIN).is_empty());
         assert_eq!(
