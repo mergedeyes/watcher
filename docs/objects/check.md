@@ -461,7 +461,11 @@ Requests a URL, like `check_http`.
 | Var | Default | Description |
 |---|---|---|
 | `url` | `/` | A full URL (`https://www.example.com/login`), or a path on the host's address (`/health`). |
-| `method` | `GET` | `GET`, `HEAD`, `POST`, ... (sent without a body). |
+| `method` | `GET` | `GET`, `HEAD`, `POST`, `PUT`, ... |
+| `headers` | | Request headers, as a table: `headers = { Accept = "application/json" }`. A `Host` header asks for a different site on the same address; `User-Agent` replaces Watcher's. |
+| `body` | | Text to send as the request body, for example JSON for a `POST`. Set the matching `Content-Type` in `headers`. |
+| `user` | | Log in with HTTP basic auth as this user. |
+| `password` | | The password for `user`. |
 | `status` | | Status codes that are OK, for example `200` or `200,301-302`. Others give CRITICAL. Without it: 2xx and 3xx are OK, 4xx WARNING, 5xx CRITICAL. |
 | `content` | | Text the body must contain. Only the first MiB of the body is searched. |
 | `follow` | `false` | Follow redirects (up to 10). Without it, a redirect is the answer. |
@@ -472,6 +476,26 @@ Requests a URL, like `check_http`.
 Certificates are checked against the system's trust store, so internal
 CAs that the system trusts work. Proxy settings from the environment
 (`HTTP_PROXY`) are not used. Metrics: `time` (s) and `size` (bytes).
+
+An API that needs a token and a JSON request:
+
+```toml
+[service.api]
+check = "http"
+vars.url = "https://api.example.com/v1/status"
+vars.method = "POST"
+vars.body = '{"probe": true}'
+vars.headers = { Content-Type = "application/json", Authorization = "Bearer $api_token$" }
+vars.api_token = "abc123"
+vars.content = '"ok":true'
+```
+
+Headers from the check, the service and the host service are merged by
+name, so a check can set `Accept` and a service add its own token. The
+command shown in the web UI leaves out the password and the values of
+headers that look like credentials (names with `auth`, `token`, `key`,
+`cookie`, ...). They are still readable in the config files and the
+Config Tree.
 
 ```
 HTTP OK - HTTP/2.0 200 OK, 577 bytes in 87 ms
