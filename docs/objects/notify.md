@@ -24,6 +24,10 @@ How the rules work together:
 Notify rules are written with double brackets, `[[notify]]`, because each
 one is an entry in a list.
 
+For complete setups (quiet start, reminders, escalation ladders, one
+team per service, maintenance windows), see
+[Alerting recipes](../guides/alerting-recipes.md).
+
 ## Fields
 
 | Field | Default | Description |
@@ -517,3 +521,4 @@ they are usually typos.
 
 - [contact](contact.md), [contactgroup](contactgroup.md)
 - [Notifications](../guides/notifications.md): SMTP, message format, webhooks
+- [Alerting recipes](../guides/alerting-recipes.md): complete setups for common cases
