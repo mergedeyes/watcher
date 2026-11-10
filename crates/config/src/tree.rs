@@ -331,10 +331,14 @@ impl<'a> Builder<'a> {
             .into_iter()
             .map(|(rule, why)| {
                 let mut n = self.rule_link(rule);
-                n.detail = Some(match rule.repeat {
-                    Some(every) => format!("matched: {why}; repeats every {}", duration(every)),
-                    None => format!("matched: {why}"),
-                });
+                let mut detail = format!("matched: {why}");
+                if let Some(after) = rule.after {
+                    detail += &format!("; escalates after {}", duration(after));
+                }
+                if let Some(every) = rule.repeat {
+                    detail += &format!("; repeats every {}", duration(every));
+                }
+                n.detail = Some(detail);
                 n.children = self.rule_targets(rule);
                 n
             })

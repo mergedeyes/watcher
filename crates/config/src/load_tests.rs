@@ -358,6 +358,93 @@ repeat = "soon"
 }
 
 #[test]
+fn notify_after_escalates() {
+    let base = r#"
+[contact.ops]
+[contact.boss]
+
+[[host]]
+name = "a"
+  [host.service.disk]
+  command = "true"
+"#;
+    let config = ok(&[(
+        "a.toml",
+        &format!(
+            r#"{base}
+[[notify]]
+contacts = ["ops"]
+repeat = "4h"
+
+[[notify]]
+contacts = ["boss"]
+states = ["critical"]
+after = "30m"
+repeat = "1h"
+
+[[notify]]
+contacts = ["ops"]
+after = "0"
+"#
+        ),
+    )]);
+    assert_eq!(config.notify[1].after, Some(Duration::from_secs(1800)));
+    assert_eq!(config.notify[2].after, None);
+    let s = config.service("a/disk").unwrap();
+    let names =
+        |cs: Vec<&crate::Contact>| -> Vec<String> { cs.iter().map(|c| c.name.clone()).collect() };
+    // Not told at once, and their repeat isn't a plain repeat.
+    assert_eq!(
+        names(config.recipients(s, false, Alert::Problem, "critical")),
+        ["ops"]
+    );
+    assert_eq!(config.repeat_recipients(s, false, "critical").len(), 1);
+    let esc: Vec<(String, u64, Option<u64>)> = config
+        .escalations(s, false, "critical")
+        .into_iter()
+        .map(|(c, a, r)| {
+            (
+                c.name.clone(),
+                a.as_secs() / 60,
+                r.map(|r| r.as_secs() / 60),
+            )
+        })
+        .collect();
+    assert_eq!(esc, [("boss".into(), 30, Some(60))]);
+    assert!(config.escalations(s, false, "warning").is_empty());
+    assert_eq!(
+        names(config.escalation_recoveries(s, false, "critical")),
+        ["boss"]
+    );
+
+    let (_, diags) = compile(&[(
+        "a.toml",
+        &format!(
+            r#"{base}
+[[notify]]
+contacts = ["ops"]
+on = ["recovery"]
+after = "1h"
+
+[[notify]]
+contacts = ["ops"]
+on = ["problem", "flapping"]
+after = "1h"
+"#
+        ),
+    )]);
+    let text = messages(&diags).join("\n");
+    assert!(
+        text.contains("after: escalates problems, but on doesn't include problem"),
+        "{text}"
+    );
+    assert!(
+        text.contains("after: escalations take only problem and recovery"),
+        "{text}"
+    );
+}
+
+#[test]
 fn precedence_host_over_group_over_service_over_check() {
     let config = ok(&[(
         "a.toml",

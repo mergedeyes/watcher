@@ -188,11 +188,13 @@ fn about(
     }
 }
 
-/// Decides whether `event` notifies, and whom.
+/// Decides whether `event` notifies, and whom. `got` are the contacts that
+/// got a PROBLEM about it: escalation rules tell only them of a recovery.
 pub fn decide<'a>(
     event: &Event,
     config: &'a Config,
     public_url: Option<&str>,
+    got: &[String],
 ) -> Option<(Notification, Vec<&'a Contact>)> {
     let service = config.service(&event.id)?;
     let host_check = config.is_host_check(service);
@@ -239,12 +241,15 @@ pub fn decide<'a>(
         Kind::FlappingStart | Kind::FlappingStop | Kind::Test => (Alert::Flapping, to),
         Kind::DowntimeStart | Kind::DowntimeEnd => (Alert::Downtime, to),
     };
-    let contacts = config.recipients(
-        service,
-        host_check,
-        alert,
-        state_name(rule_state, host_check),
-    );
+    let rule_state = state_name(rule_state, host_check);
+    let mut contacts = config.recipients(service, host_check, alert, rule_state);
+    if alert == Alert::Recovery {
+        for c in config.escalation_recoveries(service, host_check, rule_state) {
+            if got.contains(&c.name) && !contacts.iter().any(|o| o.name == c.name) {
+                contacts.push(c);
+            }
+        }
+    }
     if contacts.is_empty() {
         return None;
     }
@@ -464,7 +469,7 @@ pub async fn run(
         let url = notifier.public_url();
         let decided: Vec<(Notification, Vec<&Contact>)> = match &message {
             Message::Result(event) => {
-                let decided = decide(event, &config, url);
+                let decided = decide(event, &config, url, &repeats.got(&event.id));
                 match &decided {
                     Some((n, contacts)) if n.kind == Kind::Problem => {
                         let since = event.state.last_hard_change;
@@ -518,12 +523,7 @@ mod tests {
     use watcher_core::{Format, RawOutput, ServiceState, Termination, evaluate};
 
     fn config() -> Config {
-        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("watcher-notify-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("c.toml"),
+        load(
             r#"
 [contact.ops]
 email = "ops@example.com"
@@ -551,7 +551,14 @@ host_check = "ping"
   command = "true"
 "#,
         )
-        .unwrap();
+    }
+
+    fn load(text: &str) -> Config {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("watcher-notify-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("c.toml"), text).unwrap();
         let config = watcher_config::load_dir(&dir).unwrap().config;
         std::fs::remove_dir_all(&dir).unwrap();
         config
@@ -609,7 +616,7 @@ host_check = "ping"
         );
         let decided: Vec<_> = evs
             .iter()
-            .map(|e| decide(e, &config, Some("https://w.example/")).map(|(n, c)| (n, c.len())))
+            .map(|e| decide(e, &config, Some("https://w.example/"), &[]).map(|(n, c)| (n, c.len())))
             .collect();
         // First OK, then two soft failures: nothing.
         assert!(decided[..3].iter().all(Option::is_none));
@@ -647,13 +654,49 @@ host_check = "ping"
     }
 
     #[test]
+    fn escalation_rules_wait_and_recover_only_who_got_the_problem() {
+        let config = load(
+            r#"
+[contact.ops]
+[contact.boss]
+
+[[notify]]
+contacts = ["ops"]
+
+[[notify]]
+contacts = ["boss"]
+after = "1h"
+
+[[host]]
+name = "h"
+  [host.service.disk]
+  command = "true"
+"#,
+        );
+        let evs = events(
+            "h/disk",
+            &[(0, "OK"), (2, "CRIT"), (2, "CRIT"), (2, "CRIT"), (0, "OK")],
+        );
+        let to = |e: &Event, got: &[String]| -> Vec<String> {
+            decide(e, &config, None, got)
+                .map(|(_, c)| c.iter().map(|c| c.name.clone()).collect())
+                .unwrap_or_default()
+        };
+        // The problem goes to ops only; boss waits for the escalation.
+        assert_eq!(to(&evs[3], &[]), ["ops"]);
+        // The recovery reaches boss only if boss got the problem.
+        assert_eq!(to(&evs[4], &["ops".into()]), ["ops"]);
+        assert_eq!(to(&evs[4], &["ops".into(), "boss".into()]), ["ops", "boss"]);
+    }
+
+    #[test]
     fn soft_recovery_and_no_contacts_stay_quiet() {
         let config = config();
         let evs = events("web 01/disk", &[(0, "OK"), (2, "CRIT"), (0, "OK")]);
-        assert!(evs.iter().all(|e| decide(e, &config, None).is_none()));
+        assert!(evs.iter().all(|e| decide(e, &config, None, &[]).is_none()));
         let evs = events("web 01/quiet", &[(2, "CRIT"), (2, "CRIT"), (2, "CRIT")]);
         assert!(evs[2].change.unwrap().hard);
-        assert!(decide(&evs[2], &config, None).is_none());
+        assert!(decide(&evs[2], &config, None, &[]).is_none());
     }
 
     #[test]
@@ -662,7 +705,7 @@ host_check = "ping"
         let sent = |results: &[(i32, &str)]| -> Vec<_> {
             events("router/ping", results)
                 .iter()
-                .filter_map(|e| decide(e, &config, None))
+                .filter_map(|e| decide(e, &config, None, &[]))
                 .map(|(n, _)| {
                     (
                         n.kind,
@@ -711,7 +754,7 @@ host_check = "ping"
         let evs = events("web 01/disk", &results);
         let kinds: Vec<Kind> = evs
             .iter()
-            .filter_map(|e| decide(e, &config, None))
+            .filter_map(|e| decide(e, &config, None, &[]))
             .map(|(n, _)| n.kind)
             .collect();
         // Hard problems and recoveries until flapping starts, then nothing
@@ -735,7 +778,7 @@ host_check = "ping"
             "web 01/disk",
             &[(2, "CRIT | used=95%"), (2, "CRIT"), (2, "CRIT")],
         );
-        let (n, _) = decide(&evs[2], &config, None).unwrap();
+        let (n, _) = decide(&evs[2], &config, None, &[]).unwrap();
         let json = serde_json::to_value(&n).unwrap();
         assert_eq!(json["kind"], "problem");
         assert_eq!(json["state"], "critical");
