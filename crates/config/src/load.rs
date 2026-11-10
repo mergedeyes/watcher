@@ -156,6 +156,8 @@ pub(crate) struct RawFile {
     #[serde(default)]
     pub downtimegroup: BTreeMap<String, Spanned<Table>>,
     #[serde(default)]
+    pub timeperiod: BTreeMap<String, Spanned<Table>>,
+    #[serde(default)]
     pub notify: Vec<Spanned<Table>>,
     #[serde(default)]
     pub sink: Vec<Spanned<Table>>,
@@ -219,6 +221,7 @@ struct RawObjects {
     contacts: Vec<RawObject>,
     contactgroups: Vec<RawObject>,
     downtimegroups: Vec<RawObject>,
+    timeperiods: Vec<RawObject>,
     notify: Vec<RawObject>,
     sinks: Vec<RawObject>,
 }
@@ -265,6 +268,7 @@ impl RawObjects {
         keyed(&mut self.contacts, file.contact);
         keyed(&mut self.contactgroups, file.contactgroup);
         keyed(&mut self.downtimegroups, file.downtimegroup);
+        keyed(&mut self.timeperiods, file.timeperiod);
         for (i, t) in file.host.into_iter().enumerate() {
             let table = t.get_ref();
             let name = table
@@ -326,6 +330,7 @@ impl RawObjects {
         c.compile_services(&mut config, &hosts);
         c.compile_downtimegroups(&mut config);
         c.compile_contacts(&mut config);
+        c.compile_timeperiods(&mut config);
         c.compile_notify(&mut config);
         c.compile_sinks(&mut config);
         c.check_references(&config);
@@ -1764,6 +1769,57 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    fn compile_timeperiods(&mut self, config: &mut Config) {
+        for raw in &self.raw.timeperiods {
+            if self.duplicate("timeperiod", &raw.name, &raw.origin, &self.raw.timeperiods) {
+                continue;
+            }
+            let what = format!("timeperiod {:?}", raw.name);
+            if let Err(msg) = valid_name(&raw.name) {
+                self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
+                continue;
+            }
+            let def: TimePeriodDef =
+                match TimePeriodDef::deserialize(Value::Table(raw.table.clone())) {
+                    Ok(d) => d,
+                    Err(err) => {
+                        self.sink.error(
+                            Some(&raw.origin),
+                            format!("{what}: {}", err.message().trim()),
+                        );
+                        continue;
+                    }
+                };
+            let before = self.sink.diagnostics.len();
+            if def.schedule.is_empty() {
+                // Without windows, its rules would never notify.
+                self.sink.error(
+                    Some(&raw.origin),
+                    format!("{what}: needs a schedule, e.g. [{{ days = [\"mon\"], from = \"08:00\", to = \"18:00\" }}]"),
+                );
+            }
+            let mut schedule = Vec::new();
+            for (i, entry) in def.schedule.iter().enumerate() {
+                match crate::Window::parse(entry) {
+                    Ok(w) => schedule.push(w),
+                    Err(e) => self.sink.error(
+                        Some(&raw.origin),
+                        format!("{what}: schedule {}: {e}", i + 1),
+                    ),
+                }
+            }
+            if self.sink.diagnostics.len() > before {
+                continue;
+            }
+            config.timeperiods.push(crate::TimePeriod {
+                name: raw.name.clone(),
+                title: def.title,
+                schedule,
+                origin: raw.origin.clone(),
+            });
+        }
+    }
+
     /// Warnings for objects used by nothing and selector names that exist
     /// nowhere (likely typos).
     fn check_references(&mut self, config: &Config) {
@@ -1800,6 +1856,18 @@ impl<'a> Compiler<'a> {
                 self.sink.warning(
                     Some(&g.origin),
                     format!("hostgroup {:?} has no hosts", g.name),
+                );
+            }
+        }
+        for p in &config.timeperiods {
+            if !config
+                .notify
+                .iter()
+                .any(|r| r.period.as_ref() == Some(&p.name))
+            {
+                self.sink.warning(
+                    Some(&p.origin),
+                    format!("timeperiod {:?} is used by no notify rule", p.name),
                 );
             }
         }
@@ -2141,6 +2209,11 @@ impl<'a> Compiler<'a> {
             if after.is_some() && (on.flapping || on.downtime) && def.on.is_some() {
                 error("after: escalations take only problem and recovery in on".into());
             }
+            if let Some(p) = &def.period
+                && config.timeperiod(p).is_none()
+            {
+                error(format!("unknown timeperiod {p:?}"));
+            }
             let hosts = def.hosts.as_ref().and_then(|v| {
                 HostSelector::parse(v)
                     .map_err(|e| error(format!("hosts: {e}")))
@@ -2164,6 +2237,7 @@ impl<'a> Compiler<'a> {
                 on,
                 repeat,
                 after,
+                period: def.period,
                 enabled: def.enabled,
                 origin: raw.origin.clone(),
             });
@@ -2500,6 +2574,14 @@ struct DowntimeGroupDef {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct TimePeriodDef {
+    title: Option<String>,
+    #[serde(default)]
+    schedule: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ContactGroupDef {
     title: Option<String>,
     #[serde(default)]
@@ -2533,6 +2615,7 @@ struct NotifyDef {
     repeat: Option<Duration>,
     #[serde(default, deserialize_with = "duration")]
     after: Option<Duration>,
+    period: Option<String>,
     #[serde(default = "yes")]
     enabled: bool,
 }

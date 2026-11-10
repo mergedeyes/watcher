@@ -304,7 +304,7 @@ Admins only.
 | `DELETE config/locks/{path}?lease=…` | Give the lease up. |
 
 Kinds: `check`, `service`, `host`, `hostgroup`, `servicegroup`, `contact`,
-`contactgroup`, `downtimegroup`, `notify`, `sink`.
+`contactgroup`, `downtimegroup`, `timeperiod`, `notify`, `sink`.
 
 A notify rule without a `name` is addressed as `@path:line`, for example
 `@ui/notify.toml:4` (URL-encoded in paths), the way `GET config/objects`

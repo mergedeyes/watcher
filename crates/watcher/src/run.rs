@@ -164,12 +164,19 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
         }
         None => (Repeats::default(), None),
     };
+    // Downtime windows and time periods use the same zone.
+    let tz = match &timezone {
+        // Checked when watcher.toml was loaded.
+        Some(name) => jiff::tz::TimeZone::get(name)?,
+        None => jiff::tz::TimeZone::system(),
+    };
     tokio::spawn(watcher_notify::run(
         notifier.clone(),
         config_rx,
         notify_rx,
         repeats,
         log,
+        tz.clone(),
     ));
 
     let initial = restored
@@ -214,10 +221,7 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
     if let Some(name) = instance {
         hub.set_instance_name(name);
     }
-    if let Some(name) = &timezone {
-        // Checked when watcher.toml was loaded.
-        hub.set_timezone(jiff::tz::TimeZone::get(name)?);
-    }
+    hub.set_timezone(tz);
     // Acknowledgements, downtimes, muted and disabled checks.
     hub.load_ops()
         .await

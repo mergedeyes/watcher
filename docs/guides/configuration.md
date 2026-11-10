@@ -47,6 +47,7 @@ Changes to `watcher.toml` itself need a restart.
 | [contactgroup](../objects/contactgroup.md) | `[contactgroup.<name>]` | A set of contacts |
 | [notify](../objects/notify.md) | `[[notify]]` | A rule: which contacts get which notifications |
 | [downtimegroup](../objects/downtimegroup.md) | `[downtimegroup.<name>]` | Hosts with recurring downtime windows |
+| [timeperiod](../objects/timeperiod.md) | `[timeperiod.<name>]` | When notify rules apply, for example business hours |
 | [sink](../objects/sink.md) | `[[sink]]` | A second database that receives a copy of all results |
 
 ## How a host gets its services

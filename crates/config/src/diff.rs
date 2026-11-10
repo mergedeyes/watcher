@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 pub struct Changes {
     pub hosts: Delta,
     pub services: Delta,
-    /// Host, service, contact and downtime groups, as `hostgroup x`, ...
+    /// Host, service, contact and downtime groups and time periods, as
+    /// `hostgroup x`, ...
     pub groups: Delta,
     pub contacts: Delta,
     /// Notify rules, by name or place.
@@ -61,6 +62,11 @@ pub fn changes(old: &Config, new: &Config) -> Changes {
             let mut g = g.clone();
             g.origin = Default::default();
             (format!("downtimegroup {}", g.name), format!("{g:?}"))
+        }));
+        out.extend(c.timeperiods.iter().map(|p| {
+            let mut p = p.clone();
+            p.origin = Default::default();
+            (format!("timeperiod {}", p.name), format!("{p:?}"))
         }));
         out
     };
@@ -116,6 +122,9 @@ fn same_rule(a: &NotifyRule, b: &NotifyRule) -> bool {
         && a.contact_groups == b.contact_groups
         && a.states == b.states
         && a.on == b.on
+        && a.repeat == b.repeat
+        && a.after == b.after
+        && a.period == b.period
         && a.enabled == b.enabled
         && a.hosts.is_some() == b.hosts.is_some()
         && a.services.is_some() == b.services.is_some()
@@ -207,5 +216,22 @@ name = "c"
         assert_eq!(c.services.changed, ["a/ping"]);
         assert_eq!(c.groups.added, ["hostgroup all"]);
         assert!(changes(&new, &new).is_empty());
+    }
+
+    #[test]
+    fn notify_rule_timing_is_a_change() {
+        let rule = |extra: &str| {
+            config(&format!(
+                "[contact.ops]\n[[notify]]\nname = \"r\"\ncontacts = [\"ops\"]\n{extra}"
+            ))
+        };
+        let plain = rule("");
+        for extra in ["repeat = \"1h\"", "after = \"30m\""] {
+            assert_eq!(
+                changes(&plain, &rule(extra)).notify.changed,
+                ["r"],
+                "{extra}"
+            );
+        }
     }
 }

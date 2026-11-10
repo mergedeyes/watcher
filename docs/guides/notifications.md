@@ -238,7 +238,24 @@ after = "30m"
 Acknowledging the problem in time stops the escalation. Details:
 [after](../objects/notify.md#after).
 
-For complete setups (quiet start, escalation ladders, one team per
-service, maintenance windows), see [Alerting recipes](alerting-recipes.md).
+## Business hours and on-call
+
+A rule with `period` only notifies inside a [time period](../objects/timeperiod.md).
+Problems that are still open when it begins are sent then:
+
+```toml
+[timeperiod.workhours]
+schedule = [{ days = ["mon", "tue", "wed", "thu", "fri"], from = "08:00", to = "18:00" }]
+
+[[notify]]
+contact_groups = ["team"]
+period = "workhours"
+```
+
+Details: [period](../objects/notify.md#period).
+
+For complete setups (quiet start, escalation ladders, on-call at night,
+one team per service, maintenance windows), see
+[Alerting recipes](alerting-recipes.md).
 
 *Not yet:* more channels.

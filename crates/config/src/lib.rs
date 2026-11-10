@@ -26,6 +26,7 @@ pub use bootstrap::{
 };
 pub use check_dirs::CheckDirs;
 pub use expr::{Expr, ExprError};
+pub use jiff::tz::TimeZone;
 pub use load::{load_dir, load_dir_with};
 pub use schedule::Window;
 pub use select::{HostSelector, ServiceSelector};
@@ -35,7 +36,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use watcher_core::{FlapThresholds, Format, State, ThresholdSpec};
 use watcher_exec::CommandLine;
 
@@ -307,6 +308,54 @@ pub struct Group {
     pub origin: Origin,
 }
 
+/// Times in which notify rules apply, in local time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimePeriod {
+    pub name: String,
+    pub title: Option<String>,
+    pub schedule: Vec<Window>,
+    pub origin: Origin,
+}
+
+impl TimePeriod {
+    pub fn active(&self, at: At<'_>) -> bool {
+        self.schedule
+            .iter()
+            .any(|w| w.active(at.now, at.tz).is_some())
+    }
+
+    /// The first moment from `t` on that is in the period, looking about a
+    /// week ahead; `None` if there is none in that time.
+    pub fn from(&self, t: SystemTime, tz: &TimeZone) -> Option<SystemTime> {
+        if self.active(At { now: t, tz }) {
+            return Some(t);
+        }
+        self.schedule
+            .iter()
+            .filter_map(|w| w.next(t, tz))
+            .map(|(start, _)| start)
+            .min()
+    }
+}
+
+/// A moment in local time: what time periods are checked against.
+#[derive(Debug, Clone, Copy)]
+pub struct At<'a> {
+    pub now: SystemTime,
+    pub tz: &'a TimeZone,
+}
+
+/// A rule that sends problems later than when they happen, for one of its
+/// contacts: see [`Config::followups`].
+#[derive(Debug, Clone, Copy)]
+pub struct Followup<'a> {
+    pub contact: &'a Contact,
+    /// Escalations: how long the problem must be open first.
+    pub after: Option<Duration>,
+    pub repeat: Option<Duration>,
+    pub period: Option<&'a TimePeriod>,
+}
+
 /// Hosts that share planned downtimes: listed by name or pattern, or in
 /// a host group.
 #[derive(Debug, Clone, PartialEq)]
@@ -370,11 +419,21 @@ pub struct NotifyRule {
     /// open this long (and not held back), recoveries only if its
     /// contacts got the problem.
     pub after: Option<Duration>,
+    /// The time period the rule applies in. Problems from outside it are
+    /// sent when it begins; recoveries only to contacts who got the problem.
+    pub period: Option<String>,
     pub enabled: bool,
     pub origin: Origin,
 }
 
 impl NotifyRule {
+    /// Whether the rule sends problems later than when they happen (an
+    /// escalation, or a time period), so its contacts get recoveries only
+    /// if they got the problem.
+    pub fn follows_up(&self) -> bool {
+        self.after.is_some() || self.period.is_some()
+    }
+
     /// The name, or where it is defined.
     pub fn label(&self) -> String {
         match &self.name {
@@ -453,6 +512,7 @@ pub struct Config {
     pub contacts: Vec<Contact>,
     pub contactgroups: Vec<Group>,
     pub downtimegroups: Vec<DowntimeGroup>,
+    pub timeperiods: Vec<TimePeriod>,
     pub notify: Vec<NotifyRule>,
     pub sinks: Vec<Sink>,
     /// Lookups by name, built on first use: the lists must be complete by
@@ -571,21 +631,40 @@ impl Config {
             .collect()
     }
 
-    /// Who gets an alert: the contacts of every matching rule that takes
-    /// it, each once. `state` is the state reached (for a recovery, the
-    /// problem state it recovers from), as `warning`, `down`, ...
-    /// Escalations (rules with `after`) are left out: see
-    /// [`Config::escalations`] and [`Config::escalation_recoveries`].
+    /// The time period named `name`.
+    pub fn timeperiod(&self, name: &str) -> Option<&TimePeriod> {
+        self.timeperiods.iter().find(|p| p.name == name)
+    }
+
+    /// Whether `rule` applies at `at`: always without a time period, and
+    /// when `at` is `None` (to show who could be notified at all).
+    fn rule_active(&self, rule: &NotifyRule, at: Option<At<'_>>) -> bool {
+        match (&rule.period, at) {
+            (Some(name), Some(at)) => self.timeperiod(name).is_some_and(|p| p.active(at)),
+            _ => true,
+        }
+    }
+
+    /// Who gets an alert now (`at`): the contacts of every matching rule
+    /// that takes it, each once. `state` is the state reached (for a
+    /// recovery, the problem state it recovers from), as `warning`,
+    /// `down`, ... Escalations (rules with `after`) are left out, and
+    /// rules with a time period apply only in it and give no recoveries:
+    /// see [`Config::followups`] and [`Config::followup_recoveries`].
     pub fn recipients(
         &self,
         service: &Service,
         host_alert: bool,
         alert: Alert,
         state: &str,
+        at: Option<At<'_>>,
     ) -> Vec<&Contact> {
         let mut names: Vec<&str> = Vec::new();
         for (rule, _) in self.matching_rules(service, host_alert) {
-            if rule.after.is_some() {
+            if rule.after.is_some()
+                || (rule.period.is_some() && alert == Alert::Recovery)
+                || !self.rule_active(rule, at)
+            {
                 continue;
             }
             let takes = match alert {
@@ -603,7 +682,7 @@ impl Config {
 
     /// Who gets a problem in `state` again while it lasts, and how often:
     /// the shortest `repeat` of the rules that give it to them (not
-    /// counting escalations).
+    /// counting [`Config::followups`]).
     pub fn repeat_recipients(
         &self,
         service: &Service,
@@ -612,7 +691,7 @@ impl Config {
     ) -> Vec<(&Contact, Duration)> {
         let mut out: Vec<(&Contact, Duration)> = Vec::new();
         for (rule, _) in self.matching_rules(service, host_alert) {
-            let Some(every) = rule.repeat.filter(|_| rule.after.is_none()) else {
+            let Some(every) = rule.repeat.filter(|_| !rule.follows_up()) else {
                 continue;
             };
             if !rule.on.problem || !rule.takes_state(state) {
@@ -628,31 +707,39 @@ impl Config {
         out
     }
 
-    /// Who gets a problem in `state` once it has been open for a while:
-    /// per escalation rule that takes it and contact, the rule's `after`
-    /// and `repeat`.
-    pub fn escalations(
-        &self,
-        service: &Service,
-        host_alert: bool,
-        state: &str,
-    ) -> Vec<(&Contact, Duration, Option<Duration>)> {
+    /// Who gets a problem in `state` later than when it happened: per
+    /// contact of each escalation rule (`after`) or rule with a time
+    /// period that takes it.
+    pub fn followups(&self, service: &Service, host_alert: bool, state: &str) -> Vec<Followup<'_>> {
         let mut out = Vec::new();
         for (rule, _) in self.matching_rules(service, host_alert) {
-            let Some(after) = rule.after else { continue };
-            if !rule.on.problem || !rule.takes_state(state) {
+            if !rule.follows_up() || !rule.on.problem || !rule.takes_state(state) {
                 continue;
             }
+            let period = match &rule.period {
+                Some(name) => match self.timeperiod(name) {
+                    Some(p) => Some(p),
+                    // Checked when loading.
+                    None => continue,
+                },
+                None => None,
+            };
             for contact in self.contacts_named(self.rule_contacts(rule)) {
-                out.push((contact, after, rule.repeat));
+                out.push(Followup {
+                    contact,
+                    after: rule.after,
+                    repeat: rule.repeat,
+                    period,
+                });
             }
         }
         out
     }
 
-    /// The contacts of escalation rules that take the recovery from
-    /// `state`. Only those who got the problem are told.
-    pub fn escalation_recoveries(
+    /// The contacts of escalation rules and rules with a time period that
+    /// take the recovery from `state`. Only those who got the problem are
+    /// told.
+    pub fn followup_recoveries(
         &self,
         service: &Service,
         host_alert: bool,
@@ -660,7 +747,7 @@ impl Config {
     ) -> Vec<&Contact> {
         let mut names = Vec::new();
         for (rule, _) in self.matching_rules(service, host_alert) {
-            if rule.after.is_some() && rule.on.recovery && rule.takes_state(state) {
+            if rule.follows_up() && rule.on.recovery && rule.takes_state(state) {
                 names.extend(self.rule_contacts(rule));
             }
         }
@@ -693,13 +780,16 @@ impl Config {
 impl Config {
     /// Who hears about a downtime of `host`: through its host check if it
     /// has one, else the rules without `services` that match the host.
-    pub fn host_downtime_recipients(&self, host: &Host) -> Vec<&Contact> {
+    pub fn host_downtime_recipients(&self, host: &Host, at: Option<At<'_>>) -> Vec<&Contact> {
         if let Some(hc) = self.host_check(host) {
-            return self.recipients(hc, true, Alert::Downtime, "up");
+            return self.recipients(hc, true, Alert::Downtime, "up", at);
         }
         let mut names: Vec<&str> = Vec::new();
         for rule in &self.notify {
+            // Escalations only take problems and recoveries.
             let takes = rule.enabled
+                && rule.after.is_none()
+                && self.rule_active(rule, at)
                 && rule.on.downtime
                 && rule.services.is_none()
                 && rule

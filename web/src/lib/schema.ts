@@ -184,6 +184,23 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 			]
 		}
 	],
+	timeperiod: [
+		{
+			title: 'Time Period',
+			fields: [NAME, TITLE]
+		},
+		{
+			title: 'Schedule',
+			fields: [
+				{
+					key: 'schedule',
+					label: 'Windows',
+					type: 'windows',
+					help: 'local time; days empty: daily; to before from: next day; dates (2026-11-01 22:00) for once'
+				}
+			]
+		}
+	],
 	contactgroup: [
 		{
 			title: 'Contact Group',
@@ -208,6 +225,7 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 				{ key: 'on', label: 'On', type: 'list', help: 'problem, recovery, flapping, downtime; none: all' },
 				{ key: 'repeat', label: 'Repeat', type: 'duration', placeholder: 'off, e.g. 1h', help: 'send open problems again' },
 				{ key: 'after', label: 'After', type: 'duration', placeholder: 'at once, e.g. 30m', help: 'escalation: only problems open this long and not acknowledged' },
+				{ key: 'period', label: 'Time Period', type: 'text', suggestOne: 'timeperiod', placeholder: 'always', help: 'only notify in this time period; open problems are sent when it begins' },
 				ENABLED
 			]
 		}
@@ -225,6 +243,7 @@ export const KINDS: { kind: Kind; path: string; label: string; one: string; file
 	{ kind: 'contact', path: 'contacts', label: 'Contacts', one: 'Contact', file: 'ui/contacts.toml' },
 	{ kind: 'contactgroup', path: 'contactgroups', label: 'Contact Groups', one: 'Contact Group', file: 'ui/groups.toml' },
 	{ kind: 'downtimegroup', path: 'downtimegroups', label: 'Downtime Groups', one: 'Downtime Group', file: 'ui/groups.toml' },
+	{ kind: 'timeperiod', path: 'timeperiods', label: 'Time Periods', one: 'Time Period', file: 'ui/groups.toml' },
 	{ kind: 'notify', path: 'notifications', label: 'Notifications', one: 'Rule', file: 'ui/notify.toml' }
 ];
 

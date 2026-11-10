@@ -101,6 +101,53 @@ Each level is one rule with its own `after`. `states` keeps WARNING
 problems away from the manager; include `down` so hosts that are DOWN
 count as well.
 
+## On-call at night, the team during business hours
+
+*During business hours, the team gets problems. At night and on weekends,
+only the on-call person. Whatever is still broken in the morning goes to
+the team when they start.*
+
+```toml
+[timeperiod.workhours]
+title = "Business hours"
+schedule = [{ days = ["mon", "tue", "wed", "thu", "fri"], from = "08:00", to = "18:00" }]
+
+[timeperiod.offhours]
+title = "Nights and weekends"
+schedule = [
+  { days = ["mon", "tue", "wed", "thu", "fri"], from = "00:00", to = "08:00" },
+  { days = ["mon", "tue", "wed", "thu", "fri"], from = "18:00", to = "00:00" },
+  { days = ["sat", "sun"], from = "00:00", to = "00:00" },
+]
+
+[[notify]]
+contact_groups = ["team"]
+period = "workhours"
+
+[[notify]]
+contacts = ["oncall"]
+period = "offhours"
+repeat = "30m"
+```
+
+For a problem that starts on Tuesday at 03:00:
+
+| Time | Who gets it |
+|---|---|
+| 03:00 | oncall |
+| 03:30, 04:00, ... | oncall again, every 30 minutes |
+| 08:00 | team; oncall's reminders pause until 18:00 |
+
+- **Acknowledged by on-call at 04:10:** nothing more is sent. The team
+  doesn't get it at 08:00 either; someone is already on it.
+- **Fixed at 06:00:** on-call gets the RECOVERY. The team never hears of
+  it.
+- **Problem at 17:55, fixed at 19:00:** the team got the problem, so they
+  get the RECOVERY too, even after hours. On-call gets the problem at
+  18:00, when their time period begins, and the RECOVERY at 19:00.
+- The time zone is `timezone` in
+  [watcher.toml](../reference/watcher-toml.md), or the system's.
+
 ## Managers: critical problems only, no recoveries
 
 *Managers want to know about real outages, not about every WARNING, and
@@ -254,7 +301,5 @@ and escalations sent before it get no RECOVERY.
 
 ## Not possible yet
 
-- **Different contacts by time of day**, for example on-call at night and
-  the team during business hours. Notify rules have no time windows yet.
 - **More channels** like Slack, Teams or PagerDuty directly. Use a
   webhook to a small adapter for now.

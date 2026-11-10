@@ -847,7 +847,7 @@ paths:
     get:
       summary: Config Tree of an object in the running config (admins)
       parameters:
-        - { name: kind, in: path, required: true, schema: { type: string, enum: [host, service, check, hostgroup, servicegroup, contact, contactgroup, downtimegroup, notify] } }
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [host, service, check, hostgroup, servicegroup, contact, contactgroup, downtimegroup, timeperiod, notify] } }
         - { name: name, in: path, required: true, description: "host/service for services", schema: { type: string } }
       responses:
         "200":
@@ -1342,7 +1342,7 @@ components:
         path: { type: string }
         hash: { type: string, description: SHA-256 }
         text: { type: string }
-    Kind: { type: string, enum: [check, service, host, hostgroup, servicegroup, contact, contactgroup, downtimegroup, notify, sink] }
+    Kind: { type: string, enum: [check, service, host, hostgroup, servicegroup, contact, contactgroup, downtimegroup, timeperiod, notify, sink] }
     ConfigObject:
       type: object
       properties:
