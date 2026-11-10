@@ -34,7 +34,7 @@ pub struct EditArgs {
 pub struct ExplainArgs {
     /// `<host>`, `<host>/<service>`, or `<kind> <name>` with kind one of
     /// host, service, check, hostgroup, servicegroup, contact, contactgroup,
-    /// notify.
+    /// downtimegroup, timeperiod, notify.
     #[arg(required = true, num_args = 1..=2)]
     target: Vec<String>,
 
