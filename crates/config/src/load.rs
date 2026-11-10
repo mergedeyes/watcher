@@ -2026,18 +2026,86 @@ impl<'a> Compiler<'a> {
                     ok = false;
                 }
             }
-            if let Some(url) = &def.webhook
-                && !(url.starts_with("http://") || url.starts_with("https://"))
+            let channels = crate::Channels {
+                slack: def.slack,
+                teams: def.teams,
+                telegram: def.telegram.map(|t| crate::Telegram {
+                    token: t.token.trim().to_string(),
+                    chat: match t.chat {
+                        TextOrNumber::Text(s) => s.trim().to_string(),
+                        TextOrNumber::Number(n) => n.to_string(),
+                    },
+                }),
+                ntfy: def.ntfy.map(|n| match n {
+                    NtfyDef::Url(url) => crate::Ntfy { url, token: None },
+                    NtfyDef::Full(f) => crate::Ntfy {
+                        url: f.url,
+                        token: f.token,
+                    },
+                }),
+                gotify: def.gotify.map(|g| crate::Gotify {
+                    url: g.url,
+                    token: g.token,
+                }),
+                pagerduty: def.pagerduty.map(|k| k.trim().to_string()),
+                script: def.script,
+            };
+            let urls = [
+                ("webhook", def.webhook.as_deref()),
+                ("slack", channels.slack.as_deref()),
+                ("teams", channels.teams.as_deref()),
+                ("ntfy.url", channels.ntfy.as_ref().map(|n| n.url.as_str())),
+                (
+                    "gotify.url",
+                    channels.gotify.as_ref().map(|g| g.url.as_str()),
+                ),
+            ];
+            for (field, url) in urls {
+                if let Some(url) = url
+                    && !(url.starts_with("http://") || url.starts_with("https://"))
+                {
+                    self.sink.error(
+                        Some(&raw.origin),
+                        format!("{what}: {field} must be an http(s) URL"),
+                    );
+                    ok = false;
+                }
+            }
+            let mut empty = |field: &str, value: Option<&str>| {
+                if value.is_some_and(|v| v.trim().is_empty()) {
+                    self.sink
+                        .error(Some(&raw.origin), format!("{what}: {field} is empty"));
+                    ok = false;
+                }
+            };
+            empty(
+                "telegram.token",
+                channels.telegram.as_ref().map(|t| t.token.as_str()),
+            );
+            empty(
+                "telegram.chat",
+                channels.telegram.as_ref().map(|t| t.chat.as_str()),
+            );
+            empty(
+                "gotify.token",
+                channels.gotify.as_ref().map(|g| g.token.as_str()),
+            );
+            empty("pagerduty", channels.pagerduty.as_deref());
+            if let Some(script) = &channels.script
+                && let Err(msg) = watcher_exec::CommandLine::parse(script, false)
             {
-                self.sink.error(
-                    Some(&raw.origin),
-                    format!("{what}: webhook must be an http(s) URL"),
-                );
+                self.sink
+                    .error(Some(&raw.origin), format!("{what}: script: {msg}"));
                 ok = false;
             }
-            if def.email.is_empty() && def.webhook.is_none() {
-                self.sink
-                    .warning(Some(&raw.origin), format!("{what} has no email or webhook"));
+            if def.email.is_empty()
+                && def.webhook.is_none()
+                && channels == crate::Channels::default()
+            {
+                self.sink.warning(
+                    Some(&raw.origin),
+                    format!("{what} has no email, webhook or other channel"),
+                );
             }
             if !ok {
                 continue;
@@ -2046,6 +2114,7 @@ impl<'a> Compiler<'a> {
                 name: raw.name.clone(),
                 email: def.email,
                 webhook: def.webhook,
+                channels,
                 groups: def
                     .groups
                     .into_iter()
@@ -2594,8 +2663,51 @@ struct ContactDef {
     #[serde(default, deserialize_with = "one_or_many")]
     email: Vec<String>,
     webhook: Option<String>,
+    slack: Option<String>,
+    teams: Option<String>,
+    telegram: Option<TelegramDef>,
+    ntfy: Option<NtfyDef>,
+    gotify: Option<GotifyDef>,
+    pagerduty: Option<String>,
+    script: Option<String>,
     #[serde(default)]
     groups: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TelegramDef {
+    token: String,
+    chat: TextOrNumber,
+}
+
+/// Chat IDs are numbers, but `@channel` names are text.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum TextOrNumber {
+    Text(String),
+    Number(i64),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum NtfyDef {
+    Url(String),
+    Full(NtfyFull),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NtfyFull {
+    url: String,
+    token: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GotifyDef {
+    url: String,
+    token: String,
 }
 
 #[derive(Deserialize)]

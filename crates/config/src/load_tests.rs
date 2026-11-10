@@ -1369,3 +1369,73 @@ period = "nope"
         "{text}"
     );
 }
+
+#[test]
+fn contact_channels() {
+    let config = ok(&[(
+        "a.toml",
+        r#"
+[contact.ops]
+slack = "https://hooks.slack.com/services/T/B/X"
+teams = "https://example.logic.azure.com/workflows/1"
+telegram = { token = "123:abc", chat = -1001234 }
+ntfy = "https://ntfy.sh/ops-alerts"
+gotify = { url = "https://gotify.example.com", token = "Axyz" }
+pagerduty = "R0UTINGKEY"
+script = "/usr/local/bin/sms --to 'on call'"
+
+[contact.phone]
+ntfy = { url = "https://ntfy.example.com/phone", token = "tk_1" }
+telegram = { token = "1:x", chat = "@oncall" }
+"#,
+    )]);
+    let ops = &config
+        .contacts
+        .iter()
+        .find(|c| c.name == "ops")
+        .unwrap()
+        .channels;
+    assert_eq!(ops.telegram.as_ref().unwrap().chat, "-1001234");
+    assert_eq!(ops.ntfy.as_ref().unwrap().token, None);
+    assert_eq!(ops.pagerduty.as_deref(), Some("R0UTINGKEY"));
+    let phone = &config
+        .contacts
+        .iter()
+        .find(|c| c.name == "phone")
+        .unwrap()
+        .channels;
+    assert_eq!(phone.ntfy.as_ref().unwrap().token.as_deref(), Some("tk_1"));
+    assert_eq!(phone.telegram.as_ref().unwrap().chat, "@oncall");
+    assert!(config.contacts.iter().all(|c| c.reachable()));
+
+    let (_, diags) = compile(&[(
+        "a.toml",
+        r#"
+[contact.a]
+slack = "hooks.slack.com/x"
+
+[contact.b]
+telegram = { token = " ", chat = "1" }
+
+[contact.c]
+gotify = { url = "https://g.example.com" }
+
+[contact.d]
+script = "  "
+
+[contact.e]
+"#,
+    )]);
+    let text = messages(&diags).join("\n");
+    assert!(
+        text.contains("contact \"a\": slack must be an http(s) URL"),
+        "{text}"
+    );
+    assert!(text.contains("telegram.token is empty"), "{text}");
+    assert!(text.contains("missing field `token`"), "{text}");
+    assert!(text.contains("contact \"d\": script:"), "{text}");
+    assert!(
+        text.contains("contact \"e\" has no email, webhook or other channel"),
+        "{text}"
+    );
+}

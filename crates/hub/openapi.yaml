@@ -1275,7 +1275,7 @@ components:
         repeat: { type: boolean, description: "A problem sent again: a repeat or an escalation" }
         since: { type: [string, "null"], format: date-time, description: "Problems: when it reached its state" }
         contact: { type: string }
-        channel: { type: string, description: "email, webhook, or empty if the contact has neither" }
+        channel: { type: string, description: "email, webhook, slack, teams, telegram, ntfy, gotify, pagerduty or script; empty if the contact has none" }
         error: { type: [string, "null"], description: "null: delivered" }
     RunResult:
       type: object

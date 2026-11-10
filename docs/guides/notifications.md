@@ -1,7 +1,8 @@
 # Notifications
 
-Watcher sends notifications by email and webhook. Setting them up takes
-three steps:
+Watcher sends notifications by email, webhook, Slack, Microsoft Teams,
+Telegram, ntfy, Gotify, PagerDuty or a script of your own. Setting them
+up takes three steps:
 
 1. An SMTP server in `watcher.toml`, for email. See [SMTP](#smtp).
 2. [Contacts](../objects/contact.md): who receives notifications, and where.
@@ -147,11 +148,164 @@ JSON body:
 | `url` | Link to the service page. `null` without `public_url`. |
 | `instance` | `instance_name` from `watcher.toml`. |
 
+## Chat, push and paging services
+
+Besides email and webhooks, a [contact](../objects/contact.md) can get
+notifications on Slack, Microsoft Teams, Telegram, ntfy, Gotify and
+PagerDuty, or through a script. Each service gets the same text as an
+email: what happened, the check output, host, service, state, time and
+the link to Watcher. Colours and priorities follow the state: CRITICAL
+and DOWN are red or urgent, recoveries green.
+
+A contact can have several channels; it gets each notification on all of
+them. Test them with `watcher notify test <contact>`.
+
+### Slack
+
+1. Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps)
+   (From scratch), or open an existing one.
+2. Under **Incoming Webhooks**, turn them on and click **Add New Webhook**.
+3. Pick the channel and copy the webhook URL.
+4. Put it on a contact:
+
+```toml
+[contact.ops-slack]
+slack = "https://hooks.slack.com/services/T0000/B0000/XXXXXXXX"
+```
+
+### Microsoft Teams
+
+1. In Teams, open the channel, then **⋯ → Workflows**.
+2. Choose the template **Post to a channel when a webhook request is
+   received**, pick the team and channel, and finish the setup.
+3. Copy the URL the workflow shows.
+4. Put it on a contact:
+
+```toml
+[contact.ops-teams]
+teams = "https://prod-00.westeurope.logic.azure.com/workflows/…"
+```
+
+Watcher sends an Adaptive Card. Old Office 365 connector URLs work too.
+
+### Telegram
+
+1. In Telegram, write to **@BotFather**, send `/newbot` and follow the
+   steps. You get a token like `123456789:AAH…`.
+2. Add the bot to the group that should get the notifications, or start
+   a chat with the bot yourself.
+3. Send a message in that chat, then open
+   `https://api.telegram.org/bot<token>/getUpdates` in a browser. The
+   chat ID is `"chat":{"id":…}`; group IDs are negative.
+4. Put both on a contact:
+
+```toml
+[contact.oncall-telegram]
+telegram = { token = "123456789:AAH…", chat = -1001234567890 }
+```
+
+For a public channel, `chat = "@channelname"` works too; the bot must be
+an admin of the channel.
+
+### ntfy
+
+[ntfy](https://ntfy.sh) sends push notifications to phones and desktops.
+
+1. Choose a topic. On the public server `ntfy.sh` anyone who knows the
+   topic name can read it, so use a name that is hard to guess, or your
+   own server.
+2. Subscribe to the topic in the ntfy app.
+3. Put the topic URL on a contact:
+
+```toml
+[contact.alice-phone]
+ntfy = "https://ntfy.sh/acme-ops-7f3k2"
+```
+
+For a topic that needs a login, use an access token:
+
+```toml
+[contact.alice-phone]
+ntfy = { url = "https://ntfy.example.com/ops", token = "tk_…" }
+```
+
+Problems are sent with high priority, CRITICAL and DOWN with ntfy's
+highest (urgent); recoveries with the default. Tapping the notification
+opens Watcher.
+
+### Gotify
+
+1. In the Gotify web UI, open **Apps** and create an application.
+2. Copy its token.
+3. Put the server and token on a contact:
+
+```toml
+[contact.ops-gotify]
+gotify = { url = "https://gotify.example.com", token = "AbCdEf…" }
+```
+
+### PagerDuty
+
+1. In PagerDuty, open the service, then **Integrations → Add an
+   integration → Events API V2**.
+2. Copy the **Integration Key**.
+3. Put it on a contact:
+
+```toml
+[contact.pagerduty]
+pagerduty = "R0123456789ABCDEF0123456789ABCD"
+```
+
+A PROBLEM opens an incident (severity critical, warning or error), and
+the RECOVERY of the same host or service resolves it. Repeats and
+escalations update the open incident instead of opening a new one.
+Flapping and downtime messages are not sent to PagerDuty. `watcher notify
+test` opens a test incident and resolves it right away.
+
+*Not yet:* acknowledging in PagerDuty doesn't acknowledge in Watcher.
+
+### Scripts
+
+For anything else, for example SMS through a modem or a gateway, a
+contact can run a program:
+
+```toml
+[contact.sms]
+script = "/usr/local/bin/send-sms --to +491701234567"
+```
+
+The program is started directly, without a shell; arguments are split
+like in check commands, so quotes work. It gets the notification as JSON
+on stdin (the same as a [webhook](#webhook) body) and the main values in
+environment variables:
+
+| Variable | Value |
+|---|---|
+| `WATCHER_KIND` | `PROBLEM`, `RECOVERY`, `FLAPPINGSTART`, `FLAPPINGSTOP`, `DOWNTIMESTART`, `DOWNTIMEEND` or `TEST` |
+| `WATCHER_HOST`, `WATCHER_SERVICE` | The host and service; for host notifications, the service is the host check |
+| `WATCHER_HOST_CHECK` | `true` for host notifications |
+| `WATCHER_STATE` | `OK`, `WARNING`, `CRITICAL`, `UNKNOWN`, `UP` or `DOWN` |
+| `WATCHER_REPEAT` | `true` if the problem is sent again (repeat or escalation) |
+| `WATCHER_SUBJECT` | The email subject: `[Watcher] PROBLEM: web01/http is CRITICAL` |
+| `WATCHER_SUMMARY` | One line: `web01/http is CRITICAL (was OK)` |
+| `WATCHER_OUTPUT` | The check output |
+| `WATCHER_URL` | The link to Watcher, empty without `public_url` |
+| `WATCHER_CONTACT` | The contact's name |
+
+Exit code 0 means delivered. Any other exit code is a failure; the first
+line the script wrote to stderr shows up in the log and the
+[notification log](#notification-log). A script may run for 30 seconds
+and is not retried: it can retry itself. It runs as the user Watcher runs
+as.
+
 ## Delivery
 
-A webhook counts as delivered when the server answers with a 2xx status.
-On 429, 5xx or a network error, Watcher tries again after 1 second and
-after 5 seconds. Temporary SMTP errors are retried the same way.
+Webhooks and the chat, push and paging services count as delivered when
+the service answers with a 2xx status. On 429, 5xx or a network error,
+Watcher tries again after 1 second and after 5 seconds. Temporary SMTP
+errors are retried the same way. When a service refuses a message, its
+answer is kept in the error, for example
+`telegram: answered 400 Bad Request: … chat not found`.
 
 Notifications that are held back are written to the log with the reason:
 
@@ -257,5 +411,3 @@ Details: [period](../objects/notify.md#period).
 For complete setups (quiet start, escalation ladders, on-call at night,
 one team per service, maintenance windows), see
 [Alerting recipes](alerting-recipes.md).
-
-*Not yet:* more channels.

@@ -24,7 +24,7 @@ pub struct SentNotification {
     #[serde(serialize_with = "crate::query::rfc3339_opt")]
     pub since: Option<SystemTime>,
     pub contact: String,
-    /// `email`, `webhook`, or empty if the contact has neither.
+    /// `email`, `webhook`, `slack`, ... or empty if the contact has none.
     pub channel: String,
     /// `None`: delivered.
     pub error: Option<String>,
