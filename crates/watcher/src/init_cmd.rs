@@ -590,6 +590,7 @@ pub(crate) async fn apply(a: &Answers, plan: &Plan) -> Result<()> {
                 Vec::new()
             },
             webhook: a.alert_webhook.clone(),
+            channels: Default::default(),
             groups: Vec::new(),
             origin: Default::default(),
         };

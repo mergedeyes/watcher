@@ -322,7 +322,7 @@ export interface SentNotification {
 	repeat: boolean;
 	since: string | null;
 	contact: string;
-	/** email, webhook, or empty if the contact has neither. */
+	/** email, webhook, slack, ... or empty if the contact has none. */
 	channel: string;
 	/** null: delivered */
 	error: string | null;

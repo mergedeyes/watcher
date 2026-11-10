@@ -8,6 +8,9 @@
 	import { RELATIONS, remote } from '#lib/membership.ts';
 	import { KINDS } from '#lib/schema.ts';
 
+	/** A contact's channels besides email, in the form's order. */
+	const CHANNELS = ['webhook', 'slack', 'teams', 'telegram', 'ntfy', 'gotify', 'pagerduty', 'script'];
+
 	let kind = $derived(KINDS.find((k) => k.path === page.params.kind));
 	let query = $state('');
 
@@ -122,7 +125,7 @@
 								<th>Schedule</th>
 							{:else if kind.kind === 'contact'}
 								<th>Email</th>
-								<th class="hide-narrow">Webhook</th>
+								<th class="hide-narrow">Channels</th>
 								<th class="hide-narrow">Groups</th>
 							{:else if kind.kind === 'notify'}
 								<th>To</th>
@@ -175,7 +178,7 @@
 									<td class="mono">{windows(f.schedule)}</td>
 								{:else if kind.kind === 'contact'}
 									<td>{list(f.email)}</td>
-									<td class="mono hide-narrow info">{list(f.webhook)}</td>
+									<td class="hide-narrow">{CHANNELS.filter((c) => f[c] !== undefined).join(', ')}</td>
 									<td class="hide-narrow">{@render both(o)}</td>
 								{:else if kind.kind === 'notify'}
 									<td>{[list(f.contacts), list(f.contact_groups)].filter(Boolean).join(', ')}</td>

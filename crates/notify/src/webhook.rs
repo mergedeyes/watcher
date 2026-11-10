@@ -27,7 +27,7 @@ pub(crate) async fn post(
 
 /// The error with its causes: reqwest's own message is only "error sending
 /// request", the cause ("Connection refused") is in its sources.
-fn reason(err: &dyn std::error::Error) -> String {
+pub(crate) fn reason(err: &dyn std::error::Error) -> String {
     let mut out = err.to_string();
     let mut source = err.source();
     while let Some(s) = source {

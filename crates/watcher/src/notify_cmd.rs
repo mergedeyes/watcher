@@ -48,7 +48,10 @@ async fn test(args: TestArgs) -> Result<ExitCode> {
     let notification = Notification::test(&contact.name, public_url);
     let results = notifier.deliver(contact, &notification).await;
     if results.is_empty() {
-        bail!("contact {:?} has no email address or webhook", contact.name);
+        bail!(
+            "contact {:?} has no email, webhook or other channel",
+            contact.name
+        );
     }
     let mut ok = true;
     for (channel, result) in results {

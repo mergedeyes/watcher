@@ -385,9 +385,58 @@ pub struct Contact {
     pub name: String,
     pub email: Vec<String>,
     pub webhook: Option<String>,
+    /// Chat, push and paging services.
+    pub channels: Channels,
     /// Contact groups.
     pub groups: Vec<Assigned>,
     pub origin: Origin,
+}
+
+impl Contact {
+    /// Whether the contact can be notified at all.
+    pub fn reachable(&self) -> bool {
+        !self.email.is_empty() || self.webhook.is_some() || self.channels != Channels::default()
+    }
+}
+
+/// The services a contact is notified on besides email and webhook.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Channels {
+    /// A Slack incoming webhook URL.
+    pub slack: Option<String>,
+    /// A Microsoft Teams webhook URL (Workflows, or an old connector).
+    pub teams: Option<String>,
+    pub telegram: Option<Telegram>,
+    pub ntfy: Option<Ntfy>,
+    pub gotify: Option<Gotify>,
+    /// A PagerDuty Events API v2 routing key (integration key).
+    pub pagerduty: Option<String>,
+    /// A program that gets the notification as JSON on stdin, as written
+    /// (split into arguments like a check command, no shell).
+    pub script: Option<String>,
+}
+
+/// A Telegram bot and the chat it writes to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Telegram {
+    pub token: String,
+    /// A chat ID (`-100123...` for groups) or `@channelname`.
+    pub chat: String,
+}
+
+/// An ntfy topic URL (`https://ntfy.sh/mytopic`), with an access token
+/// for protected topics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ntfy {
+    pub url: String,
+    pub token: Option<String>,
+}
+
+/// A Gotify server and an application token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Gotify {
+    pub url: String,
+    pub token: String,
 }
 
 /// Which notifications a rule takes.

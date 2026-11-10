@@ -773,10 +773,30 @@ impl<'a> Builder<'a> {
             v.detail = Some(e.clone());
             values.push(v);
         }
-        if let Some(w) = &c.webhook {
-            let mut v = self.node("value", None, "webhook", None);
-            v.detail = Some(w.clone());
-            values.push(v);
+        // Channels with their target; tokens are left out.
+        let ch = &c.channels;
+        let shown = [
+            ("webhook", c.webhook.clone()),
+            ("slack", ch.slack.clone()),
+            ("teams", ch.teams.clone()),
+            (
+                "telegram",
+                ch.telegram.as_ref().map(|t| format!("chat {}", t.chat)),
+            ),
+            ("ntfy", ch.ntfy.as_ref().map(|n| n.url.clone())),
+            ("gotify", ch.gotify.as_ref().map(|g| g.url.clone())),
+            (
+                "pagerduty",
+                ch.pagerduty.as_ref().map(|_| "routing key set".to_string()),
+            ),
+            ("script", ch.script.clone()),
+        ];
+        for (label, detail) in shown {
+            if let Some(detail) = detail {
+                let mut v = self.node("value", None, label, None);
+                v.detail = Some(detail);
+                values.push(v);
+            }
         }
         root.children.extend(self.section("values", values));
         root.children.extend(
