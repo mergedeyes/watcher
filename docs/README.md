@@ -27,6 +27,7 @@ for common cases.
 | [contactgroup](objects/contactgroup.md) | A set of contacts |
 | [notify](objects/notify.md) | Who gets which notifications; host and service selectors |
 | [downtimegroup](objects/downtimegroup.md) | Hosts with recurring downtime windows |
+| [timeperiod](objects/timeperiod.md) | When notify rules apply, for example business hours |
 | [sink](objects/sink.md) | A second database that receives a copy of all results |
 
 ## Guides

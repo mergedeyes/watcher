@@ -77,7 +77,7 @@ host's `graph` service, or the host check, and you can pick another one.
 
 Admins can edit the configuration in the web UI. The menu has Checks,
 Services, Hosts, Host Groups, Service Groups, Contacts, Contact Groups,
-Downtime Groups, Notifications and Files.
+Downtime Groups, Time Periods, Notifications and Files.
 
 The web UI edits the same TOML files you edit by hand:
 

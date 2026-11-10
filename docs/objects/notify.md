@@ -3,8 +3,8 @@
 A notify rule decides which [contacts](contact.md) get which
 notifications. Each rule says who (`contacts`, `contact_groups`), about
 what (`hosts`, `services`), for which events (`states`, `on`), whether
-open problems are sent again (`repeat`), and whether the rule only steps in
-when a problem lasts (`after`).
+open problems are sent again (`repeat`), whether the rule only steps in
+when a problem lasts (`after`), and when it applies (`period`).
 
 ```toml
 [[notify]]
@@ -41,6 +41,7 @@ team per service, maintenance windows), see
 | `on` | all events | Only these events: `problem`, `recovery`, `flapping`, `downtime`. |
 | `repeat` | off | Send an open problem again this often, for example `"1h"`. At least `1m`; `"0"` turns it off. See [repeat](#repeat). |
 | `after` | at once | Makes the rule an escalation: its contacts get a problem only once it has been open this long and nobody acknowledged it, for example `"30m"`. `"0"` turns it off. See [after](#after). |
+| `period` | always | Name of a [time period](timeperiod.md). The rule only notifies inside it; open problems are sent when it begins. See [period](#period). |
 | `enabled` | `true` | `false`: the rule is ignored. |
 
 ### states
@@ -163,6 +164,34 @@ example the team lead after 30 minutes and the manager after 2 hours.
 
 Escalation rules only take problems and recoveries. `on` must include
 `problem`, and can't include `flapping` or `downtime`.
+
+### period
+
+With `period`, a rule only notifies inside a [time period](timeperiod.md),
+for example business hours:
+
+```toml
+[timeperiod.workhours]
+schedule = [{ days = ["mon", "tue", "wed", "thu", "fri"], from = "08:00", to = "18:00" }]
+
+[[notify]]
+contact_groups = ["team"]
+period = "workhours"
+```
+
+How it works:
+
+- Outside the time period, the rule's contacts get nothing.
+- When it begins, they get the problems that are still open and that they
+  didn't get yet: a server that broke at 03:00 and is still broken is
+  sent at 08:00. Problems that recovered or were acknowledged in the
+  meantime are not sent.
+- They get the RECOVERY only if they got the problem, at any time.
+- `repeat` and `after` of the rule only send inside the time period.
+- Flapping and downtime messages are sent only inside the time period.
+
+Two rules with opposite time periods route notifications by time of day,
+see [Alerting recipes](../guides/alerting-recipes.md#on-call-at-night-the-team-during-business-hours).
 
 ## Examples
 
@@ -474,6 +503,8 @@ A notification is sent when:
   "is still"; see [repeat](#repeat))
 - a problem is still open after `after`, for escalation rules (PROBLEM,
   "is still"; see [after](#after))
+- a time period begins while a problem is open that the rule's contacts
+  didn't get yet (PROBLEM, "is still"; see [period](#period))
 
 No notification is sent for:
 
@@ -511,8 +542,8 @@ watcher config explain web01/http
       └─ contact oncall                                             contacts.toml:1
 ```
 
-A rule with `after` or `repeat` adds it to the line, for example
-`matched: host: group prod; escalates after 30m; repeats every 1h`.
+A rule with `after`, `repeat` or `period` adds it to the line, for example
+`matched: host: group prod; escalates after 30m; repeats every 1h; only in workhours`.
 
 Unknown hosts, groups, checks or nodes in a selector give a warning, since
 they are usually typos.
@@ -520,5 +551,6 @@ they are usually typos.
 ## See also
 
 - [contact](contact.md), [contactgroup](contactgroup.md)
+- [timeperiod](timeperiod.md): when rules with `period` apply
 - [Notifications](../guides/notifications.md): SMTP, message format, webhooks
 - [Alerting recipes](../guides/alerting-recipes.md): complete setups for common cases
