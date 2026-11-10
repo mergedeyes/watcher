@@ -57,6 +57,8 @@ set it, and every alert to the rule that sent it.
   gets the same message twice. Open problems come back as reminders
   and escalate to the next person until someone acknowledges them, and
   every notification is logged, so you can see who was told and when.
+  When a router dies, dependencies keep the alerts about everything
+  behind it quiet.
 - **No agents.** Watcher runs checks on remote machines over SSH, copies
   its scripts there by itself, keeps passwords and keys encrypted, and
   pins host keys.

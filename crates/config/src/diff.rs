@@ -1,6 +1,6 @@
 //! What a new configuration changes compared to the running one.
 
-use crate::{Assigned, Config, Host, NotifyRule, Service};
+use crate::{Assigned, Config, Dependency, Host, NotifyRule, Service};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -14,6 +14,8 @@ pub struct Changes {
     pub contacts: Delta,
     /// Notify rules, by name or place.
     pub notify: Delta,
+    /// Dependencies, by name or place.
+    pub dependencies: Delta,
     pub sinks: Delta,
 }
 
@@ -38,6 +40,7 @@ impl Changes {
             && self.groups.is_empty()
             && self.contacts.is_empty()
             && self.notify.is_empty()
+            && self.dependencies.is_empty()
             && self.sinks.is_empty()
     }
 }
@@ -86,6 +89,12 @@ pub fn changes(old: &Config, new: &Config) -> Changes {
             },
         ),
         notify: delta(&old.notify, &new.notify, NotifyRule::label, same_rule),
+        dependencies: delta(
+            &old.dependencies,
+            &new.dependencies,
+            Dependency::label,
+            same_dependency,
+        ),
         sinks: delta(
             &old.sinks,
             &new.sinks,
@@ -128,6 +137,15 @@ fn same_rule(a: &NotifyRule, b: &NotifyRule) -> bool {
         && a.repeat == b.repeat
         && a.after == b.after
         && a.period == b.period
+        && a.enabled == b.enabled
+        && a.hosts.is_some() == b.hosts.is_some()
+        && a.services.is_some() == b.services.is_some()
+}
+
+fn same_dependency(a: &Dependency, b: &Dependency) -> bool {
+    // Selectors have no equality, as with notify rules.
+    a.on == b.on
+        && a.states == b.states
         && a.enabled == b.enabled
         && a.hosts.is_some() == b.hosts.is_some()
         && a.services.is_some() == b.services.is_some()

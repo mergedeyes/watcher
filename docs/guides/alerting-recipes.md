@@ -255,6 +255,32 @@ The rule also sends DOWNTIMESTART and DOWNTIMEEND messages. The end
 message names the state at that moment. Use `on = ["problem",
 "recovery"]` if you don't want them.
 
+## One alert for the router, not fifty
+
+*When the branch office router dies, every host behind it goes DOWN.
+On-call should get one notification about the router, not one per host.*
+
+```toml
+[[dependency]]
+name = "behind-gw"
+on = "gw"
+hosts = { groups = ["branch-office"] }
+
+[[notify]]
+contacts = ["oncall"]
+repeat = "1h"
+```
+
+While `gw` is DOWN (confirmed), the hosts in `branch-office` and their
+services send nothing; `oncall` gets `gw is DOWN` and works on that.
+Checks keep running, so the web UI still shows what is really broken.
+
+The catch is the same as with maintenance windows: a host behind the
+router that is *still* broken after the router recovered had its PROBLEM
+held back, and nothing new happens when the router comes back. With
+`repeat = "1h"`, it is sent once it has been open for an hour. Details:
+[dependency](../objects/dependency.md).
+
 ## Flapping services
 
 *A service that keeps changing between OK and CRITICAL should not send a

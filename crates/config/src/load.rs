@@ -160,6 +160,8 @@ pub(crate) struct RawFile {
     #[serde(default)]
     pub notify: Vec<Spanned<Table>>,
     #[serde(default)]
+    pub dependency: Vec<Spanned<Table>>,
+    #[serde(default)]
     pub sink: Vec<Spanned<Table>>,
 }
 
@@ -223,6 +225,7 @@ struct RawObjects {
     downtimegroups: Vec<RawObject>,
     timeperiods: Vec<RawObject>,
     notify: Vec<RawObject>,
+    dependencies: Vec<RawObject>,
     sinks: Vec<RawObject>,
 }
 
@@ -308,6 +311,7 @@ impl RawObjects {
             }
         };
         named(&mut self.notify, file.notify);
+        named(&mut self.dependencies, file.dependency);
         named(&mut self.sinks, file.sink);
     }
 
@@ -332,6 +336,7 @@ impl RawObjects {
         c.compile_contacts(&mut config);
         c.compile_timeperiods(&mut config);
         c.compile_notify(&mut config);
+        c.compile_dependencies(&mut config);
         c.compile_sinks(&mut config);
         c.check_references(&config);
         config
@@ -1917,6 +1922,14 @@ impl<'a> Compiler<'a> {
                 sel.refs(&mut |k, n| check(&rule.origin, k, n));
             }
         }
+        for dep in &config.dependencies {
+            if let Some(sel) = &dep.hosts {
+                sel.refs(&mut |k, n| check(&dep.origin, k, n));
+            }
+            if let Some(sel) = &dep.services {
+                sel.refs(&mut |k, n| check(&dep.origin, k, n));
+            }
+        }
         for (origin, msg) in problems {
             self.sink.warning(Some(&origin), msg);
         }
@@ -2307,6 +2320,118 @@ impl<'a> Compiler<'a> {
                 repeat,
                 after,
                 period: def.period,
+                enabled: def.enabled,
+                origin: raw.origin.clone(),
+            });
+        }
+    }
+
+    fn compile_dependencies(&mut self, config: &mut Config) {
+        for raw in &self.raw.dependencies {
+            let what = match raw.table.get("name").and_then(Value::as_str) {
+                Some(n) => format!("dependency {n:?}"),
+                None => "dependency".to_string(),
+            };
+            let def: DependencyDef =
+                match DependencyDef::deserialize(Value::Table(raw.table.clone())) {
+                    Ok(d) => d,
+                    Err(err) => {
+                        self.sink.error(
+                            Some(&raw.origin),
+                            format!("{what}: {}", err.message().trim()),
+                        );
+                        continue;
+                    }
+                };
+            let before = self.sink.diagnostics.len();
+            let mut error =
+                |msg: String| self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
+            if let Some(name) = &def.name {
+                if let Err(msg) = valid_name(name) {
+                    error(msg.into());
+                }
+                if config
+                    .dependencies
+                    .iter()
+                    .any(|d| d.name.as_ref() == Some(name))
+                {
+                    error("name is already used by another dependency".into());
+                }
+            }
+            // The master decides which states make sense: a host is only
+            // ever DOWN, a service WARNING, CRITICAL or UNKNOWN.
+            let host_master = !def.on.contains('/');
+            let known = match host_master {
+                true => {
+                    if config.host_named(&def.on).is_none() {
+                        error(format!("on: unknown host {:?}", def.on));
+                        false
+                    } else {
+                        true
+                    }
+                }
+                false => {
+                    if config.service(&def.on).is_none() {
+                        error(format!("on: unknown service {:?}", def.on));
+                        false
+                    } else {
+                        true
+                    }
+                }
+            };
+            let allowed: &[&str] = match host_master {
+                true => &["down"],
+                false => &["warning", "critical", "unknown"],
+            };
+            for s in &def.states {
+                if !allowed.contains(&s.as_str()) {
+                    error(format!(
+                        "unknown state {s:?} (expected {})",
+                        allowed.join(", ")
+                    ));
+                }
+            }
+            let states = match def.states.is_empty() {
+                // By default a WARNING master doesn't silence anyone.
+                false => def.states,
+                true if host_master => vec!["down".into()],
+                true => vec!["critical".into(), "unknown".into()],
+            };
+            let hosts = def.hosts.as_ref().and_then(|v| {
+                HostSelector::parse(v)
+                    .map_err(|e| error(format!("hosts: {e}")))
+                    .ok()
+            });
+            let services = def.services.as_ref().and_then(|v| {
+                ServiceSelector::parse(v)
+                    .map_err(|e| error(format!("services: {e}")))
+                    .ok()
+            });
+            if self.sink.diagnostics.len() > before {
+                continue;
+            }
+            if known
+                && host_master
+                && config
+                    .host_named(&def.on)
+                    .is_none_or(|(_, h)| config.host_check(h).is_none())
+            {
+                // Without a host check the host is always UP (§3.7), so
+                // nothing would ever be held back.
+                self.sink.warning(
+                    Some(&raw.origin),
+                    format!(
+                        "{what}: host {:?} has no host check, so the dependency never applies",
+                        def.on
+                    ),
+                );
+            }
+            config.dependencies.push(crate::Dependency {
+                name: def.name,
+                on: def.on,
+                hosts,
+                services,
+                states,
                 enabled: def.enabled,
                 origin: raw.origin.clone(),
             });
@@ -2728,6 +2853,19 @@ struct NotifyDef {
     #[serde(default, deserialize_with = "duration")]
     after: Option<Duration>,
     period: Option<String>,
+    #[serde(default = "yes")]
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DependencyDef {
+    name: Option<String>,
+    on: String,
+    hosts: Option<Value>,
+    services: Option<Value>,
+    #[serde(default)]
+    states: Vec<String>,
     #[serde(default = "yes")]
     enabled: bool,
 }

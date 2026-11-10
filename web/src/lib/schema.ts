@@ -247,6 +247,31 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 			]
 		}
 	],
+	dependency: [
+		{
+			title: 'Dependency',
+			fields: [
+				{ ...NAME, required: false, help: 'optional' },
+				{
+					key: 'on',
+					label: 'On',
+					type: 'text',
+					required: true,
+					placeholder: 'gw or db01/postgres',
+					help: 'the master: a host, or host/service'
+				}
+			]
+		},
+		{
+			title: 'Holds back',
+			fields: [
+				{ key: 'hosts', label: 'Hosts', type: 'selector', selects: 'host', help: 'none: all hosts' },
+				{ key: 'services', label: 'Services', type: 'selector', selects: 'service', help: 'set: service alerts only' },
+				{ key: 'states', label: 'States', type: 'list', help: 'master states that hold back: down for a host, else warning, critical, unknown; none: down / critical, unknown' },
+				ENABLED
+			]
+		}
+	],
 	sink: []
 };
 
@@ -261,7 +286,8 @@ export const KINDS: { kind: Kind; path: string; label: string; one: string; file
 	{ kind: 'contactgroup', path: 'contactgroups', label: 'Contact Groups', one: 'Contact Group', file: 'ui/groups.toml' },
 	{ kind: 'downtimegroup', path: 'downtimegroups', label: 'Downtime Groups', one: 'Downtime Group', file: 'ui/groups.toml' },
 	{ kind: 'timeperiod', path: 'timeperiods', label: 'Time Periods', one: 'Time Period', file: 'ui/groups.toml' },
-	{ kind: 'notify', path: 'notifications', label: 'Notifications', one: 'Rule', file: 'ui/notify.toml' }
+	{ kind: 'notify', path: 'notifications', label: 'Notifications', one: 'Rule', file: 'ui/notify.toml' },
+	{ kind: 'dependency', path: 'dependencies', label: 'Dependencies', one: 'Dependency', file: 'ui/dependencies.toml' }
 ];
 
 /** Selector inputs, by what they select. `hosts.*` is the service selector's host part. */

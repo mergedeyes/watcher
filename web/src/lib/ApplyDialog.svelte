@@ -1,6 +1,6 @@
 <!--
 	Preview and apply config changes: errors, or the effective changes
-	(hosts, services, groups, contacts, notify rules, sinks) with a confirm.
+	(hosts, services, groups, contacts, notify rules, dependencies, sinks) with a confirm.
 -->
 <script lang="ts">
 	import { api, ApiError, type Change, type Changes, type Conflict, type Preview, type Problem } from './api.ts';
@@ -71,6 +71,7 @@
 		{ key: 'groups', label: 'Groups' },
 		{ key: 'contacts', label: 'Contacts' },
 		{ key: 'notify', label: 'Notify Rules' },
+		{ key: 'dependencies', label: 'Dependencies' },
 		{ key: 'sinks', label: 'Sinks' }
 	];
 

@@ -132,7 +132,8 @@ watcher config explain <kind> <name> [-c PATH]
 ```
 
 Kinds: `host`, `service`, `check`, `hostgroup`, `servicegroup`,
-`contact`, `contactgroup`, `notify`. `service <name>` explains a service
+`contact`, `contactgroup`, `downtimegroup`, `timeperiod`, `notify`,
+`dependency`. `service <name>` explains a service
 definition and the hosts that have it; `<host>/<service>` explains the
 service on one host.
 

@@ -37,13 +37,17 @@ host_check = "backup"
 "#;
 
 fn config() -> Arc<Config> {
+    config_from(CONFIG)
+}
+
+fn config_from(text: &str) -> Arc<Config> {
     let dir: PathBuf = std::env::temp_dir().join(format!(
         "watcher-hub-{}-{:?}",
         std::process::id(),
         std::thread::current().id()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("conf.toml"), CONFIG).unwrap();
+    std::fs::write(dir.join("conf.toml"), text).unwrap();
     let loaded = load_dir(&dir).unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     Arc::new(loaded.config)
@@ -51,7 +55,10 @@ fn config() -> Arc<Config> {
 
 /// A hub with a running scheduler (its active check runs only hourly).
 fn hub() -> Arc<Hub> {
-    let config = config();
+    hub_with(config())
+}
+
+fn hub_with(config: Arc<Config>) -> Arc<Hub> {
     let (control, control_rx) = mpsc::channel(8);
     let (events_tx, mut events) = mpsc::channel::<Event>(64);
     let hub = Hub::new(
@@ -253,6 +260,84 @@ async fn passive_results() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn dependencies_hold_notifications_back() {
+    let hub = hub_with(config_from(&format!(
+        r#"{CONFIG}
+[[dependency]]
+name = "web-needs-db"
+on = "db01"
+hosts = ["web01"]
+
+[[dependency]]
+name = "web-needs-dump"
+on = "db01/dump"
+services = {{ name = ["http"] }}
+"#
+    )));
+    let critical = watcher_core::State::Critical;
+    assert_eq!(hub.suppressed("web01/http", critical), None);
+
+    // The master service goes CRITICAL (passive: 1 attempt, hard).
+    let body = json!({"exit_code": 2, "output": "DUMP CRITICAL - too old"});
+    call(
+        &hub,
+        "POST",
+        "/api/v1/services/db01/dump/result",
+        Some(body),
+    )
+    .await;
+    assert_eq!(
+        hub.suppressed("web01/http", critical).as_deref(),
+        Some("depends on db01/dump (CRITICAL)")
+    );
+    // The master's own notification is not held back.
+    assert_eq!(hub.suppressed("db01/dump", critical), None);
+
+    // WARNING is not in the default states: nothing is held back.
+    let body = json!({"exit_code": 1, "output": "DUMP WARNING - old"});
+    call(
+        &hub,
+        "POST",
+        "/api/v1/services/db01/dump/result",
+        Some(body),
+    )
+    .await;
+    assert_eq!(hub.suppressed("web01/http", critical), None);
+
+    // The master host goes DOWN: the dependent host's services wait too.
+    let body = json!({"exit_code": 2, "output": "BACKUP CRITICAL - failed"});
+    call(
+        &hub,
+        "POST",
+        "/api/v1/services/db01/backup/result",
+        Some(body),
+    )
+    .await;
+    assert_eq!(
+        hub.suppressed("web01/http", critical).as_deref(),
+        Some("depends on db01 (DOWN)")
+    );
+    // Its own host being DOWN still comes first, and the host check (the
+    // master's own alert) is never held back.
+    assert_eq!(
+        hub.suppressed("db01/dump", critical).as_deref(),
+        Some("host is DOWN")
+    );
+    assert_eq!(hub.suppressed("db01/backup", critical), None);
+
+    // The master recovers: notifications flow again.
+    let body = json!({"state": "ok", "output": "fine"});
+    call(
+        &hub,
+        "POST",
+        "/api/v1/services/db01/backup/result",
+        Some(body),
+    )
+    .await;
+    assert_eq!(hub.suppressed("web01/http", critical), None);
 }
 
 #[tokio::test]

@@ -1371,71 +1371,133 @@ period = "nope"
 }
 
 #[test]
-fn contact_channels() {
+fn dependencies_match_like_notify_rules() {
     let config = ok(&[(
         "a.toml",
         r#"
-[contact.ops]
-slack = "https://hooks.slack.com/services/T/B/X"
-teams = "https://example.logic.azure.com/workflows/1"
-telegram = { token = "123:abc", chat = -1001234 }
-ntfy = "https://ntfy.sh/ops-alerts"
-gotify = { url = "https://gotify.example.com", token = "Axyz" }
-pagerduty = "R0UTINGKEY"
-script = "/usr/local/bin/sms --to 'on call'"
+[check.ping]
+command = "check_ping -H $host.address$"
 
-[contact.phone]
-ntfy = { url = "https://ntfy.example.com/phone", token = "tk_1" }
-telegram = { token = "1:x", chat = "@oncall" }
+[check.http]
+command = "check_http -H $host.address$"
+
+[service.ping]
+[service.http]
+
+[[host]]
+name = "gw"
+host_check = "ping"
+services = ["ping"]
+
+[[host]]
+name = "web01"
+services = ["ping", "http"]
+
+[[host]]
+name = "db01"
+host_check = "ping"
+services = ["ping", "http"]
+
+[[dependency]]
+name = "behind-gw"
+on = "gw"
+hosts = ["web01", "db01"]
+
+[[dependency]]
+on = "db01/http"
+services = { name = ["http"] }
 "#,
     )]);
-    let ops = &config
-        .contacts
-        .iter()
-        .find(|c| c.name == "ops")
-        .unwrap()
-        .channels;
-    assert_eq!(ops.telegram.as_ref().unwrap().chat, "-1001234");
-    assert_eq!(ops.ntfy.as_ref().unwrap().token, None);
-    assert_eq!(ops.pagerduty.as_deref(), Some("R0UTINGKEY"));
-    let phone = &config
-        .contacts
-        .iter()
-        .find(|c| c.name == "phone")
-        .unwrap()
-        .channels;
-    assert_eq!(phone.ntfy.as_ref().unwrap().token.as_deref(), Some("tk_1"));
-    assert_eq!(phone.telegram.as_ref().unwrap().chat, "@oncall");
-    assert!(config.contacts.iter().all(|c| c.reachable()));
+    assert_eq!(config.dependencies.len(), 2);
+    let behind = &config.dependencies[0];
+    assert_eq!(behind.states, ["down"]);
+    assert_eq!(behind.master(), ("gw", None));
+    let on_http = &config.dependencies[1];
+    assert_eq!(on_http.states, ["critical", "unknown"]);
+    assert_eq!(on_http.label(), "dependency at a.toml:30");
 
+    let dep_names = |id: &str, host_alert: bool| -> Vec<String> {
+        let s = config.service(id).unwrap();
+        config
+            .matching_dependencies(s, host_alert)
+            .into_iter()
+            .map(|(d, _)| d.label())
+            .collect()
+    };
+    // Services and host alerts of hosts behind the gateway wait for it;
+    // the service dependency only takes service alerts.
+    assert_eq!(
+        dep_names("web01/http", false),
+        ["behind-gw", "dependency at a.toml:30"]
+    );
+    assert_eq!(dep_names("db01/ping", true), ["behind-gw"]);
+    // The master's own alert is never held back: not db01/http for the
+    // second dependency, and not the gateway's own host check.
+    assert_eq!(dep_names("db01/http", false), ["behind-gw"]);
+    assert_eq!(dep_names("gw/ping", true), Vec::<String>::new());
+
+    // The explanation mirrors notify rules.
+    let s = config.service("web01/http").unwrap();
+    let (_, why) = &config.matching_dependencies(s, false)[0];
+    assert_eq!(why, "host: listed");
+}
+
+#[test]
+fn dependency_errors() {
     let (_, diags) = compile(&[(
         "a.toml",
         r#"
-[contact.a]
-slack = "hooks.slack.com/x"
+[check.ping]
+command = "check_ping -H $host.address$"
 
-[contact.b]
-telegram = { token = " ", chat = "1" }
+[service.ping]
 
-[contact.c]
-gotify = { url = "https://g.example.com" }
+[[host]]
+name = "gw"
+services = ["ping"]
 
-[contact.d]
-script = "  "
+[[dependency]]
+name = "bad"
+on = "nowhere"
 
-[contact.e]
+[[dependency]]
+name = "bad-service"
+on = "gw/http"
+
+[[dependency]]
+name = "bad-states"
+on = "gw"
+states = ["critical"]
+
+[[dependency]]
+name = "never"
+on = "gw"
+
+[[dependency]]
+name = "never"
+on = "gw"
 "#,
     )]);
     let text = messages(&diags).join("\n");
     assert!(
-        text.contains("contact \"a\": slack must be an http(s) URL"),
+        text.contains("dependency \"bad\": on: unknown host \"nowhere\""),
         "{text}"
     );
-    assert!(text.contains("telegram.token is empty"), "{text}");
-    assert!(text.contains("missing field `token`"), "{text}");
-    assert!(text.contains("contact \"d\": script:"), "{text}");
     assert!(
-        text.contains("contact \"e\" has no email, webhook or other channel"),
+        text.contains("dependency \"bad-service\": on: unknown service \"gw/http\""),
+        "{text}"
+    );
+    assert!(
+        text.contains("dependency \"bad-states\": unknown state \"critical\" (expected down)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("name is already used by another dependency"),
+        "{text}"
+    );
+    // gw has no host check: it is always UP, the dependency never applies.
+    assert!(
+        text.contains("dependency \"never\": host \"gw\" has no host check"),
         "{text}"
     );
 }

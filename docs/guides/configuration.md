@@ -22,7 +22,7 @@ conf.d/
   hosts.toml       hosts
   groups.toml      host groups, service groups
   contacts.toml    contacts, contact groups
-  notify.toml      notify rules
+  notify.toml      notify rules, dependencies
   sinks.toml       sinks
   ui/              objects created in the web UI
 ```
@@ -46,6 +46,7 @@ Changes to `watcher.toml` itself need a restart.
 | [contact](../objects/contact.md) | `[contact.<name>]` | Someone who receives notifications |
 | [contactgroup](../objects/contactgroup.md) | `[contactgroup.<name>]` | A set of contacts |
 | [notify](../objects/notify.md) | `[[notify]]` | A rule: which contacts get which notifications |
+| [dependency](../objects/dependency.md) | `[[dependency]]` | Holds notifications back while another host or service is down |
 | [downtimegroup](../objects/downtimegroup.md) | `[downtimegroup.<name>]` | Hosts with recurring downtime windows |
 | [timeperiod](../objects/timeperiod.md) | `[timeperiod.<name>]` | When notify rules apply, for example business hours |
 | [sink](../objects/sink.md) | `[[sink]]` | A second database that receives a copy of all results |

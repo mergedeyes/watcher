@@ -3,7 +3,8 @@
 //! client can link to it, and carries the file and line it is written at.
 
 use crate::{
-    Assigned, Config, Host, Layer, NotifyRule, Origin, Reason, RunOn, Service, Source, Var, files,
+    Assigned, Config, Dependency, Host, Layer, NotifyRule, Origin, Reason, RunOn, Service, Source,
+    Var, files,
 };
 use serde::Serialize;
 use std::path::Path;
@@ -12,7 +13,8 @@ use std::time::Duration;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Node {
     /// `host`, `service`, `check`, `hostgroup`, `servicegroup`, `contact`,
-    /// `contactgroup`, `downtimegroup`, `timeperiod` and `notify` for objects; `section` and `value`
+    /// `contactgroup`, `downtimegroup`, `timeperiod`, `notify` and
+    /// `dependency` for objects; `section` and `value`
     /// otherwise. A `service` named `host/service` is a service on a host,
     /// one without `/` a service object.
     pub kind: &'static str,
@@ -63,6 +65,7 @@ impl<'a> Builder<'a> {
             "downtimegroup" => self.downtimegroup(name),
             "timeperiod" => self.timeperiod(name),
             "notify" => self.rule(name),
+            "dependency" => self.dependency(name),
             _ => None,
         }
     }
@@ -273,6 +276,10 @@ impl<'a> Builder<'a> {
             "notifications",
             self.rules(config.matching_rules(s, config.is_host_check(s))),
         ));
+        root.children.extend(self.section(
+            "dependencies",
+            self.deps(config.matching_dependencies(s, config.is_host_check(s))),
+        ));
         Some(root)
     }
 
@@ -344,6 +351,21 @@ impl<'a> Builder<'a> {
                 }
                 n.detail = Some(detail);
                 n.children = self.rule_targets(rule);
+                n
+            })
+            .collect()
+    }
+
+    fn deps(&self, matched: Vec<(&Dependency, String)>) -> Vec<Node> {
+        matched
+            .into_iter()
+            .map(|(dep, why)| {
+                let mut n = self.dep_link(dep);
+                n.detail = Some(format!(
+                    "matched: {why}; held back while {} is {}",
+                    dep.on,
+                    states_text(&dep.states)
+                ));
                 n
             })
             .collect()
@@ -443,6 +465,13 @@ impl<'a> Builder<'a> {
         };
         root.children
             .extend(self.section("notifications", self.rules(rules)));
+        // Host alerts only exist through the host check.
+        if let Some(hc) = config.host_check(host) {
+            root.children.extend(self.section(
+                "dependencies",
+                self.deps(config.matching_dependencies(hc, true)),
+            ));
+        }
         Some(root)
     }
 
@@ -971,6 +1000,89 @@ impl<'a> Builder<'a> {
         root.children.extend(self.section(&title, matched));
         Some(root)
     }
+
+    /// The name, or `@file:line` for an unnamed dependency, as the editor
+    /// addresses it.
+    fn dep_id(&self, dep: &Dependency) -> String {
+        match &dep.name {
+            Some(name) => name.clone(),
+            None => format!("@{}:{}", self.file(&dep.origin), dep.origin.line),
+        }
+    }
+
+    fn dep_link(&self, dep: &Dependency) -> Node {
+        self.node(
+            "dependency",
+            Some(&self.dep_id(dep)),
+            format!("dependency {}", dep.label()),
+            Some(&dep.origin),
+        )
+    }
+
+    fn dependency(&self, id: &str) -> Option<Node> {
+        let config = self.config;
+        let dep = config.dependencies.iter().find(|d| self.dep_id(d) == id)?;
+        let mut root = self.dep_link(dep);
+        root.label = dep.label();
+        let master = match dep.master() {
+            (host, None) => {
+                let origin = config.host_named(host).map(|(_, h)| &h.origin);
+                let mut n = self.node("host", Some(host), format!("host {host}"), origin);
+                n.detail = Some(format!("holds back while {}", states_text(&dep.states)));
+                n
+            }
+            _ => {
+                let origin = config.service(&dep.on).map(|s| &s.origin);
+                let mut n = self.node(
+                    "service",
+                    Some(&dep.on),
+                    format!("service {}", dep.on),
+                    origin,
+                );
+                n.detail = Some(format!("holds back while {}", states_text(&dep.states)));
+                n
+            }
+        };
+        root.children.extend(self.section("on", vec![master]));
+        let mut matched = Vec::new();
+        for s in &config.services {
+            let host_alert = config.is_host_check(s);
+            if let Some((_, why)) = config
+                .matching_dependencies(s, host_alert)
+                .into_iter()
+                .find(|(d, _)| std::ptr::eq(*d, dep))
+            {
+                let (kind, name, text) = match host_alert {
+                    true => (
+                        "host",
+                        config.host(s).name.clone(),
+                        format!("host {}", config.host(s).name),
+                    ),
+                    false => ("service", s.id.clone(), format!("service {}", s.id)),
+                };
+                let mut n = self.node(kind, Some(&name), text, None);
+                n.detail = Some(why);
+                matched.push(n);
+            }
+        }
+        let total = matched.len();
+        matched.truncate(200);
+        let title = match total > 200 {
+            true => format!("holds back ({total}, first 200)"),
+            false => "holds back".to_string(),
+        };
+        root.children.extend(self.section(&title, matched));
+        Some(root)
+    }
+}
+
+/// `CRITICAL or UNKNOWN` for a dependency's states.
+fn states_text(states: &[String]) -> String {
+    states
+        .iter()
+        .map(|s| s.to_uppercase())
+        .collect::<Vec<_>>()
+        .join(" or ")
 }
 
 fn duration(d: Duration) -> String {

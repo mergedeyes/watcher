@@ -408,6 +408,21 @@ period = "workhours"
 
 Details: [period](../objects/notify.md#period).
 
+## Dependencies
+
+A [dependency](../objects/dependency.md) keeps dependents quiet while
+what they need is down. One notification about the router, none about
+the twenty hosts behind it:
+
+```toml
+[[dependency]]
+on = "gw"
+hosts = { groups = ["branch-office"] }
+```
+
+Checks keep running and the web UI keeps showing the real states; only
+the notifications wait. Details: [dependency](../objects/dependency.md).
+
 For complete setups (quiet start, escalation ladders, on-call at night,
 one team per service, maintenance windows), see
 [Alerting recipes](alerting-recipes.md).

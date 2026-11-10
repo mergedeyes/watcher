@@ -304,9 +304,10 @@ Admins only.
 | `DELETE config/locks/{path}?lease=…` | Give the lease up. |
 
 Kinds: `check`, `service`, `host`, `hostgroup`, `servicegroup`, `contact`,
-`contactgroup`, `downtimegroup`, `timeperiod`, `notify`, `sink`.
+`contactgroup`, `downtimegroup`, `timeperiod`, `notify`, `dependency`,
+`sink`.
 
-A notify rule without a `name` is addressed as `@path:line`, for example
+A notify rule or dependency without a `name` is addressed as `@path:line`, for example
 `@ui/notify.toml:4` (URL-encoded in paths), the way `GET config/objects`
 lists it.
 
@@ -345,7 +346,7 @@ curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
 | `kind` | Object kind. |
 | `name` | Current name; `null` creates a new object. |
 | `fields` | The object's fields; `null` deletes it. |
-| `path` | File for new objects. Default: `ui/hosts.toml`, `ui/services.toml`, `ui/checks.toml`, `ui/groups.toml`, `ui/contacts.toml`, `ui/notify.toml` or `ui/sinks.toml`, by kind. |
+| `path` | File for new objects. Default: `ui/hosts.toml`, `ui/services.toml`, `ui/checks.toml`, `ui/groups.toml`, `ui/contacts.toml`, `ui/notify.toml`, `ui/dependencies.toml` or `ui/sinks.toml`, by kind. |
 
 | Change field | Description |
 |---|---|

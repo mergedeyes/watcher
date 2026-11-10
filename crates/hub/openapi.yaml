@@ -847,7 +847,7 @@ paths:
     get:
       summary: Config Tree of an object in the running config (admins)
       parameters:
-        - { name: kind, in: path, required: true, schema: { type: string, enum: [host, service, check, hostgroup, servicegroup, contact, contactgroup, downtimegroup, timeperiod, notify] } }
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [host, service, check, hostgroup, servicegroup, contact, contactgroup, downtimegroup, timeperiod, notify, dependency] } }
         - { name: name, in: path, required: true, description: "host/service for services", schema: { type: string } }
       responses:
         "200":
@@ -1342,7 +1342,7 @@ components:
         path: { type: string }
         hash: { type: string, description: SHA-256 }
         text: { type: string }
-    Kind: { type: string, enum: [check, service, host, hostgroup, servicegroup, contact, contactgroup, downtimegroup, timeperiod, notify, sink] }
+    Kind: { type: string, enum: [check, service, host, hostgroup, servicegroup, contact, contactgroup, downtimegroup, timeperiod, notify, dependency, sink] }
     ConfigObject:
       type: object
       properties:
@@ -1380,6 +1380,7 @@ components:
         groups: { $ref: "#/components/schemas/Delta", description: "As `hostgroup x`, `servicegroup x`, `contactgroup x`" }
         contacts: { $ref: "#/components/schemas/Delta" }
         notify: { $ref: "#/components/schemas/Delta", description: Notify rules by name or place }
+        dependencies: { $ref: "#/components/schemas/Delta", description: Dependencies by name or place }
         sinks: { $ref: "#/components/schemas/Delta" }
     Group:
       type: object
@@ -1389,7 +1390,7 @@ components:
     TreeNode:
       type: object
       properties:
-        kind: { type: string, description: "host, service (host/service: on a host, otherwise a service object), check, hostgroup, servicegroup, contact, contactgroup, notify; section or value otherwise" }
+        kind: { type: string, description: "host, service (host/service: on a host, otherwise a service object), check, hostgroup, servicegroup, contact, contactgroup, downtimegroup, timeperiod, notify, dependency; section or value otherwise" }
         name: { type: string, description: "Object name to link to (host/service for services)" }
         label: { type: string }
         detail: { type: string, description: A value, or why something applies }

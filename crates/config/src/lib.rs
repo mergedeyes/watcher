@@ -500,6 +500,43 @@ impl NotifyRule {
     }
 }
 
+/// Holds notifications back while another host or service has problems:
+/// when the switch is down, the hosts behind it stay quiet.
+#[derive(Debug, Clone)]
+pub struct Dependency {
+    pub name: Option<String>,
+    /// What the dependents wait on: a host name, or a `host/service` id.
+    pub on: String,
+    /// The dependent hosts; `None` matches all of them.
+    pub hosts: Option<HostSelector>,
+    /// With services set, the dependency only holds back service alerts.
+    pub services: Option<ServiceSelector>,
+    /// Master states that hold dependents back (`down` for a host,
+    /// otherwise `warning`, `critical`, `unknown`). Never empty: loading
+    /// fills in the defaults.
+    pub states: Vec<String>,
+    pub enabled: bool,
+    pub origin: Origin,
+}
+
+impl Dependency {
+    /// The name, or where it is defined.
+    pub fn label(&self) -> String {
+        match &self.name {
+            Some(name) => name.clone(),
+            None => format!("dependency at {}", self.origin),
+        }
+    }
+
+    /// The master as (host, service): `("gw", None)` or `("db01", Some("postgres"))`.
+    pub fn master(&self) -> (&str, Option<&str>) {
+        match self.on.split_once('/') {
+            Some((h, s)) => (h, Some(s)),
+            None => (&self.on, None),
+        }
+    }
+}
+
 /// The kind of a notification, for [`Config::recipients`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Alert {
@@ -563,6 +600,7 @@ pub struct Config {
     pub downtimegroups: Vec<DowntimeGroup>,
     pub timeperiods: Vec<TimePeriod>,
     pub notify: Vec<NotifyRule>,
+    pub dependencies: Vec<Dependency>,
     pub sinks: Vec<Sink>,
     /// Lookups by name, built on first use: the lists must be complete by
     /// then.
@@ -676,6 +714,59 @@ impl Config {
                     why.push("all".into());
                 }
                 Some((rule, why.join(", ")))
+            })
+            .collect()
+    }
+
+    /// The service whose alert reports the master of `dep`: the master
+    /// service itself, or the host check of a master host. `None` when a
+    /// master host has no host check; such a host is always UP, so the
+    /// dependency never applies.
+    pub fn dependency_master_check(&self, dep: &Dependency) -> Option<&Service> {
+        match dep.master() {
+            (_, Some(_)) => self.service(&dep.on),
+            (host, None) => {
+                let (_, h) = self.host_named(host)?;
+                self.host_check(h)
+            }
+        }
+    }
+
+    /// The dependencies that hold an alert about `service` back while
+    /// their master has problems, with why they match. Like notify rules,
+    /// a host alert only matches dependencies without `services`. A
+    /// dependency never holds back the alert that reports its own master.
+    pub fn matching_dependencies(
+        &self,
+        service: &Service,
+        host_alert: bool,
+    ) -> Vec<(&Dependency, String)> {
+        let host = self.host(service);
+        self.dependencies
+            .iter()
+            .filter(|d| d.enabled)
+            .filter_map(|dep| {
+                if self
+                    .dependency_master_check(dep)
+                    .is_some_and(|m| m.id == service.id)
+                {
+                    return None;
+                }
+                let mut why = Vec::new();
+                if let Some(sel) = &dep.hosts {
+                    why.push(format!("host: {}", sel.matches(host)?));
+                }
+                match (&dep.services, host_alert) {
+                    (Some(_), true) => return None,
+                    (Some(sel), false) => {
+                        why.push(format!("service: {}", sel.matches(service, host)?))
+                    }
+                    (None, _) => {}
+                }
+                if why.is_empty() {
+                    why.push("all".into());
+                }
+                Some((dep, why.join(", ")))
             })
             .collect()
     }
