@@ -88,12 +88,19 @@ async fn signals_are_reported() {
 
 #[tokio::test]
 async fn programs_are_found_in_path_option() {
-    use std::os::unix::fs::PermissionsExt;
     let dir = std::env::temp_dir().join(format!("watcher-exec-path-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let script = dir.join("check_here");
-    std::fs::write(&script, "#!/bin/sh\necho \"OK $1\"\n").unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Written by a child process: while this process has the file open for
+    // writing, a child forked by another test inherits that, and running
+    // the script then fails with "Text file busy".
+    let written = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(r#"printf '%s\n' '#!/bin/sh' 'echo "OK $1"' > "$0" && chmod 755 "$0""#)
+        .arg(&script)
+        .status()
+        .unwrap();
+    assert!(written.success());
     let path = std::env::join_paths([dir.clone(), "/usr/bin".into(), "/bin".into()]).unwrap();
     let opts = ExecOptions {
         path: Some(path.as_os_str().into()),
