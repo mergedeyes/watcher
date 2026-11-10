@@ -238,4 +238,7 @@ after = "30m"
 Acknowledging the problem in time stops the escalation. Details:
 [after](../objects/notify.md#after).
 
+For complete setups (quiet start, escalation ladders, one team per
+service, maintenance windows), see [Alerting recipes](alerting-recipes.md).
+
 *Not yet:* more channels.
