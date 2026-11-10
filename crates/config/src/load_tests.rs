@@ -262,7 +262,7 @@ fn notify_rules_add_up() {
         let s = config.service(id).unwrap();
         let host_alert = config.is_host_check(s);
         config
-            .recipients(s, host_alert, alert, state)
+            .recipients(s, host_alert, alert, state, None)
             .iter()
             .map(|c| c.name.clone())
             .collect()
@@ -395,30 +395,30 @@ after = "0"
         |cs: Vec<&crate::Contact>| -> Vec<String> { cs.iter().map(|c| c.name.clone()).collect() };
     // Not told at once, and their repeat isn't a plain repeat.
     assert_eq!(
-        names(config.recipients(s, false, Alert::Problem, "critical")),
+        names(config.recipients(s, false, Alert::Problem, "critical", None)),
         ["ops"]
     );
     assert_eq!(config.repeat_recipients(s, false, "critical").len(), 1);
     let esc: Vec<(String, u64, Option<u64>)> = config
-        .escalations(s, false, "critical")
+        .followups(s, false, "critical")
         .into_iter()
-        .map(|(c, a, r)| {
+        .map(|f| {
             (
-                c.name.clone(),
-                a.as_secs() / 60,
-                r.map(|r| r.as_secs() / 60),
+                f.contact.name.clone(),
+                f.after.unwrap().as_secs() / 60,
+                f.repeat.map(|r| r.as_secs() / 60),
             )
         })
         .collect();
     assert_eq!(esc, [("boss".into(), 30, Some(60))]);
-    assert!(config.escalations(s, false, "warning").is_empty());
+    assert!(config.followups(s, false, "warning").is_empty());
     assert_eq!(
-        names(config.escalation_recoveries(s, false, "critical")),
+        names(config.followup_recoveries(s, false, "critical")),
         ["boss"]
     );
     // A host without host check: escalations get no downtime messages.
     let (_, host) = config.host_named("a").unwrap();
-    assert_eq!(names(config.host_downtime_recipients(host)), ["ops"]);
+    assert_eq!(names(config.host_downtime_recipients(host, None)), ["ops"]);
 
     let (_, diags) = compile(&[(
         "a.toml",
@@ -1269,5 +1269,103 @@ services = ["dns", "tcp"]
             "a.toml:5: error: host \"h\": service \"tcp\": vars.port is not set: the port",
             "a.toml:5: warning: service \"tcp\" is on no host",
         ]
+    );
+}
+
+#[test]
+fn time_periods_limit_notify_rules() {
+    let base = r#"
+[contact.day]
+[contact.night]
+
+[[host]]
+name = "a"
+  [host.service.disk]
+  command = "true"
+"#;
+    let config = ok(&[(
+        "a.toml",
+        &format!(
+            r#"{base}
+[timeperiod.workhours]
+title = "Business hours"
+schedule = [{{ days = ["mon", "tue", "wed", "thu", "fri"], from = "08:00", to = "18:00" }}]
+
+[timeperiod.offhours]
+schedule = [
+  {{ days = ["mon", "tue", "wed", "thu", "fri"], from = "00:00", to = "08:00" }},
+  {{ days = ["mon", "tue", "wed", "thu", "fri"], from = "18:00", to = "00:00" }},
+  {{ days = ["sat", "sun"], from = "00:00", to = "00:00" }},
+]
+
+[[notify]]
+contacts = ["day"]
+period = "workhours"
+
+[[notify]]
+contacts = ["night"]
+period = "offhours"
+"#
+        ),
+    )]);
+    assert_eq!(config.timeperiods.len(), 2);
+    assert_eq!(config.notify[0].period.as_deref(), Some("workhours"));
+    let s = config.service("a/disk").unwrap();
+    let tz = crate::TimeZone::UTC;
+    // Monday 2026-11-09, and Saturday.
+    let at = |days: u64, h: u64| crate::At {
+        now: std::time::UNIX_EPOCH + Duration::from_secs(1_794_182_400 + days * 86400 + h * 3600),
+        tz: &tz,
+    };
+    let to = |alert, at| -> Vec<String> {
+        config
+            .recipients(s, false, alert, "critical", at)
+            .iter()
+            .map(|c| c.name.clone())
+            .collect()
+    };
+    assert_eq!(to(Alert::Problem, Some(at(0, 10))), ["day"]);
+    assert_eq!(to(Alert::Problem, Some(at(0, 20))), ["night"]);
+    assert_eq!(to(Alert::Problem, Some(at(5, 10))), ["night"]);
+    // Monday early morning, after the weekend.
+    assert_eq!(to(Alert::Problem, Some(at(0, 3))), ["night"]);
+    // Without a time: everyone who could be notified.
+    assert_eq!(to(Alert::Problem, None), ["day", "night"]);
+    // Recoveries only through followup_recoveries (who got the problem).
+    assert!(to(Alert::Recovery, Some(at(0, 10))).is_empty());
+    assert_eq!(config.followup_recoveries(s, false, "critical").len(), 2);
+    let f = config.followups(s, false, "critical");
+    assert_eq!(f.len(), 2);
+    assert_eq!(f[0].period.map(|p| p.name.as_str()), Some("workhours"));
+    assert_eq!(f[0].after, None);
+
+    let (_, diags) = compile(&[(
+        "a.toml",
+        &format!(
+            r#"{base}
+[timeperiod.empty]
+
+[timeperiod.bad]
+schedule = [{{ days = ["someday"], from = "08:00", to = "18:00" }}]
+
+[timeperiod.unused]
+schedule = [{{ from = "08:00", to = "18:00" }}]
+
+[[notify]]
+contacts = ["day"]
+period = "nope"
+"#
+        ),
+    )]);
+    let text = messages(&diags).join("\n");
+    assert!(
+        text.contains("timeperiod \"empty\": needs a schedule"),
+        "{text}"
+    );
+    assert!(text.contains("timeperiod \"bad\": schedule 1:"), "{text}");
+    assert!(text.contains("unknown timeperiod \"nope\""), "{text}");
+    assert!(
+        text.contains("timeperiod \"unused\" is used by no notify rule"),
+        "{text}"
     );
 }

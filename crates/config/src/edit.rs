@@ -20,12 +20,13 @@ pub enum Kind {
     Contact,
     ContactGroup,
     DowntimeGroup,
+    TimePeriod,
     Notify,
     Sink,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 10] = [
+    pub const ALL: [Kind; 11] = [
         Kind::Check,
         Kind::Service,
         Kind::Host,
@@ -34,6 +35,7 @@ impl Kind {
         Kind::Contact,
         Kind::ContactGroup,
         Kind::DowntimeGroup,
+        Kind::TimePeriod,
         Kind::Notify,
         Kind::Sink,
     ];
@@ -49,6 +51,7 @@ impl Kind {
             Kind::Contact => "contact",
             Kind::ContactGroup => "contactgroup",
             Kind::DowntimeGroup => "downtimegroup",
+            Kind::TimePeriod => "timeperiod",
             Kind::Notify => "notify",
             Kind::Sink => "sink",
         }
@@ -66,9 +69,11 @@ impl Kind {
             Kind::Check => "ui/checks.toml",
             Kind::Service => "ui/services.toml",
             Kind::Host => "ui/hosts.toml",
-            Kind::HostGroup | Kind::ServiceGroup | Kind::ContactGroup | Kind::DowntimeGroup => {
-                "ui/groups.toml"
-            }
+            Kind::HostGroup
+            | Kind::ServiceGroup
+            | Kind::ContactGroup
+            | Kind::DowntimeGroup
+            | Kind::TimePeriod => "ui/groups.toml",
             Kind::Contact => "ui/contacts.toml",
             Kind::Notify => "ui/notify.toml",
             Kind::Sink => "ui/sinks.toml",
@@ -143,6 +148,7 @@ impl Kind {
             Kind::ServiceGroup => &["title", "services"],
             Kind::ContactGroup => &["title", "members"],
             Kind::DowntimeGroup => &["title", "members", "hostgroups", "schedule"],
+            Kind::TimePeriod => &["title", "schedule"],
             Kind::Contact => &["email", "webhook", "groups"],
             Kind::Notify => &[
                 "name",
@@ -152,6 +158,9 @@ impl Kind {
                 "services",
                 "states",
                 "on",
+                "repeat",
+                "after",
+                "period",
                 "enabled",
             ],
             Kind::Sink => &["name", "type", "url", "password_file", "flush", "buffer"],
@@ -269,6 +278,7 @@ fn parse(path: &str, text: &str) -> Result<Vec<Object>, (usize, String)> {
         (Kind::Contact, file.contact),
         (Kind::ContactGroup, file.contactgroup),
         (Kind::DowntimeGroup, file.downtimegroup),
+        (Kind::TimePeriod, file.timeperiod),
     ];
     for (kind, map) in keyed {
         for (name, t) in map {

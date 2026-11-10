@@ -12,7 +12,7 @@ use std::time::Duration;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Node {
     /// `host`, `service`, `check`, `hostgroup`, `servicegroup`, `contact`,
-    /// `contactgroup`, `downtimegroup` and `notify` for objects; `section` and `value`
+    /// `contactgroup`, `downtimegroup`, `timeperiod` and `notify` for objects; `section` and `value`
     /// otherwise. A `service` named `host/service` is a service on a host,
     /// one without `/` a service object.
     pub kind: &'static str,
@@ -61,6 +61,7 @@ impl<'a> Builder<'a> {
             "contact" => self.contact(name),
             "contactgroup" => self.contactgroup(name),
             "downtimegroup" => self.downtimegroup(name),
+            "timeperiod" => self.timeperiod(name),
             "notify" => self.rule(name),
             _ => None,
         }
@@ -337,6 +338,9 @@ impl<'a> Builder<'a> {
                 }
                 if let Some(every) = rule.repeat {
                     detail += &format!("; repeats every {}", duration(every));
+                }
+                if let Some(period) = &rule.period {
+                    detail += &format!("; only in {period}");
                 }
                 n.detail = Some(detail);
                 n.children = self.rule_targets(rule);
@@ -807,6 +811,35 @@ impl<'a> Builder<'a> {
             .notify
             .iter()
             .filter(|r| r.contact_groups.iter().any(|x| x == name))
+            .map(|r| self.rule_link(r))
+            .collect();
+        root.children.extend(self.section("notify rules", rules));
+        Some(root)
+    }
+
+    fn timeperiod(&self, name: &str) -> Option<Node> {
+        let config = self.config;
+        let p = config.timeperiod(name)?;
+        let mut root = self.node(
+            "timeperiod",
+            Some(&p.name),
+            p.title.as_deref().unwrap_or(&p.name),
+            Some(&p.origin),
+        );
+        let windows: Vec<Node> = p
+            .schedule
+            .iter()
+            .map(|w| {
+                let mut n = self.node("value", None, "window", Some(&p.origin));
+                n.detail = Some(w.to_string());
+                n
+            })
+            .collect();
+        root.children.extend(self.section("schedule", windows));
+        let rules: Vec<Node> = config
+            .notify
+            .iter()
+            .filter(|r| r.period.as_deref() == Some(name))
             .map(|r| self.rule_link(r))
             .collect();
         root.children.extend(self.section("notify rules", rules));

@@ -117,6 +117,9 @@
 								<th>Title</th>
 								<th>Hosts</th>
 								<th>Schedule</th>
+							{:else if kind.kind === 'timeperiod'}
+								<th>Title</th>
+								<th>Schedule</th>
 							{:else if kind.kind === 'contact'}
 								<th>Email</th>
 								<th class="hide-narrow">Webhook</th>
@@ -125,6 +128,7 @@
 								<th>To</th>
 								<th>Match</th>
 								<th class="hide-narrow">States</th>
+								<th class="hide-narrow">Time Period</th>
 							{:else}
 								<th>Fields</th>
 							{/if}
@@ -162,6 +166,9 @@
 									<td>{list(f.title)}</td>
 									<td class="mono">{[list(f.members), list(f.hostgroups)].filter(Boolean).join(' · ')}</td>
 									<td class="mono">{windows(f.schedule)}</td>
+								{:else if kind.kind === 'timeperiod'}
+									<td>{list(f.title)}</td>
+									<td class="mono">{windows(f.schedule)}</td>
 								{:else if kind.kind === 'contact'}
 									<td>{list(f.email)}</td>
 									<td class="mono hide-narrow info">{list(f.webhook)}</td>
@@ -170,6 +177,7 @@
 									<td>{[list(f.contacts), list(f.contact_groups)].filter(Boolean).join(', ')}</td>
 									<td class="mono">{[f.hosts !== undefined ? `hosts ${selector(f.hosts)}` : '', f.services !== undefined ? `services ${selector(f.services)}` : ''].filter(Boolean).join(' · ') || 'all'}</td>
 									<td class="hide-narrow">{list(f.states) || 'all'}</td>
+									<td class="hide-narrow">{list(f.period) || 'always'}</td>
 								{:else}
 									<td class="mono">{keys(o)}</td>
 								{/if}

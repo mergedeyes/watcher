@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
-use watcher_config::{Alert, Config, Contact, Service, Smtp, state_name};
+use watcher_config::{Alert, At, Config, Contact, Service, Smtp, TimeZone, state_name};
 use watcher_core::{HostState, State, StateType};
 use watcher_exec::scheduler::Event;
 
@@ -188,13 +188,15 @@ fn about(
     }
 }
 
-/// Decides whether `event` notifies, and whom. `got` are the contacts that
-/// got a PROBLEM about it: escalation rules tell only them of a recovery.
+/// Decides whether `event` notifies, and whom, at `at` (for time periods).
+/// `got` are the contacts that got a PROBLEM about it: escalations and
+/// rules with a time period tell only them of a recovery.
 pub fn decide<'a>(
     event: &Event,
     config: &'a Config,
     public_url: Option<&str>,
     got: &[String],
+    at: At<'_>,
 ) -> Option<(Notification, Vec<&'a Contact>)> {
     let service = config.service(&event.id)?;
     let host_check = config.is_host_check(service);
@@ -242,9 +244,9 @@ pub fn decide<'a>(
         Kind::DowntimeStart | Kind::DowntimeEnd => (Alert::Downtime, to),
     };
     let rule_state = state_name(rule_state, host_check);
-    let mut contacts = config.recipients(service, host_check, alert, rule_state);
+    let mut contacts = config.recipients(service, host_check, alert, rule_state, Some(at));
     if alert == Alert::Recovery {
-        for c in config.escalation_recoveries(service, host_check, rule_state) {
+        for c in config.followup_recoveries(service, host_check, rule_state) {
             if got.contains(&c.name) && !contacts.iter().any(|o| o.name == c.name) {
                 contacts.push(c);
             }
@@ -292,11 +294,12 @@ pub enum Message {
     Problems(Vec<OpenProblem>),
 }
 
-/// Whom a downtime change notifies.
+/// Whom a downtime change notifies at `at`.
 pub fn decide_downtime<'a>(
     change: &DowntimeChange,
     config: &'a Config,
     public_url: Option<&str>,
+    at: At<'_>,
 ) -> Option<(Notification, Vec<&'a Contact>)> {
     let (_, host) = config.host_named(&change.host)?;
     let service = match &change.service {
@@ -304,8 +307,8 @@ pub fn decide_downtime<'a>(
         None => None,
     };
     let contacts = match service {
-        Some(s) => config.recipients(s, false, Alert::Downtime, "ok"),
-        None => config.host_downtime_recipients(host),
+        Some(s) => config.recipients(s, false, Alert::Downtime, "ok", Some(at)),
+        None => config.host_downtime_recipients(host, Some(at)),
     };
     if contacts.is_empty() {
         return None;
@@ -471,20 +474,24 @@ pub struct Sent {
 
 /// Sends notifications for `messages` until the channel closes. `config`
 /// follows reloads. `repeats` is the repeat clock to go on with
-/// ([`Repeats::restore`]); every delivery goes to `log`.
+/// ([`Repeats::restore`]); every delivery goes to `log`. Time periods are
+/// in the time zone `tz`.
 pub async fn run(
     notifier: Arc<Notifier>,
     config: watch::Receiver<Arc<Config>>,
     mut messages: mpsc::Receiver<Message>,
     mut repeats: Repeats,
     log: Option<mpsc::Sender<Sent>>,
+    tz: TimeZone,
 ) {
     while let Some(message) = messages.recv().await {
         let config = config.borrow().clone();
         let url = notifier.public_url();
+        let now = SystemTime::now();
+        let at = At { now, tz: &tz };
         let decided: Vec<(Notification, Vec<&Contact>)> = match &message {
             Message::Result(event) => {
-                let decided = decide(event, &config, url, &repeats.got(&event.id));
+                let decided = decide(event, &config, url, &repeats.got(&event.id), at);
                 match &decided {
                     Some((n, contacts)) if n.kind == Kind::Problem => {
                         let since = event.state.last_hard_change;
@@ -495,10 +502,10 @@ pub async fn run(
                 }
                 decided.into_iter().collect()
             }
-            Message::Downtime(change) => {
-                decide_downtime(change, &config, url).into_iter().collect()
-            }
-            Message::Problems(open) => repeats.due(open, &config, url, SystemTime::now()),
+            Message::Downtime(change) => decide_downtime(change, &config, url, at)
+                .into_iter()
+                .collect(),
+            Message::Problems(open) => repeats.due(open, &config, url, now, &tz),
         };
         for (mut n, contacts) in decided {
             n.instance = notifier.instance.clone();
@@ -558,6 +565,15 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Now, in UTC, for rules with time periods.
+    fn now() -> At<'static> {
+        static UTC: TimeZone = TimeZone::UTC;
+        At {
+            now: SystemTime::now(),
+            tz: &UTC,
+        }
+    }
     use std::collections::BTreeMap;
     use watcher_core::{Format, RawOutput, ServiceState, Termination, evaluate};
 
@@ -655,7 +671,10 @@ host_check = "ping"
         );
         let decided: Vec<_> = evs
             .iter()
-            .map(|e| decide(e, &config, Some("https://w.example/"), &[]).map(|(n, c)| (n, c.len())))
+            .map(|e| {
+                decide(e, &config, Some("https://w.example/"), &[], now())
+                    .map(|(n, c)| (n, c.len()))
+            })
             .collect();
         // First OK, then two soft failures: nothing.
         assert!(decided[..3].iter().all(Option::is_none));
@@ -717,7 +736,7 @@ name = "h"
             &[(0, "OK"), (2, "CRIT"), (2, "CRIT"), (2, "CRIT"), (0, "OK")],
         );
         let to = |e: &Event, got: &[String]| -> Vec<String> {
-            decide(e, &config, None, got)
+            decide(e, &config, None, got, now())
                 .map(|(_, c)| c.iter().map(|c| c.name.clone()).collect())
                 .unwrap_or_default()
         };
@@ -729,13 +748,57 @@ name = "h"
     }
 
     #[test]
+    fn time_period_rules_notify_inside_it_and_recover_who_got_it() {
+        let config = load(
+            r#"
+[contact.ops]
+[contact.day]
+
+[timeperiod.never-now]
+schedule = [{ from = "2000-01-01 00:00", to = "2000-01-02 00:00" }]
+
+[timeperiod.always]
+schedule = [{ from = "00:00", to = "00:00" }]
+
+[[notify]]
+contacts = ["ops"]
+period = "always"
+
+[[notify]]
+contacts = ["day"]
+period = "never-now"
+
+[[host]]
+name = "h"
+  [host.service.disk]
+  command = "true"
+"#,
+        );
+        let evs = events(
+            "h/disk",
+            &[(0, "OK"), (2, "CRIT"), (2, "CRIT"), (2, "CRIT"), (0, "OK")],
+        );
+        let to = |e: &Event, got: &[String]| -> Vec<String> {
+            decide(e, &config, None, got, now())
+                .map(|(_, c)| c.iter().map(|c| c.name.clone()).collect())
+                .unwrap_or_default()
+        };
+        assert_eq!(to(&evs[3], &[]), ["ops"]);
+        assert!(to(&evs[4], &[]).is_empty());
+        assert_eq!(to(&evs[4], &["ops".into()]), ["ops"]);
+    }
+
+    #[test]
     fn soft_recovery_and_no_contacts_stay_quiet() {
         let config = config();
         let evs = events("web 01/disk", &[(0, "OK"), (2, "CRIT"), (0, "OK")]);
-        assert!(evs.iter().all(|e| decide(e, &config, None, &[]).is_none()));
+        assert!(
+            evs.iter()
+                .all(|e| decide(e, &config, None, &[], now()).is_none())
+        );
         let evs = events("web 01/quiet", &[(2, "CRIT"), (2, "CRIT"), (2, "CRIT")]);
         assert!(evs[2].change.unwrap().hard);
-        assert!(decide(&evs[2], &config, None, &[]).is_none());
+        assert!(decide(&evs[2], &config, None, &[], now()).is_none());
     }
 
     #[test]
@@ -744,7 +807,7 @@ name = "h"
         let sent = |results: &[(i32, &str)]| -> Vec<_> {
             events("router/ping", results)
                 .iter()
-                .filter_map(|e| decide(e, &config, None, &[]))
+                .filter_map(|e| decide(e, &config, None, &[], now()))
                 .map(|(n, _)| {
                     (
                         n.kind,
@@ -793,7 +856,7 @@ name = "h"
         let evs = events("web 01/disk", &results);
         let kinds: Vec<Kind> = evs
             .iter()
-            .filter_map(|e| decide(e, &config, None, &[]))
+            .filter_map(|e| decide(e, &config, None, &[], now()))
             .map(|(n, _)| n.kind)
             .collect();
         // Hard problems and recoveries until flapping starts, then nothing
@@ -817,7 +880,7 @@ name = "h"
             "web 01/disk",
             &[(2, "CRIT | used=95%"), (2, "CRIT"), (2, "CRIT")],
         );
-        let (n, _) = decide(&evs[2], &config, None, &[]).unwrap();
+        let (n, _) = decide(&evs[2], &config, None, &[], now()).unwrap();
         let json = serde_json::to_value(&n).unwrap();
         assert_eq!(json["kind"], "problem");
         assert_eq!(json["state"], "critical");
@@ -845,8 +908,13 @@ name = "h"
             time: SystemTime::now(),
         };
         // A host with a host check: rules for the host.
-        let (n, contacts) =
-            decide_downtime(&change("router", None), &config, Some("https://w.example")).unwrap();
+        let (n, contacts) = decide_downtime(
+            &change("router", None),
+            &config,
+            Some("https://w.example"),
+            now(),
+        )
+        .unwrap();
         assert_eq!(n.kind, Kind::DowntimeStart);
         assert_eq!(n.service_id(), "router");
         assert_eq!(n.state_name(), "UP");
@@ -857,9 +925,10 @@ name = "h"
             "[Watcher] DOWNTIMESTART: router is UP"
         );
         // Rules with services don't take host downtimes.
-        assert!(decide_downtime(&change("web 01", None), &config, None).is_none());
-        let (n, _) = decide_downtime(&change("web 01", Some("disk")), &config, None).unwrap();
+        assert!(decide_downtime(&change("web 01", None), &config, None, now()).is_none());
+        let (n, _) =
+            decide_downtime(&change("web 01", Some("disk")), &config, None, now()).unwrap();
         assert_eq!(n.service_id(), "web 01/disk");
-        assert!(decide_downtime(&change("web 01", Some("quiet")), &config, None).is_none());
+        assert!(decide_downtime(&change("web 01", Some("quiet")), &config, None, now()).is_none());
     }
 }

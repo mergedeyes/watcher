@@ -424,6 +424,7 @@ export type Kind =
 	| 'contact'
 	| 'contactgroup'
 	| 'downtimegroup'
+	| 'timeperiod'
 	| 'notify'
 	| 'sink';
 

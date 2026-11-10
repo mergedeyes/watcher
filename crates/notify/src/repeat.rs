@@ -18,7 +18,7 @@ use crate::{Kind, Notification, about};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use watcher_config::{Config, Contact, state_name};
+use watcher_config::{Config, Contact, TimeZone, state_name};
 use watcher_core::State;
 
 /// A HARD problem that is still open.
@@ -60,6 +60,10 @@ struct Open {
     /// No repeat is due before this; `None`: work it out on the next list.
     next: Option<SystemTime>,
 }
+
+/// How soon to look again at a time period without a window in the next
+/// week.
+const RECHECK: Duration = Duration::from_secs(3600);
 
 /// "Never", for problems without repeating rules (until a reload).
 const FAR: Duration = Duration::from_secs(10 * 365 * 86400);
@@ -115,6 +119,7 @@ impl Repeats {
         config: &'a Arc<Config>,
         public_url: Option<&str>,
         now: SystemTime,
+        tz: &TimeZone,
     ) -> Vec<(Notification, Vec<&'a Contact>)> {
         // A reload may change rules and contacts.
         if !self.config.as_ref().is_some_and(|c| Arc::ptr_eq(c, config)) {
@@ -162,19 +167,37 @@ impl Repeats {
                 let last = open.sent.get(&contact.name).copied().unwrap_or(open.base);
                 add(contact, last + every);
             }
-            // Escalations count from when the problem reached its state
-            // (or from startup), and only take what was sent since then.
+            // Escalations and rules with a time period count from when the
+            // problem reached its state (or from startup), and only take
+            // what was sent since then.
             let start = open.base.max(p.since);
-            for (contact, after, every) in config.escalations(service, host_check, state) {
+            for f in config.followups(service, host_check, state) {
+                let after = f.after.unwrap_or_default();
                 let got = open
                     .sent
-                    .get(&contact.name)
+                    .get(&f.contact.name)
                     .copied()
                     .filter(|&t| t >= p.since);
-                match (got, every) {
-                    (None, _) => add(contact, start + after),
-                    (Some(last), Some(every)) => add(contact, (last + every).max(start + after)),
-                    (Some(_), None) => {}
+                let earliest = match (got, f.repeat) {
+                    // A rule with only a time period sends what started
+                    // while it was off once it begins. Problems from before
+                    // startup (or the log) reach it only by repeat, so a
+                    // restart doesn't send them all again.
+                    (None, every) if f.after.is_none() && p.since < open.base => match every {
+                        Some(every) => open.base + every,
+                        None => continue,
+                    },
+                    (None, _) => start + after,
+                    (Some(last), Some(every)) => (last + every).max(start + after),
+                    (Some(_), None) => continue,
+                };
+                match f.period {
+                    None => add(f.contact, earliest),
+                    Some(period) => match period.from(earliest.max(now), tz) {
+                        Some(t) => add(f.contact, t),
+                        // Nothing within a week: look again later.
+                        None => add(f.contact, now + RECHECK),
+                    },
                 }
             }
             let mut due = Vec::new();
@@ -295,7 +318,7 @@ host_check = "ping"
         config: &Arc<Config>,
         now: SystemTime,
     ) -> Vec<String> {
-        r.due(problems, config, None, now)
+        r.due(problems, config, None, now, &TimeZone::UTC)
             .into_iter()
             .flat_map(|(n, c)| {
                 assert!(n.repeat && n.kind == Kind::Problem);
@@ -587,6 +610,127 @@ after = "1h"
             names(&mut r, &p, &config, t0 + 30 * MIN),
             ["web01/disk boss"]
         );
+    }
+
+    /// Monday 2026-11-09 at `h:m` UTC, plus `days`.
+    fn monday(days: u64, h: u64, m: u64) -> SystemTime {
+        SystemTime::UNIX_EPOCH
+            + Duration::from_secs(1_794_182_400 + days * 86400 + h * 3600 + m * 60)
+    }
+
+    const WORKHOURS: &str = r#"
+[timeperiod.workhours]
+schedule = [{ days = ["mon", "tue", "wed", "thu", "fri"], from = "08:00", to = "18:00" }]
+"#;
+
+    #[test]
+    fn time_periods_send_open_problems_when_they_begin() {
+        let config = config(&format!(
+            r#"{WORKHOURS}
+[[notify]]
+contacts = ["ops"]
+period = "workhours"
+"#
+        ));
+        let mut r = Repeats::default();
+        assert!(names(&mut r, &[], &config, monday(0, 0, 0)).is_empty());
+        // A problem at 3:00 waits for 8:00, and goes out once.
+        let p = [problem("web01/disk", State::Critical, monday(0, 3, 0))];
+        assert!(names(&mut r, &p, &config, monday(0, 3, 0)).is_empty());
+        assert!(names(&mut r, &p, &config, monday(0, 7, 59)).is_empty());
+        assert_eq!(
+            names(&mut r, &p, &config, monday(0, 8, 0)),
+            ["web01/disk ops"]
+        );
+        assert!(names(&mut r, &p, &config, monday(0, 12, 0)).is_empty());
+        assert!(names(&mut r, &p, &config, monday(1, 8, 0)).is_empty());
+
+        // Acknowledged by 8:00: nothing; acknowledgement removed at 9:00:
+        // sent then, inside the period.
+        let mut r = Repeats::default();
+        assert!(names(&mut r, &[], &config, monday(0, 0, 0)).is_empty());
+        let acked = [OpenProblem {
+            suppressed: true,
+            ..problem("web01/disk", State::Critical, monday(0, 3, 0))
+        }];
+        assert!(names(&mut r, &acked, &config, monday(0, 8, 0)).is_empty());
+        let open = [problem("web01/disk", State::Critical, monday(0, 3, 0))];
+        assert_eq!(
+            names(&mut r, &open, &config, monday(0, 9, 0)),
+            ["web01/disk ops"]
+        );
+
+        // Recovered before 8:00: forgotten, nothing at 8:00.
+        let mut r = Repeats::default();
+        assert!(names(&mut r, &[], &config, monday(0, 0, 0)).is_empty());
+        let p = [problem("web01/disk", State::Critical, monday(0, 3, 0))];
+        assert!(names(&mut r, &p, &config, monday(0, 4, 0)).is_empty());
+        assert!(names(&mut r, &[], &config, monday(0, 5, 0)).is_empty());
+        assert!(names(&mut r, &[], &config, monday(0, 8, 0)).is_empty());
+
+        // Open at startup, without a log: not sent again at 8:00.
+        let mut r = Repeats::default();
+        let old = [problem("web01/disk", State::Critical, monday(0, 1, 0))];
+        assert!(names(&mut r, &old, &config, monday(0, 2, 0)).is_empty());
+        assert!(names(&mut r, &old, &config, monday(0, 8, 0)).is_empty());
+    }
+
+    #[test]
+    fn repeats_stay_inside_the_time_period() {
+        let config = config(&format!(
+            r#"{WORKHOURS}
+[[notify]]
+contacts = ["ops"]
+period = "workhours"
+repeat = "1h"
+"#
+        ));
+        let mut r = Repeats::default();
+        assert!(names(&mut r, &[], &config, monday(0, 0, 0)).is_empty());
+        let p = [problem("web01/disk", State::Critical, monday(0, 17, 30))];
+        r.sent(
+            "web01/disk",
+            monday(0, 17, 30),
+            &[contact(&config, "ops")],
+            monday(0, 17, 30),
+        );
+        // 18:30 is after hours: the next one on Tuesday at 8:00.
+        assert!(names(&mut r, &p, &config, monday(0, 18, 30)).is_empty());
+        assert!(names(&mut r, &p, &config, monday(1, 7, 59)).is_empty());
+        assert_eq!(
+            names(&mut r, &p, &config, monday(1, 8, 0)),
+            ["web01/disk ops"]
+        );
+        assert!(names(&mut r, &p, &config, monday(1, 8, 59)).is_empty());
+        assert_eq!(
+            names(&mut r, &p, &config, monday(1, 9, 0)),
+            ["web01/disk ops"]
+        );
+    }
+
+    #[test]
+    fn escalations_within_a_time_period() {
+        let config = config(&format!(
+            r#"{WORKHOURS}
+[[notify]]
+contacts = ["boss"]
+period = "workhours"
+after = "1h"
+"#
+        ));
+        let mut r = Repeats::default();
+        assert!(names(&mut r, &[], &config, monday(0, 0, 0)).is_empty());
+        // Open for an hour at 4:00, but the boss only gets it at 8:00.
+        let p = [problem("web01/disk", State::Critical, monday(0, 3, 0))];
+        assert!(names(&mut r, &p, &config, monday(0, 4, 0)).is_empty());
+        assert_eq!(
+            names(&mut r, &p, &config, monday(0, 8, 0)),
+            ["web01/disk boss"]
+        );
+        // At 7:30, an hour has not passed by 8:00: 8:30.
+        let q = [problem("web01/ping", State::Critical, monday(1, 7, 30))];
+        assert!(names(&mut r, &q, &config, monday(1, 8, 0)).is_empty());
+        assert_eq!(names(&mut r, &q, &config, monday(1, 8, 30)), ["web01 boss"]);
     }
 
     #[test]

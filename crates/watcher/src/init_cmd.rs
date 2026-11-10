@@ -823,10 +823,13 @@ from = "Watcher <watcher@example.com>"
         assert_eq!(loaded.config.contacts[0].email, ["ops@example.com"]);
         assert!(loaded.config.services.len() >= 2);
         let service = &loaded.config.services[0];
-        let to =
-            loaded
-                .config
-                .recipients(service, false, watcher_config::Alert::Problem, "critical");
+        let to = loaded.config.recipients(
+            service,
+            false,
+            watcher_config::Alert::Problem,
+            "critical",
+            None,
+        );
         assert_eq!(to[0].name, "admins");
         std::fs::remove_dir_all(&dir).unwrap();
     }

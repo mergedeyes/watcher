@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 pub struct Changes {
     pub hosts: Delta,
     pub services: Delta,
-    /// Host, service, contact and downtime groups, as `hostgroup x`, ...
+    /// Host, service, contact and downtime groups and time periods, as
+    /// `hostgroup x`, ...
     pub groups: Delta,
     pub contacts: Delta,
     /// Notify rules, by name or place.
@@ -61,6 +62,11 @@ pub fn changes(old: &Config, new: &Config) -> Changes {
             let mut g = g.clone();
             g.origin = Default::default();
             (format!("downtimegroup {}", g.name), format!("{g:?}"))
+        }));
+        out.extend(c.timeperiods.iter().map(|p| {
+            let mut p = p.clone();
+            p.origin = Default::default();
+            (format!("timeperiod {}", p.name), format!("{p:?}"))
         }));
         out
     };
@@ -118,6 +124,7 @@ fn same_rule(a: &NotifyRule, b: &NotifyRule) -> bool {
         && a.on == b.on
         && a.repeat == b.repeat
         && a.after == b.after
+        && a.period == b.period
         && a.enabled == b.enabled
         && a.hosts.is_some() == b.hosts.is_some()
         && a.services.is_some() == b.services.is_some()
