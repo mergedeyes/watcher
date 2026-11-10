@@ -238,8 +238,9 @@ title = "Websites"
 
 A service provider with several customers. Each customer has a host group
 that matches their host names. The NOC gets every notification, and open
-problems again every hour until someone acknowledges them; each customer
-only gets critical problems of their own hosts.
+problems again every hour until someone acknowledges them. Critical
+problems that nobody acknowledged within 2 hours go to the NOC lead. Each
+customer only gets critical problems of their own hosts.
 
 The host group `windows` has no `members`: hosts join it themselves with
 `groups = ["windows"]`.
@@ -314,6 +315,9 @@ groups = ["windows"]
 email = "noc@msp.example"
 webhook = "https://chat.msp.example/hooks/watcher"
 
+[contact.noc-lead]
+email = "noc-lead@msp.example"
+
 [contact.acme-it]
 email = "it@acme.example"
 
@@ -321,6 +325,12 @@ email = "it@acme.example"
 name = "noc"
 contacts = ["noc"]
 repeat = "1h"
+
+[[notify]]
+name = "noc-lead"
+contacts = ["noc-lead"]
+states = ["critical", "down"]
+after = "2h"
 
 [[notify]]
 name = "acme"

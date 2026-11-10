@@ -37,7 +37,8 @@ no notification for db01/replication: acknowledged
 Acknowledging tells the team that someone is working on a problem. It
 stops further problem notifications until the service is OK again,
 including the reminders of rules with
-[`repeat`](../objects/notify.md#repeat). Add a comment so others know what
+[`repeat`](../objects/notify.md#repeat) and the escalations of rules with
+[`after`](../objects/notify.md#after). Add a comment so others know what
 is going on.
 
 ```sh

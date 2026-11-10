@@ -83,7 +83,8 @@ Details:  https://watcher.example.com/services/web01/http
 The `Details` link is only there if `public_url` is set.
 
 A repeated notification (a rule with [`repeat`](../objects/notify.md#repeat))
-says how long the problem has been open, and since when:
+or an escalation (a rule with [`after`](../objects/notify.md#after)) says
+how long the problem has been open, and since when:
 
 ```
 web01/http is still CRITICAL (for 2h 10m)
@@ -100,7 +101,7 @@ Details:  https://watcher.example.com/services/web01/http
 
 | Event | Sent when |
 |---|---|
-| PROBLEM | A host or service has a confirmed (HARD) problem, or the problem got worse (WARNING → CRITICAL). With `repeat`: again while it is still open. |
+| PROBLEM | A host or service has a confirmed (HARD) problem, or the problem got worse (WARNING → CRITICAL). With `repeat`: again while it is still open. With `after`: to the escalation contacts once it has been open that long. |
 | RECOVERY | A confirmed problem is back to OK or UP. |
 | FLAPPINGSTART, FLAPPINGSTOP | A service starts or stops flapping. |
 | DOWNTIMESTART, DOWNTIMEEND | A downtime starts or ends. |
@@ -142,7 +143,7 @@ JSON body:
 | `output`, `long_output` | The check output. For downtimes: which downtime it is. |
 | `time` | Time of the result, RFC 3339. |
 | `since` | For problems: when the host or service changed to this state, RFC 3339. `null` for other kinds. |
-| `repeat` | `true`: a problem sent again because it is still open (see [`repeat`](../objects/notify.md#repeat)). |
+| `repeat` | `true`: a problem sent again because it is still open (see [`repeat`](../objects/notify.md#repeat)), or escalated (see [`after`](../objects/notify.md#after)). |
 | `url` | Link to the service page. `null` without `public_url`. |
 | `instance` | `instance_name` from `watcher.toml`. |
 
@@ -188,4 +189,21 @@ repeat = "1h"
 Acknowledge the problem to stop the reminders. Details:
 [repeat](../objects/notify.md#repeat).
 
-*Not yet:* escalations, more channels.
+## Escalations
+
+A rule with `after` steps in only when a problem lasts. Here the team lead
+hears about problems that nobody acknowledged within 30 minutes:
+
+```toml
+[[notify]]
+contacts = ["oncall"]
+
+[[notify]]
+contacts = ["teamlead"]
+after = "30m"
+```
+
+Acknowledging the problem in time stops the escalation. Details:
+[after](../objects/notify.md#after).
+
+*Not yet:* more channels.

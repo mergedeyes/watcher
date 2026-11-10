@@ -55,7 +55,7 @@ set it, and every alert to the rule that sent it.
   woken up, flapping services are held back, and notification rules
   don't depend on their order: every matching rule notifies, and nobody
   gets the same message twice. Open problems come back as reminders
-  until someone acknowledges them.
+  and escalate to the next person until someone acknowledges them.
 - **No agents.** Watcher runs checks on remote machines over SSH, copies
   its scripts there by itself, keeps passwords and keys encrypted, and
   pins host keys.

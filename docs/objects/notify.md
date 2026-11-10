@@ -2,8 +2,9 @@
 
 A notify rule decides which [contacts](contact.md) get which
 notifications. Each rule says who (`contacts`, `contact_groups`), about
-what (`hosts`, `services`), for which events (`states`, `on`), and whether
-open problems are sent again (`repeat`).
+what (`hosts`, `services`), for which events (`states`, `on`), whether
+open problems are sent again (`repeat`), and whether the rule only steps in
+when a problem lasts (`after`).
 
 ```toml
 [[notify]]
@@ -35,6 +36,7 @@ one is an entry in a list.
 | `states` | all problem states | Only problems in these states, and recoveries from them: `warning`, `critical`, `unknown`, `down`. |
 | `on` | all events | Only these events: `problem`, `recovery`, `flapping`, `downtime`. |
 | `repeat` | off | Send an open problem again this often, for example `"1h"`. At least `1m`; `"0"` turns it off. See [repeat](#repeat). |
+| `after` | at once | Makes the rule an escalation: its contacts get a problem only once it has been open this long and nobody acknowledged it, for example `"30m"`. `"0"` turns it off. See [after](#after). |
 | `enabled` | `true` | `false`: the rule is ignored. |
 
 ### states
@@ -102,6 +104,54 @@ and the hour is over, the next repeat goes out within a minute.
 `states = ["critical"]` repeats only CRITICAL problems, and `on` must
 include `problem`.
 
+### after
+
+With `after`, a rule is an *escalation*. Its contacts don't get a problem
+when it happens. They get it only if it is still open after that time and
+nobody took care of it:
+
+```toml
+[[notify]]
+contacts = ["oncall"]
+
+[[notify]]
+name = "escalate-to-lead"
+contacts = ["teamlead"]
+after = "30m"
+```
+
+`oncall` gets the PROBLEM at once. If the problem is still open 30
+minutes later, and not acknowledged, `teamlead` gets it too:
+
+```
+[Watcher] PROBLEM: web01/http is still CRITICAL
+```
+
+How it works:
+
+- The time counts from when the problem reached its current state. A
+  change, for example WARNING → CRITICAL, starts it again, and the
+  escalation contacts get the new state once it has lasted `after`.
+- A problem that is acknowledged, in a downtime, muted or flapping, whose
+  host is DOWN, or while notifications are turned off, is not escalated.
+  The time keeps running: if the acknowledgement is removed after the 30
+  minutes, the escalation goes out within a minute.
+- With `repeat` on the same rule, the escalation contacts get the problem
+  again every `repeat` after that.
+- The escalation contacts get the RECOVERY only if they got the problem.
+  Use `on = ["problem"]` if they shouldn't get recoveries at all.
+- Contacts who already got the problem from another rule are not sent it
+  again by the escalation.
+- After a restart, the time starts again for problems that are already
+  open, as with `repeat`. Escalations that were sent before the restart
+  don't get a RECOVERY afterwards.
+
+Several rules with different `after` times make escalation levels, for
+example the team lead after 30 minutes and the manager after 2 hours.
+
+Escalation rules only take problems and recoveries. `on` must include
+`problem`, and can't include `flapping` or `downtime`.
+
 ## Examples
 
 ### Everything to one contact
@@ -162,6 +212,31 @@ repeat = "4h"
 
 `oncall` gets every notification once. `manager` gets critical problems
 and hosts that are DOWN, and again every 4 hours while they last.
+
+### Escalate when nobody reacts
+
+```toml
+[[notify]]
+contacts = ["oncall"]
+repeat = "30m"
+
+[[notify]]
+name = "teamlead"
+contacts = ["teamlead"]
+after = "1h"
+
+[[notify]]
+name = "manager"
+contacts = ["manager"]
+states = ["critical", "down"]
+after = "4h"
+repeat = "4h"
+```
+
+`oncall` gets problems at once and every 30 minutes. If a problem is still
+open and not acknowledged after an hour, `teamlead` gets it. Critical
+problems still open after 4 hours also reach `manager`, then every 4
+hours. Acknowledging the problem stops all of it.
 
 ### No recoveries
 
@@ -385,6 +460,8 @@ A notification is sent when:
 - a downtime starts or ends (DOWNTIMESTART, DOWNTIMEEND)
 - a problem is still open after `repeat`, if the rule has one (PROBLEM,
   "is still"; see [repeat](#repeat))
+- a problem is still open after `after`, for escalation rules (PROBLEM,
+  "is still"; see [after](#after))
 
 No notification is sent for:
 
@@ -401,9 +478,6 @@ No notification is sent for:
   [Operations](../guides/operations.md))
 
 The host check notifies as the host: "web01 is DOWN".
-
-*Not yet:* escalations (notifying other contacts when a problem stays
-open).
 
 ## Checking a rule
 
@@ -425,8 +499,8 @@ watcher config explain web01/http
       └─ contact oncall                                             contacts.toml:1
 ```
 
-A rule with `repeat` adds it to the line, for example
-`matched: host: group prod; repeats every 1h`.
+A rule with `after` or `repeat` adds it to the line, for example
+`matched: host: group prod; escalates after 30m; repeats every 1h`.
 
 Unknown hosts, groups, checks or nodes in a selector give a warning, since
 they are usually typos.
