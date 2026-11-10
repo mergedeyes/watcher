@@ -391,9 +391,8 @@ after = "0"
     assert_eq!(config.notify[1].after, Some(Duration::from_secs(1800)));
     assert_eq!(config.notify[2].after, None);
     let s = config.service("a/disk").unwrap();
-    let names = |cs: Vec<&crate::Contact>| -> Vec<String> {
-        cs.iter().map(|c| c.name.clone()).collect()
-    };
+    let names =
+        |cs: Vec<&crate::Contact>| -> Vec<String> { cs.iter().map(|c| c.name.clone()).collect() };
     // Not told at once, and their repeat isn't a plain repeat.
     assert_eq!(
         names(config.recipients(s, false, Alert::Problem, "critical")),
@@ -403,7 +402,13 @@ after = "0"
     let esc: Vec<(String, u64, Option<u64>)> = config
         .escalations(s, false, "critical")
         .into_iter()
-        .map(|(c, a, r)| (c.name.clone(), a.as_secs() / 60, r.map(|r| r.as_secs() / 60)))
+        .map(|(c, a, r)| {
+            (
+                c.name.clone(),
+                a.as_secs() / 60,
+                r.map(|r| r.as_secs() / 60),
+            )
+        })
         .collect();
     assert_eq!(esc, [("boss".into(), 30, Some(60))]);
     assert!(config.escalations(s, false, "warning").is_empty());
@@ -429,8 +434,14 @@ after = "1h"
         ),
     )]);
     let text = messages(&diags).join("\n");
-    assert!(text.contains("after: escalates problems, but on doesn't include problem"), "{text}");
-    assert!(text.contains("after: escalations take only problem and recovery"), "{text}");
+    assert!(
+        text.contains("after: escalates problems, but on doesn't include problem"),
+        "{text}"
+    );
+    assert!(
+        text.contains("after: escalations take only problem and recovery"),
+        "{text}"
+    );
 }
 
 #[test]

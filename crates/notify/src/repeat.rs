@@ -397,7 +397,12 @@ repeat = "1h"
 
         // A new state starts the escalation again.
         let warn = [problem("web01/disk", State::Warning, t0 + 100 * MIN)];
-        r.sent("web01/disk", t0 + 100 * MIN, &[contact(&config, "ops")], t0 + 100 * MIN);
+        r.sent(
+            "web01/disk",
+            t0 + 100 * MIN,
+            &[contact(&config, "ops")],
+            t0 + 100 * MIN,
+        );
         assert!(names(&mut r, &warn, &config, t0 + 129 * MIN).is_empty());
         assert_eq!(
             names(&mut r, &warn, &config, t0 + 130 * MIN),
