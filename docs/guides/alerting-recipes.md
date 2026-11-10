@@ -256,7 +256,5 @@ and escalations sent before it get no RECOVERY.
 
 - **Different contacts by time of day**, for example on-call at night and
   the team during business hours. Notify rules have no time windows yet.
-- **Telling the team lead even when the problem is acknowledged.** An
-  acknowledgement stops escalations too.
 - **More channels** like Slack, Teams or PagerDuty directly. Use a
   webhook to a small adapter for now.
