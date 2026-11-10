@@ -411,9 +411,39 @@ pub struct Channels {
     pub gotify: Option<Gotify>,
     /// A PagerDuty Events API v2 routing key (integration key).
     pub pagerduty: Option<String>,
+    pub jira: Option<Jira>,
     /// A program that gets the notification as JSON on stdin, as written
     /// (split into arguments like a check command, no shell).
     pub script: Option<String>,
+}
+
+/// A Jira project that gets problems as issues: one issue per open
+/// problem, repeats and escalations comment on it, the recovery comments
+/// and optionally closes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Jira {
+    /// The site, without a path: `https://acme.atlassian.net` or an
+    /// on-premise `https://jira.example.com`.
+    pub url: String,
+    /// The project key issues are created in (`OPS`).
+    pub project: String,
+    /// Jira Cloud (REST v3, email + API token) or Data Center/Server
+    /// (REST v2, personal access token). Detected from `*.atlassian.net`
+    /// unless set.
+    pub cloud: bool,
+    /// Cloud only: the account email the API token belongs to.
+    pub email: Option<String>,
+    /// Cloud: an API token; Data Center/Server: a personal access token.
+    pub token: String,
+    /// The issue type new issues get.
+    pub issue_type: String,
+    /// The transition (by its name, or the status it leads to) run when
+    /// the problem recovers. Unset: recoveries only comment.
+    pub close: Option<String>,
+}
+
+impl Jira {
+    pub const DEFAULT_ISSUE_TYPE: &'static str = "Task";
 }
 
 /// A Telegram bot and the chat it writes to.

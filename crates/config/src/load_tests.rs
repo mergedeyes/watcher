@@ -1439,3 +1439,79 @@ script = "  "
         "{text}"
     );
 }
+
+#[test]
+fn jira_channel_defaults_and_errors() {
+    let config = ok(&[(
+        "a.toml",
+        r#"
+[contact.helpdesk]
+jira = { url = "https://acme.atlassian.net/", project = "OPS", email = "bot@acme.com", token = "t0ken" }
+
+[contact.dc]
+jira = { url = "https://jira.example.com", project = "OPS", token = "pat", issue_type = "Incident", close = "Done" }
+
+[[notify]]
+contacts = ["helpdesk", "dc"]
+"#,
+    )]);
+    let by_name = |n: &str| {
+        config
+            .contacts
+            .iter()
+            .find(|c| c.name == n)
+            .unwrap()
+            .channels
+            .jira
+            .as_ref()
+            .unwrap()
+    };
+    let jira = by_name("helpdesk");
+    // Cloud is detected from the host, the URL loses its trailing slash,
+    // and the issue type falls back to Task.
+    assert!(jira.cloud);
+    assert_eq!(jira.url, "https://acme.atlassian.net");
+    assert_eq!(jira.issue_type, "Task");
+    assert_eq!(jira.close, None);
+    let dc = by_name("dc");
+    assert!(!dc.cloud);
+    assert_eq!(dc.issue_type, "Incident");
+    assert_eq!(dc.close.as_deref(), Some("Done"));
+
+    let (_, diags) = compile(&[(
+        "a.toml",
+        r#"
+[contact.no-email]
+jira = { url = "https://acme.atlassian.net", project = "OPS", token = "t" }
+
+[contact.pat-with-email]
+jira = { url = "https://jira.example.com", project = "OPS", email = "x@y.de", token = "t" }
+
+[contact.bad]
+jira = { url = "ftp://jira", project = " ", token = "" }
+"#,
+    )]);
+    let text = messages(&diags).join("\n");
+    assert!(
+        text.contains("contact \"no-email\": jira: Jira Cloud needs email"),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "contact \"pat-with-email\": jira: Data Center/Server uses a personal access token"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("contact \"bad\": jira.url must be an http(s) URL"),
+        "{text}"
+    );
+    assert!(
+        text.contains("contact \"bad\": jira.project is empty"),
+        "{text}"
+    );
+    assert!(
+        text.contains("contact \"bad\": jira.token is empty"),
+        "{text}"
+    );
+}

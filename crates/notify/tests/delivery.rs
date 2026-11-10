@@ -218,6 +218,7 @@ fn everywhere(base: &str) -> Contact {
             token: "gk".into(),
         }),
         pagerduty: Some("KEY".into()),
+        jira: None,
         script: None,
     };
     c
@@ -382,4 +383,245 @@ async fn scripts_get_json_and_environment() {
     let err = results[0].1.as_ref().unwrap_err().to_string();
     assert_eq!(err, "script: exit code 3: no modem");
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// What the mock Jira saw and holds: an open issue, created issues,
+/// comments and run transitions.
+#[derive(Default)]
+struct JiraState {
+    open_issue: Option<String>,
+    searches: Vec<String>,
+    created: Vec<Value>,
+    comments: Vec<(String, Value)>,
+    transitioned: Vec<(String, String)>,
+    auth: Vec<String>,
+}
+
+type JiraShared = Arc<Mutex<JiraState>>;
+
+/// A little Jira answering the endpoints the channel uses, v2 and v3.
+async fn jira_server(open_issue: Option<&str>) -> (String, JiraShared) {
+    use axum::extract::{Path, RawQuery};
+    use axum::http::HeaderMap;
+    use axum::routing::get;
+    let state = Arc::new(Mutex::new(JiraState {
+        open_issue: open_issue.map(String::from),
+        ..Default::default()
+    }));
+    let record_auth = |state: &JiraShared, headers: &HeaderMap| {
+        let auth = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        state.lock().unwrap().auth.push(auth);
+    };
+    let search = {
+        let state = state.clone();
+        move |headers: HeaderMap, RawQuery(q): RawQuery| {
+            let state = state.clone();
+            async move {
+                record_auth(&state, &headers);
+                let mut s = state.lock().unwrap();
+                s.searches.push(q.unwrap_or_default());
+                let issues: Vec<Value> = s
+                    .open_issue
+                    .iter()
+                    .map(|k| serde_json::json!({ "key": k }))
+                    .collect();
+                Json(serde_json::json!({ "issues": issues }))
+            }
+        }
+    };
+    let create = {
+        let state = state.clone();
+        move |headers: HeaderMap, Json(body): Json<Value>| {
+            let state = state.clone();
+            async move {
+                record_auth(&state, &headers);
+                let mut s = state.lock().unwrap();
+                s.created.push(body);
+                s.open_issue = Some("OPS-1".into());
+                Json(serde_json::json!({ "id": "10001", "key": "OPS-1" }))
+            }
+        }
+    };
+    let comment = {
+        let state = state.clone();
+        move |Path(key): Path<String>, Json(body): Json<Value>| {
+            let state = state.clone();
+            async move {
+                state.lock().unwrap().comments.push((key, body));
+                (StatusCode::CREATED, Json(serde_json::json!({})))
+            }
+        }
+    };
+    let transitions = {
+        let state = state.clone();
+        move |Path(key): Path<String>| {
+            let _ = (&state, key);
+            async move {
+                Json(serde_json::json!({ "transitions": [
+                    { "id": "11", "name": "In Progress", "to": { "name": "In Progress" } },
+                    { "id": "31", "name": "Finish", "to": { "name": "Done" } },
+                ] }))
+            }
+        }
+    };
+    let run_transition = {
+        let state = state.clone();
+        move |Path(key): Path<String>, Json(body): Json<Value>| {
+            let state = state.clone();
+            async move {
+                let id = body["transition"]["id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                state.lock().unwrap().transitioned.push((key, id));
+                StatusCode::NO_CONTENT
+            }
+        }
+    };
+    let app = axum::Router::new()
+        .route("/rest/api/3/search/jql", get(search.clone()))
+        .route("/rest/api/2/search", get(search))
+        .route("/rest/api/3/issue", post(create.clone()))
+        .route("/rest/api/2/issue", post(create))
+        .route("/rest/api/3/issue/{key}/comment", post(comment.clone()))
+        .route("/rest/api/2/issue/{key}/comment", post(comment))
+        .route(
+            "/rest/api/3/issue/{key}/transitions",
+            get(transitions.clone()).post(run_transition.clone()),
+        )
+        .route(
+            "/rest/api/2/issue/{key}/transitions",
+            get(transitions).post(run_transition),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(axum::serve(listener, app).into_future());
+    (url, state)
+}
+
+fn jira_contact(url: &str, cloud: bool, close: Option<&str>) -> Contact {
+    let mut c = contact(&[], None);
+    c.channels.jira = Some(watcher_config::Jira {
+        url: url.to_string(),
+        project: "OPS".into(),
+        cloud,
+        email: cloud.then(|| "bot@example.com".to_string()),
+        token: "t0ken".into(),
+        issue_type: "Task".into(),
+        close: close.map(String::from),
+    });
+    c
+}
+
+#[tokio::test]
+async fn jira_creates_one_issue_per_problem() {
+    let (url, state) = jira_server(None).await;
+    let notifier = Notifier::new(None, None).unwrap();
+    let c = jira_contact(&url, true, Some("Done"));
+
+    // No open issue yet: the problem creates one, over v3 with Basic auth.
+    let results = notifier.deliver(&c, &notification("disk")).await;
+    assert_eq!(results.len(), 1);
+    assert!(results[0].1.is_ok(), "{:?}", results[0].1);
+    {
+        let s = state.lock().unwrap();
+        assert_eq!(s.created.len(), 1);
+        let fields = &s.created[0]["fields"];
+        assert_eq!(fields["project"]["key"], "OPS");
+        assert_eq!(fields["issuetype"]["name"], "Task");
+        assert_eq!(fields["summary"], "web01/disk is CRITICAL (was OK)");
+        let labels = fields["labels"].as_array().unwrap();
+        assert_eq!(labels[0], "watcher");
+        assert!(labels[1].as_str().unwrap().starts_with("watcher-"));
+        // Cloud: ADF description, Basic auth, the v3 search endpoint.
+        assert_eq!(fields["description"]["type"], "doc");
+        assert!(
+            s.auth.iter().all(|a| a.starts_with("Basic ")),
+            "{:?}",
+            s.auth
+        );
+        assert!(s.searches[0].contains("labels"));
+        assert!(s.comments.is_empty());
+    }
+
+    // A repeat while the issue is open comments instead.
+    let mut again = notification("disk");
+    again.repeat = true;
+    again.since = Some(SystemTime::now());
+    let results = notifier.deliver(&c, &again).await;
+    assert!(results[0].1.is_ok(), "{:?}", results[0].1);
+    {
+        let s = state.lock().unwrap();
+        assert_eq!(s.created.len(), 1);
+        assert_eq!(s.comments.len(), 1);
+        assert_eq!(s.comments[0].0, "OPS-1");
+        assert!(s.transitioned.is_empty());
+    }
+
+    // The recovery comments and runs the close transition, matched by
+    // the status it leads to ("Done" is transition 31, "Finish").
+    let mut ok = notification("disk");
+    ok.kind = Kind::Recovery;
+    ok.state = State::Ok;
+    ok.previous_state = Some(State::Critical);
+    ok.output = "DISK OK".into();
+    let results = notifier.deliver(&c, &ok).await;
+    assert!(results[0].1.is_ok(), "{:?}", results[0].1);
+    let s = state.lock().unwrap();
+    assert_eq!(s.comments.len(), 2);
+    assert_eq!(
+        s.transitioned.as_slice(),
+        [("OPS-1".to_string(), "31".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn jira_data_center_uses_v2_and_a_token() {
+    let (url, state) = jira_server(Some("OPS-7")).await;
+    let notifier = Notifier::new(None, None).unwrap();
+    let c = jira_contact(&url, false, None);
+
+    // An open issue exists: the problem only comments, over v2 with a
+    // bearer token and a text body.
+    let results = notifier.deliver(&c, &notification("disk")).await;
+    assert!(results[0].1.is_ok(), "{:?}", results[0].1);
+    {
+        let s = state.lock().unwrap();
+        assert!(s.created.is_empty());
+        assert_eq!(s.comments[0].0, "OPS-7");
+        let body = s.comments[0].1["body"].as_str().unwrap();
+        assert!(body.contains("{code}"), "{body}");
+        assert!(
+            s.auth.iter().all(|a| a.starts_with("Bearer ")),
+            "{:?}",
+            s.auth
+        );
+    }
+
+    // A recovery without `close` only comments; one for a problem nobody
+    // has an issue for does nothing.
+    let mut ok = notification("disk");
+    ok.kind = Kind::Recovery;
+    ok.state = State::Ok;
+    let results = notifier.deliver(&c, &ok).await;
+    assert!(results[0].1.is_ok(), "{:?}", results[0].1);
+    {
+        let mut s = state.lock().unwrap();
+        assert_eq!(s.comments.len(), 2);
+        assert!(s.transitioned.is_empty());
+        s.open_issue = None;
+    }
+    let results = notifier.deliver(&c, &ok).await;
+    assert!(results[0].1.is_ok(), "{:?}", results[0].1);
+    assert_eq!(state.lock().unwrap().comments.len(), 2);
+
+    // Flapping never becomes a ticket.
+    let mut flap = notification("disk");
+    flap.kind = Kind::FlappingStart;
+    let results = notifier.deliver(&c, &flap).await;
+    assert!(results.is_empty());
 }
