@@ -32,8 +32,8 @@ pub fn vars_of(name: &str) -> &'static [&'static str] {
         "ping" => &["address", "packets", "warn", "crit"],
         "tcp" => &["address", "port", "send", "expect", "warn", "crit"],
         "http" => &[
-            "address", "url", "method", "headers", "body", "user", "password", "status",
-            "content", "follow", "verify", "warn", "crit",
+            "address", "url", "method", "headers", "body", "user", "password", "status", "content",
+            "follow", "verify", "warn", "crit",
         ],
         "dns" => &[
             "address", "name", "type", "server", "port", "expect", "warn", "crit",

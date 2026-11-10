@@ -288,9 +288,11 @@ impl fmt::Display for Http {
 /// `X-Api-Key`, `X-Auth-Token`, ...
 fn secret_header(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
-    ["auth", "cookie", "key", "token", "secret", "password", "session"]
-        .iter()
-        .any(|word| name.contains(word))
+    [
+        "auth", "cookie", "key", "token", "secret", "password", "session",
+    ]
+    .iter()
+    .any(|word| name.contains(word))
 }
 
 /// `200,204,300-399` → ranges.
@@ -437,9 +439,7 @@ mod tests {
         assert!(err(&[("headers.Bad Name", "x")]).contains("vars.headers.Bad Name"));
         assert!(err(&[("headers.X", "a\nb")]).contains("not a valid header value"));
         assert!(err(&[("password", "pw")]).contains("without vars.user"));
-        assert!(
-            err(&[("user", "a"), ("headers.authorization", "Bearer x")]).contains("not both")
-        );
+        assert!(err(&[("user", "a"), ("headers.authorization", "Bearer x")]).contains("not both"));
         assert!(Builtin::new("http", "h", &vars(&[("url", "ftp://h/")])).is_err());
         assert!(Builtin::new("http", "h", &vars(&[("status", "2xx")])).is_err());
         assert!(Builtin::new("http", "h", &vars(&[("status", "302-200")])).is_err());

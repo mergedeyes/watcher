@@ -1507,9 +1507,7 @@ impl<'a> Compiler<'a> {
                 // expand as in commands.
                 let text = |v: &Value| match v {
                     Value::String(s) => Some(s.clone()),
-                    Value::Integer(_) | Value::Float(_) | Value::Boolean(_) => {
-                        Some(v.to_string())
-                    }
+                    Value::Integer(_) | Value::Float(_) | Value::Boolean(_) => Some(v.to_string()),
                     _ => None,
                 };
                 let mut vars = BTreeMap::new();
