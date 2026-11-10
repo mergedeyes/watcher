@@ -1369,3 +1369,135 @@ period = "nope"
         "{text}"
     );
 }
+
+#[test]
+fn dependencies_match_like_notify_rules() {
+    let config = ok(&[(
+        "a.toml",
+        r#"
+[check.ping]
+command = "check_ping -H $host.address$"
+
+[check.http]
+command = "check_http -H $host.address$"
+
+[service.ping]
+[service.http]
+
+[[host]]
+name = "gw"
+host_check = "ping"
+services = ["ping"]
+
+[[host]]
+name = "web01"
+services = ["ping", "http"]
+
+[[host]]
+name = "db01"
+host_check = "ping"
+services = ["ping", "http"]
+
+[[dependency]]
+name = "behind-gw"
+on = "gw"
+hosts = ["web01", "db01"]
+
+[[dependency]]
+on = "db01/http"
+services = { name = ["http"] }
+"#,
+    )]);
+    assert_eq!(config.dependencies.len(), 2);
+    let behind = &config.dependencies[0];
+    assert_eq!(behind.states, ["down"]);
+    assert_eq!(behind.master(), ("gw", None));
+    let on_http = &config.dependencies[1];
+    assert_eq!(on_http.states, ["critical", "unknown"]);
+    assert_eq!(on_http.label(), "dependency at a.toml:30");
+
+    let dep_names = |id: &str, host_alert: bool| -> Vec<String> {
+        let s = config.service(id).unwrap();
+        config
+            .matching_dependencies(s, host_alert)
+            .into_iter()
+            .map(|(d, _)| d.label())
+            .collect()
+    };
+    // Services and host alerts of hosts behind the gateway wait for it;
+    // the service dependency only takes service alerts.
+    assert_eq!(
+        dep_names("web01/http", false),
+        ["behind-gw", "dependency at a.toml:30"]
+    );
+    assert_eq!(dep_names("db01/ping", true), ["behind-gw"]);
+    // The master's own alert is never held back: not db01/http for the
+    // second dependency, and not the gateway's own host check.
+    assert_eq!(dep_names("db01/http", false), ["behind-gw"]);
+    assert_eq!(dep_names("gw/ping", true), Vec::<String>::new());
+
+    // The explanation mirrors notify rules.
+    let s = config.service("web01/http").unwrap();
+    let (_, why) = &config.matching_dependencies(s, false)[0];
+    assert_eq!(why, "host: listed");
+}
+
+#[test]
+fn dependency_errors() {
+    let (_, diags) = compile(&[(
+        "a.toml",
+        r#"
+[check.ping]
+command = "check_ping -H $host.address$"
+
+[service.ping]
+
+[[host]]
+name = "gw"
+services = ["ping"]
+
+[[dependency]]
+name = "bad"
+on = "nowhere"
+
+[[dependency]]
+name = "bad-service"
+on = "gw/http"
+
+[[dependency]]
+name = "bad-states"
+on = "gw"
+states = ["critical"]
+
+[[dependency]]
+name = "never"
+on = "gw"
+
+[[dependency]]
+name = "never"
+on = "gw"
+"#,
+    )]);
+    let text = messages(&diags).join("\n");
+    assert!(
+        text.contains("dependency \"bad\": on: unknown host \"nowhere\""),
+        "{text}"
+    );
+    assert!(
+        text.contains("dependency \"bad-service\": on: unknown service \"gw/http\""),
+        "{text}"
+    );
+    assert!(
+        text.contains("dependency \"bad-states\": unknown state \"critical\" (expected down)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("name is already used by another dependency"),
+        "{text}"
+    );
+    // gw has no host check: it is always UP, the dependency never applies.
+    assert!(
+        text.contains("dependency \"never\": host \"gw\" has no host check"),
+        "{text}"
+    );
+}

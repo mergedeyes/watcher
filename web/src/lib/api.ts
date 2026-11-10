@@ -426,6 +426,7 @@ export type Kind =
 	| 'downtimegroup'
 	| 'timeperiod'
 	| 'notify'
+	| 'dependency'
 	| 'sink';
 
 /** Kinds with a Config Tree. A `service` named `host/service` is a service on a host, otherwise a service object. */
@@ -511,6 +512,8 @@ export interface Changes {
 	contacts: Delta;
 	/** Notify rules by name or place. */
 	notify: Delta;
+	/** Dependencies by name or place. */
+	dependencies: Delta;
 	sinks: Delta;
 }
 

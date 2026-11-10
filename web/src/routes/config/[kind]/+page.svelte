@@ -129,6 +129,10 @@
 								<th>Match</th>
 								<th class="hide-narrow">States</th>
 								<th class="hide-narrow">Time Period</th>
+							{:else if kind.kind === 'dependency'}
+								<th>On</th>
+								<th>Match</th>
+								<th class="hide-narrow">States</th>
 							{:else}
 								<th>Fields</th>
 							{/if}
@@ -178,6 +182,10 @@
 									<td class="mono">{[f.hosts !== undefined ? `hosts ${selector(f.hosts)}` : '', f.services !== undefined ? `services ${selector(f.services)}` : ''].filter(Boolean).join(' · ') || 'all'}</td>
 									<td class="hide-narrow">{list(f.states) || 'all'}</td>
 									<td class="hide-narrow">{list(f.period) || 'always'}</td>
+								{:else if kind.kind === 'dependency'}
+									<td class="mono">{list(f.on)}</td>
+									<td class="mono">{[f.hosts !== undefined ? `hosts ${selector(f.hosts)}` : '', f.services !== undefined ? `services ${selector(f.services)}` : ''].filter(Boolean).join(' · ') || 'all'}</td>
+									<td class="hide-narrow">{list(f.states) || 'defaults'}</td>
 								{:else}
 									<td class="mono">{keys(o)}</td>
 								{/if}

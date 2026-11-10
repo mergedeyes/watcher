@@ -22,11 +22,12 @@ pub enum Kind {
     DowntimeGroup,
     TimePeriod,
     Notify,
+    Dependency,
     Sink,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 11] = [
+    pub const ALL: [Kind; 12] = [
         Kind::Check,
         Kind::Service,
         Kind::Host,
@@ -37,6 +38,7 @@ impl Kind {
         Kind::DowntimeGroup,
         Kind::TimePeriod,
         Kind::Notify,
+        Kind::Dependency,
         Kind::Sink,
     ];
 
@@ -53,6 +55,7 @@ impl Kind {
             Kind::DowntimeGroup => "downtimegroup",
             Kind::TimePeriod => "timeperiod",
             Kind::Notify => "notify",
+            Kind::Dependency => "dependency",
             Kind::Sink => "sink",
         }
     }
@@ -60,7 +63,10 @@ impl Kind {
     /// Named by their key (`[service.disk]`); hosts, notify rules and sinks
     /// by a `name` field in an array of tables.
     fn keyed(self) -> bool {
-        !matches!(self, Kind::Host | Kind::Notify | Kind::Sink)
+        !matches!(
+            self,
+            Kind::Host | Kind::Notify | Kind::Dependency | Kind::Sink
+        )
     }
 
     /// Where objects created in the UI go.
@@ -76,6 +82,7 @@ impl Kind {
             | Kind::TimePeriod => "ui/groups.toml",
             Kind::Contact => "ui/contacts.toml",
             Kind::Notify => "ui/notify.toml",
+            Kind::Dependency => "ui/dependencies.toml",
             Kind::Sink => "ui/sinks.toml",
         }
     }
@@ -163,6 +170,7 @@ impl Kind {
                 "period",
                 "enabled",
             ],
+            Kind::Dependency => &["name", "on", "hosts", "services", "states", "enabled"],
             Kind::Sink => &["name", "type", "url", "password_file", "flush", "buffer"],
         }
     }
@@ -288,6 +296,7 @@ fn parse(path: &str, text: &str) -> Result<Vec<Object>, (usize, String)> {
     for (kind, list) in [
         (Kind::Host, file.host),
         (Kind::Notify, file.notify),
+        (Kind::Dependency, file.dependency),
         (Kind::Sink, file.sink),
     ] {
         for (i, t) in list.into_iter().enumerate() {

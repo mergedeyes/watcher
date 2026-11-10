@@ -453,6 +453,9 @@ fn suppression(
     if crate::host_down(live, &service.id) {
         return Some("host is DOWN".into());
     }
+    if let Some(why) = dependency_block(live, service) {
+        return Some(why);
+    }
     let ops = &live.ops;
     if !ops.notifications {
         return Some("notifications are off".into());
@@ -466,6 +469,38 @@ fn suppression(
     }
     if status.acknowledged && state != CheckState::Ok {
         return Some("acknowledged".into());
+    }
+    None
+}
+
+/// Why a dependency holds notifications for `service` back: its master
+/// is confirmed bad. The master must be HARD in one of the dependency's
+/// states; its own alert is never held back (checked when matching).
+fn dependency_block(live: &crate::Live, service: &Service) -> Option<String> {
+    let config = &live.config;
+    let host_alert = config.is_host_check(service);
+    for (dep, _) in config.matching_dependencies(service, host_alert) {
+        let Some(master) = config.dependency_master_check(dep) else {
+            continue;
+        };
+        let Some(l) = live.services.get(&master.id) else {
+            continue;
+        };
+        if l.state.state_type != StateType::Hard {
+            continue;
+        }
+        // A master host is DOWN or nothing; a master service compares by
+        // its check state.
+        let name = match dep.master() {
+            (_, None) => match HostState::from_check(l.state.state) {
+                HostState::Down => "down",
+                HostState::Up => continue,
+            },
+            _ => watcher_config::state_name(l.state.state, false),
+        };
+        if dep.states.iter().any(|s| s == name) {
+            return Some(format!("depends on {} ({})", dep.on, name.to_uppercase()));
+        }
     }
     None
 }
