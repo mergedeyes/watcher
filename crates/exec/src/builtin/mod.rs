@@ -32,7 +32,8 @@ pub fn vars_of(name: &str) -> &'static [&'static str] {
         "ping" => &["address", "packets", "warn", "crit"],
         "tcp" => &["address", "port", "send", "expect", "warn", "crit"],
         "http" => &[
-            "address", "url", "method", "status", "content", "follow", "verify", "warn", "crit",
+            "address", "url", "method", "headers", "body", "user", "password", "status",
+            "content", "follow", "verify", "warn", "crit",
         ],
         "dns" => &[
             "address", "name", "type", "server", "port", "expect", "warn", "crit",
@@ -46,7 +47,7 @@ pub fn vars_of(name: &str) -> &'static [&'static str] {
 pub enum Builtin {
     Ping(Ping),
     Tcp(Tcp),
-    Http(Http),
+    Http(Box<Http>),
     Dns(Dns),
     Tls(Tls),
 }
@@ -60,7 +61,7 @@ impl Builtin {
         Ok(match name {
             "ping" => Builtin::Ping(Ping::new(address, &vars)?),
             "tcp" => Builtin::Tcp(Tcp::new(address, &vars)?),
-            "http" => Builtin::Http(Http::new(address, &vars)?),
+            "http" => Builtin::Http(Box::new(Http::new(address, &vars)?)),
             "dns" => Builtin::Dns(Dns::new(address, &vars)?),
             "tls" => Builtin::Tls(Tls::new(address, &vars)?),
             _ => {
@@ -131,6 +132,15 @@ impl Vars<'_> {
     /// A var that is set and not blank.
     fn get(&self, key: &str) -> Option<&str> {
         self.0.get(key).map(|v| v.trim()).filter(|v| !v.is_empty())
+    }
+
+    /// The entries of a table var like `headers = { Accept = "..." }`,
+    /// which arrive as `headers.Accept`. Values are not trimmed.
+    fn table<'k>(&'k self, key: &'k str) -> impl Iterator<Item = (&'k str, &'k str)> + 'k {
+        self.0.iter().filter_map(move |(k, v)| {
+            let name = k.strip_prefix(key)?.strip_prefix('.')?;
+            Some((name, v.as_str()))
+        })
     }
 
     fn required(&self, key: &str, what: &str) -> Result<&str, String> {
