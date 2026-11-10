@@ -1,7 +1,7 @@
 # Data
 
-Watcher stores results in PostgreSQL: current states, the alert history and
-all metrics. TimescaleDB is optional and makes metric storage smaller and
+Watcher stores results in PostgreSQL: current states, the alert history,
+the notification log and all metrics. TimescaleDB is optional and makes metric storage smaller and
 faster. Everything is in plain tables and views, so you can query it with
 SQL, Grafana or any BI tool.
 
@@ -21,7 +21,8 @@ The URL can also be given with `--database URL` or the environment variable
 | `samples` is a hypertable with daily chunks, compressed after 2 days (needs the Timescale License build) | `samples` is a normal table |
 
 Without a database, Watcher keeps only the current states, in memory. There
-is no history, no graphs and no login.
+is no history, no graphs, no notification log and no login, and repeated
+notifications and escalations start their time again after a restart.
 
 Values are stored in base units: seconds, bytes and percent. See
 [Units](../objects/check.md#units).
@@ -38,6 +39,7 @@ Values are stored in base units: seconds, bytes and percent. See
 | `samples` | series_id, ts, value, flags |
 | `state_events` | service_id, ts, kind, from_state, to_state, state_type, hard, output |
 | `check_changes` | service_id, ts, check_hash: every change of a service's command |
+| `notifications` | ts, host, service, host_check, kind, state, repeat, since, contact, channel, error: every notification sent, kept 90 days |
 
 - `state_events.kind` is `service`, `host` (UP/DOWN), `flap_start` or
   `flap_stop`.
@@ -47,6 +49,9 @@ Values are stored in base units: seconds, bytes and percent. See
   hides masked values.
 - Hosts and services removed from the configuration get a `removed_at`
   time. Their history stays.
+- `notifications` has one row per contact and channel. `error` is empty
+  for delivered notifications. Hosts and services are names, as in the
+  configuration; for host notifications, `service` is the host check.
 
 ## Read-only login
 
