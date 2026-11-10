@@ -9,9 +9,9 @@ use axum::routing::post;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
-use watcher_config::{Contact, Smtp, SmtpTls};
+use watcher_config::{Channels, Contact, Gotify, Ntfy, Smtp, SmtpTls, Telegram};
 use watcher_core::State;
-use watcher_notify::{Kind, Notification, Notifier};
+use watcher_notify::{Endpoints, Kind, Notification, Notifier};
 
 fn notification(service: &str) -> Notification {
     Notification {
@@ -38,6 +38,7 @@ fn contact(email: &[&str], webhook: Option<String>) -> Contact {
         name: "ops".into(),
         email: email.iter().map(|s| s.to_string()).collect(),
         webhook,
+        channels: Default::default(),
         groups: Vec::new(),
         origin: Default::default(),
     }
@@ -149,4 +150,236 @@ async fn email_through_mailpit() {
     assert_eq!(message["Subject"], subject);
     assert_eq!(message["To"].as_array().unwrap().len(), 2);
     assert_eq!(message["From"]["Address"], "watcher@example.com");
+}
+
+/// A request a service got: path, headers, JSON body.
+#[derive(Debug, Clone)]
+struct Got {
+    path: String,
+    headers: axum::http::HeaderMap,
+    body: Value,
+}
+
+type Answers = Arc<Mutex<std::vec::IntoIter<(u16, String)>>>;
+
+/// Stands in for every service: records each request on any path and
+/// answers with `answers` in turn (then 200).
+async fn services(answers: Vec<(u16, &str)>) -> (String, Arc<Mutex<Vec<Got>>>) {
+    let got = Arc::new(Mutex::new(Vec::new()));
+    let answers: Answers = Arc::new(Mutex::new(
+        answers
+            .into_iter()
+            .map(|(c, t)| (c, t.to_string()))
+            .collect::<Vec<_>>()
+            .into_iter(),
+    ));
+    let state = (got.clone(), answers);
+    let app = axum::Router::new()
+        .fallback(
+            |AxState((got, answers)): AxState<(Arc<Mutex<Vec<Got>>>, Answers)>,
+             uri: axum::http::Uri,
+             headers: axum::http::HeaderMap,
+             body: axum::body::Bytes| async move {
+                got.lock().unwrap().push(Got {
+                    path: uri.path().to_string(),
+                    headers,
+                    body: serde_json::from_slice(&body).unwrap_or(Value::Null),
+                });
+                let (code, text) = answers
+                    .lock()
+                    .unwrap()
+                    .next()
+                    .unwrap_or((200, String::new()));
+                (StatusCode::from_u16(code).unwrap(), text)
+            },
+        )
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(axum::serve(listener, app).into_future());
+    (base, got)
+}
+
+fn everywhere(base: &str) -> Contact {
+    let mut c = contact(&[], None);
+    c.channels = Channels {
+        slack: Some(format!("{base}/slack")),
+        teams: Some(format!("{base}/teams")),
+        telegram: Some(Telegram {
+            token: "123:abc".into(),
+            chat: "-100".into(),
+        }),
+        ntfy: Some(Ntfy {
+            url: format!("{base}/alerts"),
+            token: Some("tk".into()),
+        }),
+        gotify: Some(Gotify {
+            url: format!("{base}/gotify"),
+            token: "gk".into(),
+        }),
+        pagerduty: Some("KEY".into()),
+        script: None,
+    };
+    c
+}
+
+fn notifier(base: &str) -> Notifier {
+    Notifier::new(None, None)
+        .unwrap()
+        .with_endpoints(Endpoints {
+            telegram: base.to_string(),
+            pagerduty: format!("{base}/pd"),
+        })
+}
+
+#[tokio::test]
+async fn every_channel_gets_its_own_format() {
+    let (base, got) = services(vec![]).await;
+    let mut n = notification("disk");
+    n.url = Some("https://w.example/services/web01/disk".into());
+    let results = notifier(&base).deliver(&everywhere(&base), &n).await;
+    let names: Vec<&str> = results.iter().map(|(c, _)| *c).collect();
+    assert_eq!(
+        names,
+        ["slack", "teams", "telegram", "ntfy", "gotify", "pagerduty"]
+    );
+    for (channel, r) in &results {
+        assert!(r.is_ok(), "{channel}: {r:?}");
+    }
+    let got = got.lock().unwrap().clone();
+    let at = |path: &str| got.iter().find(|g| g.path == path).unwrap().clone();
+
+    let slack = at("/slack").body;
+    assert_eq!(slack["text"], "[Watcher] PROBLEM: web01/disk is CRITICAL");
+    assert_eq!(slack["attachments"][0]["color"], "#e5484d");
+    let text = slack["attachments"][0]["text"].as_str().unwrap();
+    assert!(
+        text.starts_with("*web01/disk is CRITICAL (was OK)*\nDISK CRITICAL"),
+        "{text}"
+    );
+
+    let teams = at("/teams").body;
+    let card = &teams["attachments"][0];
+    assert_eq!(
+        card["contentType"],
+        "application/vnd.microsoft.card.adaptive"
+    );
+    assert_eq!(card["content"]["body"][0]["color"], "Attention");
+    assert_eq!(card["content"]["actions"][0]["url"], n.url.clone().unwrap());
+
+    let telegram = at("/bot123:abc/sendMessage").body;
+    assert_eq!(telegram["chat_id"], "-100");
+    assert_eq!(telegram["parse_mode"], "HTML");
+    let text = telegram["text"].as_str().unwrap();
+    assert!(
+        text.starts_with("<b>web01/disk is CRITICAL (was OK)</b>\n\n<pre>DISK"),
+        "{text}"
+    );
+    assert!(
+        text.ends_with("<a href=\"https://w.example/services/web01/disk\">Details</a>"),
+        "{text}"
+    );
+
+    // ntfy: JSON to the server, the topic inside.
+    let ntfy = at("/");
+    assert_eq!(ntfy.body["topic"], "alerts");
+    assert_eq!(ntfy.body["priority"], 5);
+    assert_eq!(ntfy.body["click"], n.url.clone().unwrap());
+    assert_eq!(ntfy.headers["authorization"], "Bearer tk");
+
+    let gotify = at("/gotify/message");
+    assert_eq!(gotify.headers["x-gotify-key"], "gk");
+    assert_eq!(gotify.body["priority"], 8);
+    assert_eq!(gotify.body["title"], "web01/disk is CRITICAL (was OK)");
+
+    let pd = at("/pd").body;
+    assert_eq!(pd["routing_key"], "KEY");
+    assert_eq!(pd["event_action"], "trigger");
+    assert_eq!(pd["dedup_key"], "watcher/web01/disk");
+    assert_eq!(pd["payload"]["severity"], "critical");
+    assert_eq!(pd["payload"]["source"], "web01");
+}
+
+#[tokio::test]
+async fn pagerduty_resolves_and_skips_other_kinds() {
+    let (base, got) = services(vec![]).await;
+    let mut c = contact(&[], None);
+    c.channels.pagerduty = Some("KEY".into());
+    let notifier = notifier(&base);
+    let mut n = notification("disk");
+    n.kind = Kind::Recovery;
+    n.state = State::Ok;
+    let results = notifier.deliver(&c, &n).await;
+    assert!(results[0].1.is_ok());
+    assert_eq!(got.lock().unwrap()[0].body["event_action"], "resolve");
+    assert_eq!(
+        got.lock().unwrap()[0].body["dedup_key"],
+        "watcher/web01/disk"
+    );
+
+    n.kind = Kind::DowntimeStart;
+    assert!(notifier.deliver(&c, &n).await.is_empty());
+    assert_eq!(got.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn service_errors_are_reported_without_tokens() {
+    let (base, got) = services(vec![(
+        400,
+        r#"{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}"#,
+    )])
+    .await;
+    let mut c = contact(&[], None);
+    c.channels.telegram = Some(Telegram {
+        token: "123:secret".into(),
+        chat: "-1".into(),
+    });
+    let results = notifier(&base).deliver(&c, &notification("disk")).await;
+    let err = results[0].1.as_ref().unwrap_err().to_string();
+    assert!(
+        err.starts_with("telegram: answered 400 Bad Request: "),
+        "{err}"
+    );
+    assert!(err.contains("chat not found"), "{err}");
+    assert!(!err.contains("secret"), "{err}");
+    // A client error is not retried.
+    assert_eq!(got.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn scripts_get_json_and_environment() {
+    let dir = std::env::temp_dir().join(format!("watcher-notify-script-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = dir.join("out");
+    let script = dir.join("notify-me");
+    // Written by a child process: a file this process has open for writing
+    // can't be run while other tests fork ("Text file busy").
+    let written = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(r#"printf '%s\n' '#!/bin/sh' 'cat > "$1"' 'echo "$WATCHER_KIND $WATCHER_HOST/$WATCHER_SERVICE $WATCHER_STATE $WATCHER_CONTACT" >> "$1"' > "$0" && chmod 755 "$0""#)
+        .arg(&script)
+        .status()
+        .unwrap();
+    assert!(written.success());
+    let mut c = contact(&[], None);
+    c.channels.script = Some(format!("{} {}", script.display(), out.display()));
+    let results = Notifier::new(None, None)
+        .unwrap()
+        .deliver(&c, &notification("disk"))
+        .await;
+    assert!(results[0].1.is_ok(), "{:?}", results[0].1);
+    let text = std::fs::read_to_string(&out).unwrap();
+    let (json, env) = text.rsplit_once('}').unwrap();
+    let json: Value = serde_json::from_str(&format!("{json}}}")).unwrap();
+    assert_eq!(json["service"], "disk");
+    assert_eq!(env.trim(), "PROBLEM web01/disk CRITICAL ops");
+
+    c.channels.script = Some("sh -c 'echo no modem >&2; exit 3'".into());
+    let results = Notifier::new(None, None)
+        .unwrap()
+        .deliver(&c, &notification("disk"))
+        .await;
+    let err = results[0].1.as_ref().unwrap_err().to_string();
+    assert_eq!(err, "script: exit code 3: no modem");
+    std::fs::remove_dir_all(dir).unwrap();
 }

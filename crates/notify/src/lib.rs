@@ -1,4 +1,5 @@
-//! Notifications on hard state changes: email and webhooks.
+//! Notifications on hard state changes: email, webhooks, and chat, push
+//! and paging services (see [`channels`]).
 //!
 //! A problem is a hard change to a non-OK state; a recovery is a hard
 //! change back to OK from a problem. Soft changes, the first OK result of a
@@ -7,6 +8,7 @@
 //! start and end of flapping notify. Rules with `repeat` send open
 //! problems again (see [`Repeats`]).
 
+mod channels;
 mod email;
 mod repeat;
 mod webhook;
@@ -21,6 +23,7 @@ use watcher_config::{Alert, At, Config, Contact, Service, Smtp, TimeZone, state_
 use watcher_core::{HostState, State, StateType};
 use watcher_exec::scheduler::Event;
 
+pub use channels::Endpoints;
 pub use email::Mailer;
 pub use repeat::{OpenProblem, Repeats};
 
@@ -32,6 +35,9 @@ pub enum Error {
     Webhook(String),
     #[error("contact has an email address, but no [smtp] server is configured")]
     NoSmtp,
+    /// Slack, Teams, ...: the channel's name and what went wrong.
+    #[error("{0}: {1}")]
+    Channel(&'static str, String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -366,6 +372,7 @@ pub struct Notifier {
     http: reqwest::Client,
     public_url: Option<String>,
     instance: Option<String>,
+    endpoints: Endpoints,
 }
 
 impl Notifier {
@@ -384,7 +391,15 @@ impl Notifier {
             http,
             public_url,
             instance: None,
+            endpoints: Endpoints::default(),
         })
+    }
+
+    /// Other addresses for Telegram's and PagerDuty's APIs, for tests.
+    #[doc(hidden)]
+    pub fn with_endpoints(mut self, endpoints: Endpoints) -> Self {
+        self.endpoints = endpoints;
+        self
     }
 
     /// Names the instance in every notification.
@@ -414,6 +429,36 @@ impl Notifier {
         }
         if let Some(url) = &contact.webhook {
             results.push(("webhook", retry(|| webhook::post(&self.http, url, n)).await));
+        }
+        let (http, ch) = (&self.http, &contact.channels);
+        if let Some(url) = &ch.slack {
+            results.push(("slack", retry(|| channels::slack(http, url, n)).await));
+        }
+        if let Some(url) = &ch.teams {
+            results.push(("teams", retry(|| channels::teams(http, url, n)).await));
+        }
+        if let Some(t) = &ch.telegram {
+            let api = &self.endpoints.telegram;
+            results.push((
+                "telegram",
+                retry(|| channels::telegram(http, api, t, n)).await,
+            ));
+        }
+        if let Some(t) = &ch.ntfy {
+            results.push(("ntfy", retry(|| channels::ntfy(http, t, n)).await));
+        }
+        if let Some(t) = &ch.gotify {
+            results.push(("gotify", retry(|| channels::gotify(http, t, n)).await));
+        }
+        if let Some(key) = &ch.pagerduty
+            && let Some(events) = channels::pagerduty_events(key, n)
+        {
+            let api = &self.endpoints.pagerduty;
+            let result = retry(|| channels::pagerduty(http, api, &events)).await;
+            results.push(("pagerduty", result));
+        }
+        if let Some(script) = &ch.script {
+            results.push(("script", channels::script(script, &contact.name, n).await));
         }
         results
     }
@@ -465,7 +510,7 @@ pub fn setup_warnings(config: &Config, notifier: &Notifier) -> Vec<String> {
 pub struct Sent {
     pub notification: Notification,
     pub contact: String,
-    /// `email`, `webhook`, or empty if the contact has neither.
+    /// `email`, `webhook`, `slack`, ... or empty if the contact has none.
     pub channel: &'static str,
     /// `None`: delivered.
     pub error: Option<String>,
@@ -522,7 +567,7 @@ pub async fn run(
                             .map(|(channel, r)| (*channel, r.as_ref().err().map(|e| e.to_string())))
                             .collect();
                         if entries.is_empty() {
-                            entries.push(("", Some("contact has no email or webhook".into())));
+                            entries.push(("", Some("contact has no channel to send on".into())));
                         }
                         for (channel, error) in entries {
                             let entry = Sent {

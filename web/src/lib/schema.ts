@@ -36,6 +36,8 @@ export interface Field {
 	scripts?: boolean;
 	/** For `selector`: what it selects. */
 	selects?: 'host' | 'service';
+	/** For `table.key`: the table may also be written as just this value (`ntfy = "https://…"`). */
+	short?: boolean;
 }
 
 export interface Group {
@@ -159,6 +161,21 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 				{ key: 'email', label: 'Email', type: 'list', help: 'comma-separated' },
 				{ key: 'webhook', label: 'Webhook', type: 'text', placeholder: 'https://…' },
 				{ key: 'groups', label: 'Contact Groups', type: 'list', suggest: 'contactgroup', help: 'comma-separated' }
+			]
+		},
+		{
+			title: 'Chat and Paging',
+			fields: [
+				{ key: 'slack', label: 'Slack', type: 'text', placeholder: 'https://hooks.slack.com/services/…', help: 'incoming webhook URL' },
+				{ key: 'teams', label: 'Teams', type: 'text', placeholder: 'https://…', help: 'Workflows webhook URL' },
+				{ key: 'telegram.token', label: 'Telegram Bot Token', type: 'text', placeholder: '123456:ABC…' },
+				{ key: 'telegram.chat', label: 'Telegram Chat', type: 'text', placeholder: '-1001234567890 or @channel' },
+				{ key: 'ntfy.url', label: 'ntfy Topic', type: 'text', short: true, placeholder: 'https://ntfy.sh/my-topic' },
+				{ key: 'ntfy.token', label: 'ntfy Token', type: 'text', help: 'for protected topics' },
+				{ key: 'gotify.url', label: 'Gotify Server', type: 'text', placeholder: 'https://gotify.example.com' },
+				{ key: 'gotify.token', label: 'Gotify Token', type: 'text', help: 'application token' },
+				{ key: 'pagerduty', label: 'PagerDuty', type: 'text', help: 'Events API v2 routing key' },
+				{ key: 'script', label: 'Script', type: 'mono', placeholder: '/usr/local/bin/notify-sms', help: 'gets the notification as JSON on stdin' }
 			]
 		}
 	],
@@ -320,6 +337,12 @@ function at(raw: Record<string, unknown>, key: string): unknown {
 	return v;
 }
 
+/** A field's value; a `short` field also reads the table written as just its value. */
+function value(raw: Record<string, unknown>, f: Field): unknown {
+	const head = f.key.split('.')[0]!;
+	return f.short && typeof raw[head] === 'string' ? raw[head] : at(raw, f.key);
+}
+
 /** Sets a field key, or removes it (`undefined`) with tables left empty. */
 function put(out: Record<string, unknown>, key: string, value: unknown) {
 	const [head, ...rest] = key.split('.') as [string, ...string[]];
@@ -376,7 +399,7 @@ export function selectorFromForm(form: Record<string, string>, raw: unknown, sel
 export function toForm(kind: Kind, raw: Record<string, unknown>): FormValues {
 	const values: FormValues = {};
 	for (const f of fields(kind)) {
-		const v = at(raw, f.key);
+		const v = value(raw, f);
 		switch (f.type) {
 			case 'list':
 				values[f.key] = list(v).join(', ');
@@ -449,7 +472,7 @@ export function fromForm(kind: Kind, raw: Record<string, unknown>, values: FormV
 	const out: Record<string, unknown> = { ...raw };
 	for (const f of fields(kind)) {
 		const v = values[f.key];
-		const before = at(raw, f.key);
+		const before = value(raw, f);
 		let next: unknown;
 		switch (f.type) {
 			case 'list': {
@@ -516,9 +539,17 @@ export function fromForm(kind: Kind, raw: Record<string, unknown>, values: FormV
 			default: {
 				const text = String(v ?? '');
 				next = text.trim() === '' ? undefined : f.type === 'mono' ? text : text.trim();
+				// A number written in the file stays a number while unchanged.
+				if (typeof before === 'number' && String(before) === next) next = before;
 			}
 		}
 		put(out, f.key, next === undefined || !same(next, before) ? next : before);
+	}
+	// A short form stays short while only its value is set and unchanged.
+	for (const f of fields(kind).filter((f) => f.short)) {
+		const [head, key] = f.key.split('.') as [string, string];
+		const t = out[head];
+		if (typeof raw[head] === 'string' && isTable(t) && same(Object.keys(t), [key]) && t[key] === raw[head]) out[head] = raw[head];
 	}
 	return out;
 }

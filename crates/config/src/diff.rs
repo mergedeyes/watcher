@@ -79,7 +79,10 @@ pub fn changes(old: &Config, new: &Config) -> Changes {
             &new.contacts,
             |c| c.name.clone(),
             |a, b| {
-                a.email == b.email && a.webhook == b.webhook && names(&a.groups) == names(&b.groups)
+                a.email == b.email
+                    && a.webhook == b.webhook
+                    && a.channels == b.channels
+                    && names(&a.groups) == names(&b.groups)
             },
         ),
         notify: delta(&old.notify, &new.notify, NotifyRule::label, same_rule),

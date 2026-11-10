@@ -98,30 +98,70 @@ pub(crate) fn subject(n: &Notification) -> String {
     }
 }
 
-pub(crate) fn body(n: &Notification) -> String {
-    let mut b = String::new();
+/// The first line of a message: `web01/disk is CRITICAL (was WARNING)`.
+pub(crate) fn summary(n: &Notification) -> String {
     let id = n.service_id();
     let state = n.state_name();
-    let _ = match (n.kind, n.previous_state_name()) {
-        (Kind::Test, _) => writeln!(b, "TEST"),
+    match (n.kind, n.previous_state_name()) {
+        (Kind::Test, _) => "TEST".to_string(),
         (Kind::Problem, _) if n.repeat => match n.since {
-            Some(since) => writeln!(b, "{id} is still {state} ({})", open_for(since, n.time)),
-            None => writeln!(b, "{id} is still {state}"),
+            Some(since) => format!("{id} is still {state} ({})", open_for(since, n.time)),
+            None => format!("{id} is still {state}"),
         },
-        (Kind::FlappingStart, _) => writeln!(
-            b,
-            "{id} is flapping ({state}); notifications are held back until it settles"
-        ),
-        (Kind::FlappingStop, _) => writeln!(b, "{id} stopped flapping ({state})"),
-        (Kind::DowntimeStart, _) => writeln!(
-            b,
-            "{id} is in a downtime ({state}); no notifications until it ends"
-        ),
-        (Kind::DowntimeEnd, _) => writeln!(b, "{id}: downtime ended ({state})"),
-        (_, Some(prev)) => writeln!(b, "{id} is {state} (was {prev})"),
-        (_, None) => writeln!(b, "{id} is {state}"),
+        (Kind::FlappingStart, _) => {
+            format!("{id} is flapping ({state}); notifications are held back until it settles")
+        }
+        (Kind::FlappingStop, _) => format!("{id} stopped flapping ({state})"),
+        (Kind::DowntimeStart, _) => {
+            format!("{id} is in a downtime ({state}); no notifications until it ends")
+        }
+        (Kind::DowntimeEnd, _) => format!("{id}: downtime ended ({state})"),
+        (_, Some(prev)) => format!("{id} is {state} (was {prev})"),
+        (_, None) => format!("{id} is {state}"),
+    }
+}
+
+/// The details under the output: host, service, state, times and the
+/// link, as `(label, value)`.
+pub(crate) fn facts(n: &Notification) -> Vec<(&'static str, String)> {
+    let mut out = Vec::new();
+    let host = if n.address == n.host {
+        n.host.clone()
+    } else {
+        format!("{} ({})", n.host, n.address)
     };
-    b.push('\n');
+    out.push(("Host", host));
+    match (n.host_check, n.service.is_empty()) {
+        (true, true) => {}
+        (true, false) => out.push(("Check", format!("{} (host check, {})", n.service, n.state))),
+        (false, _) => out.push(("Service", n.service.clone())),
+    }
+    let state = n.state_name();
+    let state = if n.kind == Kind::Problem && n.attempts > 1 && !n.repeat {
+        format!("{state}, confirmed after {} attempts", n.attempts)
+    } else {
+        state.to_string()
+    };
+    out.push(("State", state));
+    if let Some(since) = n.since.filter(|_| n.repeat) {
+        out.push((
+            "Since",
+            humantime::format_rfc3339_seconds(since).to_string(),
+        ));
+    }
+    out.push((
+        "Time",
+        humantime::format_rfc3339_seconds(n.time).to_string(),
+    ));
+    if let Some(url) = &n.url {
+        out.push(("Details", url.clone()));
+    }
+    out
+}
+
+pub(crate) fn body(n: &Notification) -> String {
+    let mut b = summary(n);
+    b.push_str("\n\n");
     b.push_str(&n.output);
     b.push('\n');
     if !n.long_output.is_empty() {
@@ -130,29 +170,8 @@ pub(crate) fn body(n: &Notification) -> String {
         b.push('\n');
     }
     b.push('\n');
-    let host = if n.address == n.host {
-        n.host.clone()
-    } else {
-        format!("{} ({})", n.host, n.address)
-    };
-    let state = if n.kind == Kind::Problem && n.attempts > 1 && !n.repeat {
-        format!("{state}, confirmed after {} attempts", n.attempts)
-    } else {
-        state.to_string()
-    };
-    let _ = writeln!(b, "Host:     {host}");
-    let _ = match (n.host_check, n.service.is_empty()) {
-        (true, true) => Ok(()),
-        (true, false) => writeln!(b, "Check:    {} (host check, {})", n.service, n.state),
-        (false, _) => writeln!(b, "Service:  {}", n.service),
-    };
-    let _ = writeln!(b, "State:    {state}");
-    if let Some(since) = n.since.filter(|_| n.repeat) {
-        let _ = writeln!(b, "Since:    {}", humantime::format_rfc3339_seconds(since));
-    }
-    let _ = writeln!(b, "Time:     {}", humantime::format_rfc3339_seconds(n.time));
-    if let Some(url) = &n.url {
-        let _ = writeln!(b, "Details:  {url}");
+    for (label, value) in facts(n) {
+        let _ = writeln!(b, "{:<10}{value}", format!("{label}:"));
     }
     b
 }
