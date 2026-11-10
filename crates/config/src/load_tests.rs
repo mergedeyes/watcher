@@ -1080,6 +1080,36 @@ services = ["script", "copied", "pinger", "pushed"]
 }
 
 #[test]
+fn http_headers_are_a_table_merged_across_layers() {
+    let config = ok(&[(
+        "a.toml",
+        r#"
+[check.api]
+builtin = "http"
+vars.headers = { Accept = "application/json", X-Api-Key = "$key$" }
+
+[service.api]
+check = "api"
+vars.key = "k1"
+vars.headers.X-Site = "$host.name$"
+
+[[host]]
+name = "h"
+address = "10.0.0.5"
+services = ["api"]
+"#,
+    )]);
+    let s = &config.services[0];
+    assert_eq!(
+        s.command.as_ref().unwrap().to_string(),
+        "http GET http://10.0.0.5/ header=\"Accept: application/json\" \
+         header=\"X-Api-Key: ***\" header=\"X-Site: h\" (built-in)"
+    );
+    assert_eq!(s.vars["headers.X-Api-Key"], "k1");
+    assert!(s.sources.contains_key("vars.headers.X-Site"));
+}
+
+#[test]
 fn builtin_checks_take_their_settings_from_vars() {
     let config = ok(&[(
         "a.toml",

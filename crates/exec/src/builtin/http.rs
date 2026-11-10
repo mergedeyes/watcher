@@ -14,6 +14,13 @@ const MAX_REDIRECTS: usize = 10;
 pub struct Http {
     pub url: String,
     pub method: String,
+    /// Request headers, in the order of their names.
+    pub headers: Vec<(String, String)>,
+    /// The request body.
+    pub body: Option<String>,
+    /// Basic auth: the user, and the password (may be empty).
+    pub user: Option<String>,
+    pub password: Option<String>,
     /// Status codes that are OK, as ranges; `None`: 2xx and 3xx OK, 4xx
     /// WARNING, 5xx CRITICAL.
     pub status: Option<Vec<(u16, u16)>>,
@@ -26,7 +33,8 @@ pub struct Http {
 
 impl Http {
     /// Vars: `url` (a URL, or a path on the host; default `/`), `method`,
-    /// `status`, `content`, `follow`, `verify`, `warn`, `crit`.
+    /// `headers` (a table), `body`, `user`, `password`, `status`,
+    /// `content`, `follow`, `verify`, `warn`, `crit`.
     pub(super) fn new(address: &str, vars: &Vars<'_>) -> Result<Self, String> {
         let url = match vars.get("url").unwrap_or("/") {
             path if path.starts_with('/') => format!("http://{}{path}", host_part(address)),
@@ -39,10 +47,39 @@ impl Http {
         let method = vars.get("method").unwrap_or("GET").to_ascii_uppercase();
         reqwest::Method::from_bytes(method.as_bytes())
             .map_err(|_| format!("vars.method {method:?}: expected GET, HEAD, ..."))?;
+        if vars.get("headers").is_some() {
+            return Err(
+                "vars.headers: expected a table, e.g. { Accept = \"application/json\" }".into(),
+            );
+        }
+        let mut headers = Vec::new();
+        for (name, value) in vars.table("headers") {
+            reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                .map_err(|_| format!("vars.headers.{name}: not a valid header name"))?;
+            reqwest::header::HeaderValue::from_str(value)
+                .map_err(|_| format!("vars.headers.{name}: not a valid header value"))?;
+            headers.push((name.to_string(), value.to_string()));
+        }
+        let user = vars.get("user").map(String::from);
+        let password = vars.0.get("password").cloned();
+        if user.is_none() && password.as_deref().is_some_and(|p| !p.is_empty()) {
+            return Err("vars.password is set without vars.user".into());
+        }
+        if user.is_some()
+            && headers
+                .iter()
+                .any(|(n, _)| n.eq_ignore_ascii_case("authorization"))
+        {
+            return Err("set vars.user or an Authorization header, not both".into());
+        }
         let status = vars.get("status").map(parse_status).transpose()?;
         Ok(Http {
             url,
             method,
+            headers,
+            body: vars.0.get("body").filter(|b| !b.is_empty()).cloned(),
+            user,
+            password: password.filter(|p| !p.is_empty()),
             status,
             content: vars.get("content").map(String::from),
             follow: vars.flag("follow", false)?,
@@ -88,7 +125,17 @@ impl Http {
         };
         let method = reqwest::Method::from_bytes(self.method.as_bytes()).unwrap_or_default();
         let start = Instant::now();
-        let request = client.request(method, &self.url).timeout(wait).send();
+        let mut request = client.request(method, &self.url).timeout(wait);
+        for (name, value) in &self.headers {
+            request = request.header(name.as_str(), value.as_str());
+        }
+        if let Some(user) = &self.user {
+            request = request.basic_auth(user, self.password.as_ref());
+        }
+        if let Some(body) = &self.body {
+            request = request.body(body.clone());
+        }
+        let request = request.send();
         let mut response = match request.await {
             Ok(r) => r,
             Err(e) if e.is_timeout() => {
@@ -196,6 +243,21 @@ impl Http {
 impl fmt::Display for Http {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "http {} {}", self.method, self.url)?;
+        // Values that look like credentials are left out: the command is
+        // shown in the UI and in logs.
+        for (name, value) in &self.headers {
+            if secret_header(name) {
+                write!(f, " header=\"{name}: ***\"")?;
+            } else {
+                write!(f, " header={:?}", format!("{name}: {value}"))?;
+            }
+        }
+        if let Some(body) = &self.body {
+            write!(f, " body=({} bytes)", body.len())?;
+        }
+        if let Some(user) = &self.user {
+            write!(f, " user={user:?}")?;
+        }
         if let Some(status) = &self.status {
             let list: Vec<String> = status
                 .iter()
@@ -220,6 +282,17 @@ impl fmt::Display for Http {
         }
         f.write_str(&self.limits.args())
     }
+}
+
+/// Headers whose values are not shown: `Authorization`, `Cookie`,
+/// `X-Api-Key`, `X-Auth-Token`, ...
+fn secret_header(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    [
+        "auth", "cookie", "key", "token", "secret", "password", "session",
+    ]
+    .iter()
+    .any(|word| name.contains(word))
 }
 
 /// `200,204,300-399` → ranges.
@@ -274,6 +347,43 @@ mod tests {
         format!("127.0.0.1:{port}")
     }
 
+    /// A server that answers with the request it got.
+    async fn echo() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let (mut s, _) = listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    // Headers, then the body by its content-length.
+                    loop {
+                        let n = s.read(&mut buf).await.unwrap();
+                        request.extend_from_slice(&buf[..n]);
+                        let text = String::from_utf8_lossy(&request).to_string();
+                        if let Some(end) = text.find("\r\n\r\n") {
+                            let length = text
+                                .lines()
+                                .find_map(|l| l.strip_prefix("content-length: "))
+                                .map_or(0, |n| n.trim().parse().unwrap());
+                            if request.len() >= end + 4 + length || n == 0 {
+                                break;
+                            }
+                        }
+                    }
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                        request.len()
+                    );
+                    let _ = s.write_all(head.as_bytes()).await;
+                    let _ = s.write_all(&request).await;
+                });
+            }
+        });
+        format!("127.0.0.1:{port}")
+    }
+
     async fn run(address: &str, list: &[(&str, &str)]) -> (i32, String) {
         let _ = rustls::crypto::ring::default_provider().install_default();
         Builtin::new("http", address, &vars(list))
@@ -304,6 +414,32 @@ mod tests {
             b.to_string(),
             "http GET http://[::1]/health status=200,300-302 verify=false crit=2 (built-in)"
         );
+        let b = Builtin::new(
+            "http",
+            "h",
+            &vars(&[
+                ("method", "post"),
+                ("headers.Content-Type", "application/json"),
+                ("headers.X-Api-Key", "s3cret"),
+                ("body", "{}"),
+                ("user", "admin"),
+                ("password", "pw"),
+            ]),
+        )
+        .unwrap();
+        let shown = b.to_string();
+        assert_eq!(
+            shown,
+            "http POST http://h/ header=\"Content-Type: application/json\" \
+             header=\"X-Api-Key: ***\" body=(2 bytes) user=\"admin\" (built-in)"
+        );
+        assert!(!shown.contains("pw"));
+        let err = |list: &[(&str, &str)]| Builtin::new("http", "h", &vars(list)).unwrap_err();
+        assert!(err(&[("headers", "Accept: */*")]).contains("expected a table"));
+        assert!(err(&[("headers.Bad Name", "x")]).contains("vars.headers.Bad Name"));
+        assert!(err(&[("headers.X", "a\nb")]).contains("not a valid header value"));
+        assert!(err(&[("password", "pw")]).contains("without vars.user"));
+        assert!(err(&[("user", "a"), ("headers.authorization", "Bearer x")]).contains("not both"));
         assert!(Builtin::new("http", "h", &vars(&[("url", "ftp://h/")])).is_err());
         assert!(Builtin::new("http", "h", &vars(&[("status", "2xx")])).is_err());
         assert!(Builtin::new("http", "h", &vars(&[("status", "302-200")])).is_err());
@@ -341,6 +477,39 @@ mod tests {
 
         let (code, out) = run(&addr, &[("warn", "0")]).await;
         assert_eq!(code, 1, "{out}");
+    }
+
+    #[tokio::test]
+    async fn headers_auth_and_body() {
+        let addr = echo().await;
+        let base = [
+            ("method", "PUT"),
+            ("headers.X-Test", "$1"),
+            ("headers.User-Agent", "probe"),
+            ("body", "{\"a\": 1}"),
+        ];
+        for expect in [
+            "PUT / HTTP/1.1",
+            "x-test: $1",
+            "user-agent: probe",
+            "content-length: 8",
+            "\r\n\r\n{\"a\": 1}",
+        ] {
+            let mut list = base.to_vec();
+            list.push(("content", expect));
+            let (code, out) = run(&addr, &list).await;
+            assert_eq!(code, 0, "{expect:?}: {out}");
+        }
+        let (code, out) = run(&addr, &[("content", "Watcher/")]).await;
+        assert_eq!(code, 0, "{out}");
+        // admin:pw
+        let auth = [
+            ("user", "admin"),
+            ("password", "pw"),
+            ("content", "authorization: Basic YWRtaW46cHc="),
+        ];
+        let (code, out) = run(&addr, &auth).await;
+        assert_eq!(code, 0, "{out}");
     }
 
     #[tokio::test]

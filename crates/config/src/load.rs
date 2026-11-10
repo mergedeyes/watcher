@@ -1502,30 +1502,47 @@ impl<'a> Compiler<'a> {
                     return None;
                 }
                 // Its settings: vars of the check, the service and the
-                // host's service, not host vars. Macros in them expand as
-                // in commands.
-                let mut vars: BTreeMap<String, String> = own
+                // host's service, not host vars. Tables one level deep
+                // become dotted keys (`headers.Accept`). Macros in them
+                // expand as in commands.
+                let text = |v: &Value| match v {
+                    Value::String(s) => Some(s.clone()),
+                    Value::Integer(_) | Value::Float(_) | Value::Boolean(_) => Some(v.to_string()),
+                    _ => None,
+                };
+                let mut vars = BTreeMap::new();
+                for (k, v) in own
                     .table
                     .get("vars")
                     .and_then(Value::as_table)
                     .into_iter()
                     .flatten()
-                    .filter_map(|(k, v)| {
-                        let text = match v {
-                            Value::String(s) => s.clone(),
-                            Value::Integer(_) | Value::Float(_) | Value::Boolean(_) => {
-                                v.to_string()
+                {
+                    match v {
+                        Value::Table(t) => {
+                            for (sub, v) in t {
+                                if let Some(text) = text(v) {
+                                    vars.insert(format!("{k}.{sub}"), text);
+                                }
                             }
-                            _ => return None,
-                        };
-                        Some((k.clone(), text))
-                    })
+                        }
+                        v => {
+                            if let Some(text) = text(v) {
+                                vars.insert(k.clone(), text);
+                            }
+                        }
+                    }
+                }
+                let read = builtin::vars_of(name);
+                let keys: Vec<String> = vars
+                    .keys()
+                    .filter(|k| read.contains(&k.split('.').next().unwrap_or_default()))
+                    .cloned()
                     .collect();
-                for key in builtin::vars_of(name) {
-                    let Some(text) = vars.get(*key) else { continue };
-                    match macros::expand_text(text, lookup) {
+                for key in keys {
+                    match macros::expand_text(&vars[&key], lookup) {
                         Ok(v) => {
-                            vars.insert((*key).to_string(), v);
+                            vars.insert(key, v);
                         }
                         Err(msg) => {
                             self.sink
