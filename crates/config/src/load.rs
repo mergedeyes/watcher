@@ -2117,6 +2117,13 @@ impl<'a> Compiler<'a> {
             if repeat.is_some() && !on.problem {
                 error("repeat: repeats problems, but on doesn't include problem".into());
             }
+            let after = def.after.filter(|d| !d.is_zero());
+            if after.is_some() && !on.problem {
+                error("after: escalates problems, but on doesn't include problem".into());
+            }
+            if after.is_some() && (on.flapping || on.downtime) && def.on.is_some() {
+                error("after: escalations take only problem and recovery in on".into());
+            }
             let hosts = def.hosts.as_ref().and_then(|v| {
                 HostSelector::parse(v)
                     .map_err(|e| error(format!("hosts: {e}")))
@@ -2139,6 +2146,7 @@ impl<'a> Compiler<'a> {
                 states: def.states,
                 on,
                 repeat,
+                after,
                 enabled: def.enabled,
                 origin: raw.origin.clone(),
             });
@@ -2506,6 +2514,8 @@ struct NotifyDef {
     on: Option<Vec<String>>,
     #[serde(default, deserialize_with = "duration")]
     repeat: Option<Duration>,
+    #[serde(default, deserialize_with = "duration")]
+    after: Option<Duration>,
     #[serde(default = "yes")]
     enabled: bool,
 }

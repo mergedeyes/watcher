@@ -207,6 +207,7 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 				{ key: 'states', label: 'States', type: 'list', help: 'warning, critical, unknown, down; none: all' },
 				{ key: 'on', label: 'On', type: 'list', help: 'problem, recovery, flapping, downtime; none: all' },
 				{ key: 'repeat', label: 'Repeat', type: 'duration', placeholder: 'off, e.g. 1h', help: 'send open problems again' },
+				{ key: 'after', label: 'After', type: 'duration', placeholder: 'at once, e.g. 30m', help: 'escalation: only problems open this long and not acknowledged' },
 				ENABLED
 			]
 		}

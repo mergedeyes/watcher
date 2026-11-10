@@ -6,6 +6,10 @@
 //! started. Problems already open at startup start their clock then, so a
 //! restart doesn't send a burst of repeats. Held back problems
 //! (acknowledged, in a downtime, ...) keep their clock but don't repeat.
+//!
+//! Escalations (rules with `after`) use the same clock: their contacts get
+//! the problem once it has been in its state for `after` without being
+//! held back, then every `repeat` of the rule.
 
 use crate::{Kind, Notification, about};
 use std::collections::{HashMap, HashSet};
@@ -69,6 +73,14 @@ impl Repeats {
         }
     }
 
+    /// Who got a PROBLEM about `id` while it was open.
+    pub fn got(&self, id: &str) -> Vec<String> {
+        self.open
+            .get(id)
+            .map(|o| o.sent.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
     /// `id` recovered.
     pub fn ended(&mut self, id: &str) {
         self.open.remove(id);
@@ -110,21 +122,46 @@ impl Repeats {
             };
             let host_check = config.is_host_check(service);
             let state = state_name(p.state, host_check);
-            let mut due = Vec::new();
-            let mut next = now + FAR;
+            // When each contact is due: the earliest of their rules.
+            let mut at: Vec<(&Contact, SystemTime)> = Vec::new();
+            let mut add = |contact: &'a Contact, t: SystemTime| match at
+                .iter_mut()
+                .find(|(c, _)| c.name == contact.name)
+            {
+                Some((_, prev)) => *prev = (*prev).min(t),
+                None => at.push((contact, t)),
+            };
             for (contact, every) in config.repeat_recipients(service, host_check, state) {
                 let last = open.sent.get(&contact.name).copied().unwrap_or(open.base);
-                let at = match last + every <= now {
-                    true => {
-                        open.sent.insert(contact.name.clone(), now);
-                        due.push(contact);
-                        now + every
-                    }
-                    false => last + every,
-                };
-                next = next.min(at);
+                add(contact, last + every);
             }
-            open.next = Some(next);
+            // Escalations count from when the problem reached its state
+            // (or from startup), and only take what was sent since then.
+            let start = open.base.max(p.since);
+            for (contact, after, every) in config.escalations(service, host_check, state) {
+                let got = open
+                    .sent
+                    .get(&contact.name)
+                    .copied()
+                    .filter(|&t| t >= p.since);
+                match (got, every) {
+                    (None, _) => add(contact, start + after),
+                    (Some(last), Some(every)) => add(contact, (last + every).max(start + after)),
+                    (Some(_), None) => {}
+                }
+            }
+            let mut due = Vec::new();
+            let mut next = now + FAR;
+            for (contact, t) in at {
+                if t <= now {
+                    open.sent.insert(contact.name.clone(), now);
+                    due.push(contact);
+                } else {
+                    next = next.min(t);
+                }
+            }
+            // After sending, work out the next time on the next list.
+            open.next = due.is_empty().then_some(next);
             if due.is_empty() {
                 continue;
             }
@@ -322,6 +359,109 @@ contacts = ["boss"]
         assert_eq!(
             names(&mut r, &warn, &config, t0 + 5 * 60 * MIN),
             ["web01/disk ops"]
+        );
+    }
+
+    #[test]
+    fn escalations_after_the_problem_lasts() {
+        let config = config(
+            r#"
+[[notify]]
+contacts = ["ops"]
+
+[[notify]]
+contacts = ["boss"]
+after = "30m"
+repeat = "1h"
+"#,
+        );
+        let t0 = SystemTime::now();
+        let mut r = Repeats::default();
+        assert!(names(&mut r, &[], &config, t0).is_empty());
+        let p = [problem("web01/disk", State::Critical, t0)];
+        r.sent("web01/disk", t0, &[contact(&config, "ops")], t0);
+        assert!(names(&mut r, &p, &config, t0 + 29 * MIN).is_empty());
+        assert_eq!(
+            names(&mut r, &p, &config, t0 + 30 * MIN),
+            ["web01/disk boss"]
+        );
+        let mut got = r.got("web01/disk");
+        got.sort();
+        assert_eq!(got, ["boss", "ops"]);
+        // Then the rule's repeat.
+        assert!(names(&mut r, &p, &config, t0 + 89 * MIN).is_empty());
+        assert_eq!(
+            names(&mut r, &p, &config, t0 + 90 * MIN),
+            ["web01/disk boss"]
+        );
+
+        // A new state starts the escalation again.
+        let warn = [problem("web01/disk", State::Warning, t0 + 100 * MIN)];
+        r.sent("web01/disk", t0 + 100 * MIN, &[contact(&config, "ops")], t0 + 100 * MIN);
+        assert!(names(&mut r, &warn, &config, t0 + 129 * MIN).is_empty());
+        assert_eq!(
+            names(&mut r, &warn, &config, t0 + 130 * MIN),
+            ["web01/disk boss"]
+        );
+    }
+
+    #[test]
+    fn held_back_problems_dont_escalate() {
+        let config = config(
+            r#"
+[[notify]]
+contacts = ["boss"]
+after = "30m"
+"#,
+        );
+        let t0 = SystemTime::now();
+        let mut r = Repeats::default();
+        assert!(names(&mut r, &[], &config, t0).is_empty());
+        let p = problem("web01/disk", State::Critical, t0);
+        let acked = OpenProblem {
+            suppressed: true,
+            ..p.clone()
+        };
+        assert!(names(&mut r, std::slice::from_ref(&acked), &config, t0 + 60 * MIN).is_empty());
+        // Unacknowledged later: due right away, once (no repeat).
+        let p = [p];
+        assert_eq!(
+            names(&mut r, &p, &config, t0 + 61 * MIN),
+            ["web01/disk boss"]
+        );
+        assert!(names(&mut r, &p, &config, t0 + 600 * MIN).is_empty());
+
+        // Open at startup: `after` counts from then.
+        let mut r = Repeats::default();
+        let old = [problem("web01/disk", State::Critical, t0 - 600 * MIN)];
+        assert!(names(&mut r, &old, &config, t0).is_empty());
+        assert!(names(&mut r, &old, &config, t0 + 29 * MIN).is_empty());
+        assert_eq!(
+            names(&mut r, &old, &config, t0 + 30 * MIN),
+            ["web01/disk boss"]
+        );
+    }
+
+    #[test]
+    fn contacts_told_at_once_are_not_escalated_to() {
+        let config = config(
+            r#"
+[[notify]]
+contacts = ["ops"]
+
+[[notify]]
+contacts = ["ops", "boss"]
+after = "30m"
+"#,
+        );
+        let t0 = SystemTime::now();
+        let mut r = Repeats::default();
+        assert!(names(&mut r, &[], &config, t0).is_empty());
+        let p = [problem("web01/disk", State::Critical, t0)];
+        r.sent("web01/disk", t0, &[contact(&config, "ops")], t0);
+        assert_eq!(
+            names(&mut r, &p, &config, t0 + 30 * MIN),
+            ["web01/disk boss"]
         );
     }
 

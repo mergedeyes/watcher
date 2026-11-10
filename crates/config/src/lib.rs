@@ -366,6 +366,10 @@ pub struct NotifyRule {
     pub on: NotifyOn,
     /// Send problems again this often while they last.
     pub repeat: Option<Duration>,
+    /// An escalation: problems reach the rule only once they have been
+    /// open this long (and not held back), recoveries only if its
+    /// contacts got the problem.
+    pub after: Option<Duration>,
     pub enabled: bool,
     pub origin: Origin,
 }
@@ -570,6 +574,8 @@ impl Config {
     /// Who gets an alert: the contacts of every matching rule that takes
     /// it, each once. `state` is the state reached (for a recovery, the
     /// problem state it recovers from), as `warning`, `down`, ...
+    /// Escalations (rules with `after`) are left out: see
+    /// [`Config::escalations`] and [`Config::escalation_recoveries`].
     pub fn recipients(
         &self,
         service: &Service,
@@ -579,6 +585,9 @@ impl Config {
     ) -> Vec<&Contact> {
         let mut names: Vec<&str> = Vec::new();
         for (rule, _) in self.matching_rules(service, host_alert) {
+            if rule.after.is_some() {
+                continue;
+            }
             let takes = match alert {
                 Alert::Problem => rule.on.problem && rule.takes_state(state),
                 Alert::Recovery => rule.on.recovery && rule.takes_state(state),
@@ -593,7 +602,8 @@ impl Config {
     }
 
     /// Who gets a problem in `state` again while it lasts, and how often:
-    /// the shortest `repeat` of the rules that give it to them.
+    /// the shortest `repeat` of the rules that give it to them (not
+    /// counting escalations).
     pub fn repeat_recipients(
         &self,
         service: &Service,
@@ -602,7 +612,9 @@ impl Config {
     ) -> Vec<(&Contact, Duration)> {
         let mut out: Vec<(&Contact, Duration)> = Vec::new();
         for (rule, _) in self.matching_rules(service, host_alert) {
-            let Some(every) = rule.repeat else { continue };
+            let Some(every) = rule.repeat.filter(|_| rule.after.is_none()) else {
+                continue;
+            };
             if !rule.on.problem || !rule.takes_state(state) {
                 continue;
             }
@@ -614,6 +626,45 @@ impl Config {
             }
         }
         out
+    }
+
+    /// Who gets a problem in `state` once it has been open for a while:
+    /// per escalation rule that takes it and contact, the rule's `after`
+    /// and `repeat`.
+    pub fn escalations(
+        &self,
+        service: &Service,
+        host_alert: bool,
+        state: &str,
+    ) -> Vec<(&Contact, Duration, Option<Duration>)> {
+        let mut out = Vec::new();
+        for (rule, _) in self.matching_rules(service, host_alert) {
+            let Some(after) = rule.after else { continue };
+            if !rule.on.problem || !rule.takes_state(state) {
+                continue;
+            }
+            for contact in self.contacts_named(self.rule_contacts(rule)) {
+                out.push((contact, after, rule.repeat));
+            }
+        }
+        out
+    }
+
+    /// The contacts of escalation rules that take the recovery from
+    /// `state`. Only those who got the problem are told.
+    pub fn escalation_recoveries(
+        &self,
+        service: &Service,
+        host_alert: bool,
+        state: &str,
+    ) -> Vec<&Contact> {
+        let mut names = Vec::new();
+        for (rule, _) in self.matching_rules(service, host_alert) {
+            if rule.after.is_some() && rule.on.recovery && rule.takes_state(state) {
+                names.extend(self.rule_contacts(rule));
+            }
+        }
+        self.contacts_named(names)
     }
 
     /// Names of a rule's contacts, directly and through groups.
