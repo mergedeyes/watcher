@@ -55,7 +55,7 @@ shell-words = "1"
 # SSH for checks on remote hosts (ring, as rustls uses). No RSA: the rsa
 # crate has RUSTSEC-2023-0071 (timing side channel, no fix); ed25519 and
 # ECDSA keys only.
-russh = { version = "0.64", default-features = false, features = ["ring"] }
+russh = { version = "0.65", default-features = false, features = ["ring"] }
 # ICMP for the built-in ping (datagram sockets, raw as a fallback).
 surge-ping = "0.9"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "macros", "json"] }
