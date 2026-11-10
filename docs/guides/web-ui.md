@@ -77,12 +77,13 @@ host's `graph` service, or the host check, and you can pick another one.
 
 Admins can edit the configuration in the web UI. The menu has Checks,
 Services, Hosts, Host Groups, Service Groups, Contacts, Contact Groups,
-Downtime Groups, Time Periods, Notifications and Files.
+Downtime Groups, Time Periods, Notifications, Dependencies and Files.
 
 The web UI edits the same TOML files you edit by hand:
 
 - New objects are written to `conf.d/ui/` (`checks.toml`, `services.toml`,
-  `hosts.toml`, `groups.toml`, `contacts.toml`, `notify.toml`).
+  `hosts.toml`, `groups.toml`, `contacts.toml`, `notify.toml`,
+  `dependencies.toml`).
 - Changes to existing objects are written to the file where the object is,
   and comments and formatting are kept.
 - Objects written as inline arrays in a file can't be edited in the forms;

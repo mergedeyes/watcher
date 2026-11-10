@@ -26,6 +26,7 @@ for common cases.
 | [contact](objects/contact.md) | Someone who receives notifications |
 | [contactgroup](objects/contactgroup.md) | A set of contacts |
 | [notify](objects/notify.md) | Who gets which notifications; host and service selectors |
+| [dependency](objects/dependency.md) | Quiet dependents while their master is down, for example hosts behind a router |
 | [downtimegroup](objects/downtimegroup.md) | Hosts with recurring downtime windows |
 | [timeperiod](objects/timeperiod.md) | When notify rules apply, for example business hours |
 | [sink](objects/sink.md) | A second database that receives a copy of all results |

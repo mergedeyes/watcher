@@ -105,7 +105,8 @@ How the time is counted:
   open. A restart never sends a wave of repeated notifications.
 
 No repeats are sent while the problem is acknowledged, in a downtime,
-muted, or flapping, while its host is DOWN, or while notifications are
+muted, or flapping, while its host is DOWN, while a
+[dependency](dependency.md) holds it back, or while notifications are
 turned off. The time keeps running: when the acknowledgement is removed
 and the hour is over, the next repeat goes out within a minute.
 
@@ -142,7 +143,8 @@ How it works:
   change, for example WARNING → CRITICAL, starts it again, and the
   escalation contacts get the new state once it has lasted `after`.
 - A problem that is acknowledged, in a downtime, muted or flapping, whose
-  host is DOWN, or while notifications are turned off, is not escalated.
+  host is DOWN, held back by a [dependency](dependency.md), or while
+  notifications are turned off, is not escalated.
   The time keeps running: if the acknowledgement is removed after the 30
   minutes, the escalation goes out within a minute.
 - With `repeat` on the same rule, the escalation contacts get the problem
@@ -513,6 +515,8 @@ No notification is sent for:
   restart
 - the other services of a host that is DOWN (HARD): you get the host
   notification instead
+- hosts and services whose master in a [dependency](dependency.md) has a
+  confirmed problem: you get the notification about the master instead
 - problems and recoveries while a service flaps
 - a host check in WARNING (the host is still UP), and a host check changing
   between CRITICAL and UNKNOWN (the host stays DOWN)
@@ -552,5 +556,6 @@ they are usually typos.
 
 - [contact](contact.md), [contactgroup](contactgroup.md)
 - [timeperiod](timeperiod.md): when rules with `period` apply
+- [dependency](dependency.md): quiet dependents while their master is down
 - [Notifications](../guides/notifications.md): SMTP, message format, webhooks
 - [Alerting recipes](../guides/alerting-recipes.md): complete setups for common cases

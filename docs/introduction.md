@@ -52,8 +52,9 @@ Single server:
 - **Operations:** acknowledgements, one-off and recurring downtimes, muted
   notifications, disabled checks, re-check, process info, scheduling queue.
 - **Notifications:** email, webhooks, reminders for open problems,
-  escalations, time periods (business hours, on-call at night), a log of
-  every notification sent.
+  escalations, time periods (business hours, on-call at night),
+  dependencies (one alert about the router, not fifty about the hosts
+  behind it), a log of every notification sent.
 - **Storage:** PostgreSQL or TimescaleDB, SQL views, read-only database
   login, copies to another PostgreSQL (sinks).
 - **Access:** users, sessions, API tokens, HTTPS; the full API, everything
@@ -66,6 +67,5 @@ Single server:
 | Nodes and hub, UNREACHABLE state | 2 |
 | Data repair in graphs, rollups, retention | 3 |
 | IBM i, AIX, HMC, MQ checks | 3b |
-| Dependencies | 4 |
 | Tenants, roles and permissions, TOTP, more notification channels | 4 |
 | SNMP, Prometheus, WinRM, discovery, Nagios config import | 5 |
