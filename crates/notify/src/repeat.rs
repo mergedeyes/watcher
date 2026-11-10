@@ -7,6 +7,9 @@
 //! restart doesn't send a burst of repeats. Held back problems
 //! (acknowledged, in a downtime, ...) keep their clock but don't repeat.
 //!
+//! With a notification log, [`Repeats::restore`] brings back who got which
+//! problem before a restart, so the clock goes on where it was.
+//!
 //! Escalations (rules with `after`) use the same clock: their contacts get
 //! the problem once it has been in its state for `after` without being
 //! held back, then every `repeat` of the rule.
@@ -42,6 +45,10 @@ pub struct Repeats {
     started: bool,
     /// The configuration the cached `next` times come from.
     config: Option<Arc<Config>>,
+    /// From the log, until the first list: per problem, who got it when.
+    history: HashMap<String, Vec<(String, SystemTime)>>,
+    /// When the log started; `None` without a log.
+    log_start: Option<SystemTime>,
 }
 
 struct Open {
@@ -58,14 +65,29 @@ struct Open {
 const FAR: Duration = Duration::from_secs(10 * 365 * 86400);
 
 impl Repeats {
+    /// Starts from the notification log: `history` has the last PROBLEM
+    /// each contact got per `host/service`, `log_start` is when the log
+    /// began. Problems open now count from when they started (or from
+    /// `log_start`, if later), not from now.
+    pub fn restore(history: Vec<(String, String, SystemTime)>, log_start: SystemTime) -> Self {
+        let mut map: HashMap<String, Vec<(String, SystemTime)>> = HashMap::new();
+        for (id, contact, t) in history {
+            map.entry(id).or_default().push((contact, t));
+        }
+        Repeats {
+            history: map,
+            log_start: Some(log_start),
+            ..Repeats::default()
+        }
+    }
+
     /// A PROBLEM about `id`, in its state since `since`, went to `contacts`.
     pub fn sent(&mut self, id: &str, since: SystemTime, contacts: &[&Contact], now: SystemTime) {
-        let open = self.open.entry(id.to_string()).or_insert_with(|| Open {
-            since,
-            base: since,
-            sent: HashMap::new(),
-            next: None,
-        });
+        let history = &mut self.history;
+        let open = self
+            .open
+            .entry(id.to_string())
+            .or_insert_with(|| Open::new(history, id, since, since));
         open.since = since;
         open.next = None;
         for c in contacts {
@@ -104,14 +126,19 @@ impl Repeats {
         let ids: HashSet<&str> = problems.iter().map(|p| p.id.as_str()).collect();
         self.open.retain(|id, _| ids.contains(id.as_str()));
         let started = std::mem::replace(&mut self.started, true);
+        let log_start = self.log_start;
+        let history = &mut self.history;
 
         let mut out = Vec::new();
         for p in problems {
-            let open = self.open.entry(p.id.clone()).or_insert_with(|| Open {
-                since: p.since,
-                base: if started { p.since } else { now },
-                sent: HashMap::new(),
-                next: None,
+            let open = self.open.entry(p.id.clone()).or_insert_with(|| {
+                // Open at startup: without a log, nothing is known about
+                // it, so its clock starts now.
+                let base = match started {
+                    true => p.since,
+                    false => log_start.map_or(now, |s| p.since.max(s)),
+                };
+                Open::new(history, &p.id, p.since, base)
             });
             open.since = p.since;
             if p.suppressed || open.next.is_some_and(|next| now < next) {
@@ -181,7 +208,31 @@ impl Repeats {
             n.repeat = true;
             out.push((n, due));
         }
+        self.history = HashMap::new();
         out
+    }
+}
+
+impl Open {
+    /// A problem that started at `since`, with what the log says about it.
+    fn new(
+        history: &mut HashMap<String, Vec<(String, SystemTime)>>,
+        id: &str,
+        since: SystemTime,
+        base: SystemTime,
+    ) -> Self {
+        let sent = history
+            .remove(id)
+            .into_iter()
+            .flatten()
+            .filter(|&(_, t)| t >= since)
+            .collect();
+        Open {
+            since,
+            base,
+            sent,
+            next: None,
+        }
     }
 }
 
@@ -464,6 +515,74 @@ after = "30m"
         assert!(names(&mut r, &[], &config, t0).is_empty());
         let p = [problem("web01/disk", State::Critical, t0)];
         r.sent("web01/disk", t0, &[contact(&config, "ops")], t0);
+        assert_eq!(
+            names(&mut r, &p, &config, t0 + 30 * MIN),
+            ["web01/disk boss"]
+        );
+    }
+
+    #[test]
+    fn restored_from_the_log_the_clock_goes_on() {
+        let config = config(
+            r#"
+[[notify]]
+contacts = ["ops"]
+after = "15m"
+repeat = "30m"
+
+[[notify]]
+contacts = ["boss"]
+after = "90m"
+"#,
+        );
+        let t0 = SystemTime::now();
+        let entry = |c: &str, t: SystemTime| ("web01/disk".to_string(), c.to_string(), t);
+        // Open for 100 minutes; ops got it at 15 and 45 minutes, boss
+        // not yet (Watcher was down at 90 minutes).
+        let since = t0 - 100 * MIN;
+        let history = vec![
+            entry("ops", since + 45 * MIN),
+            // From an earlier problem: doesn't count.
+            entry("boss", since - 600 * MIN),
+        ];
+        let mut r = Repeats::restore(history, t0 - 10_000 * MIN);
+        let p = [problem("web01/disk", State::Critical, since)];
+        // Boss is overdue: at once. Ops: 30 minutes after 45, at 75 → due.
+        assert_eq!(
+            names(&mut r, &p, &config, t0),
+            ["web01/disk ops", "web01/disk boss"]
+        );
+        let mut got = r.got("web01/disk");
+        got.sort();
+        assert_eq!(got, ["boss", "ops"]);
+
+        // Not due yet at the restart: due when it would have been.
+        let mut r = Repeats::restore(
+            vec![("web01/disk".into(), "ops".into(), t0 - 5 * MIN)],
+            t0 - 10_000 * MIN,
+        );
+        let p = [problem("web01/disk", State::Critical, t0 - 20 * MIN)];
+        assert!(names(&mut r, &p, &config, t0).is_empty());
+        assert_eq!(
+            names(&mut r, &p, &config, t0 + 25 * MIN),
+            ["web01/disk ops"]
+        );
+        assert_eq!(r.got("web01/disk"), ["ops"]);
+    }
+
+    #[test]
+    fn problems_older_than_the_log_count_from_its_start() {
+        let config = config(
+            r#"
+[[notify]]
+contacts = ["boss"]
+after = "1h"
+"#,
+        );
+        let t0 = SystemTime::now();
+        let mut r = Repeats::restore(Vec::new(), t0 - 30 * MIN);
+        let p = [problem("web01/disk", State::Critical, t0 - 600 * MIN)];
+        assert!(names(&mut r, &p, &config, t0).is_empty());
         assert_eq!(
             names(&mut r, &p, &config, t0 + 30 * MIN),
             ["web01/disk boss"]

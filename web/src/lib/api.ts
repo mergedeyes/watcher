@@ -309,6 +309,37 @@ export interface StateEvent {
 	title: string | null;
 }
 
+/** One notification to one contact over one channel (the notification log). */
+export interface SentNotification {
+	ts: string;
+	host: string;
+	/** For host notifications: the host check. */
+	service: string;
+	host_check: boolean;
+	kind: 'problem' | 'recovery' | 'flappingstart' | 'flappingstop' | 'downtimestart' | 'downtimeend';
+	state: State | HostState;
+	/** A problem sent again: a repeat or an escalation. */
+	repeat: boolean;
+	since: string | null;
+	contact: string;
+	/** email, webhook, or empty if the contact has neither. */
+	channel: string;
+	/** null: delivered */
+	error: string | null;
+}
+
+export interface NotificationQuery {
+	host?: string;
+	service?: string;
+	contact?: string;
+	/** true: host notifications only (false is not sent, see params) */
+	host_check?: boolean;
+	failed?: boolean;
+	since?: string;
+	before?: string;
+	limit?: number;
+}
+
 export interface EventQuery {
 	host?: string;
 	service?: string;
@@ -574,6 +605,7 @@ export const api = {
 	points: (id: number, from: string, points: number, signal?: AbortSignal, to?: string) =>
 		get<Points>(`/series/${id}/points?from=${seg(from)}${to ? `&to=${seg(to)}` : ''}&points=${points}`, { signal }),
 	events: (q: EventQuery) => get<StateEvent[]>(`/events?${params(q)}`),
+	notifications: (q: NotificationQuery) => get<SentNotification[]>(`/notifications?${params(q)}`),
 
 	action: (action: Action, body: ActionBody) => send<ActionResult>('POST', `/actions/${action}`, body),
 	/** A passive result, e.g. from the Submit Result dialog. */

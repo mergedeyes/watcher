@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { api, ApiError, HISTORY_DELAY, hostHref, type ServiceDetail, type StateEvent } from '#lib/api.ts';
+	import { api, ApiError, HISTORY_DELAY, hostHref, type SentNotification, type ServiceDetail, type StateEvent } from '#lib/api.ts';
 	import AlertTable from '#lib/AlertTable.svelte';
+	import NotificationTable from '#lib/NotificationTable.svelte';
 	import { auth } from '#lib/auth.svelte.ts';
 	import { editHref } from '#lib/config.svelte.ts';
 	import ConfigTree from '#lib/ConfigTree.svelte';
@@ -19,6 +20,7 @@
 	let detail = $state<ServiceDetail | null>(null);
 	let missing = $state(false);
 	let events = $state<StateEvent[]>([]);
+	let notifications = $state<SentNotification[]>([]);
 	/** Set when the hub has no database: there is no history to show. */
 	let noHistory = $state(false);
 
@@ -59,11 +61,16 @@
 	// now and again once it is written.
 	$effect(() => {
 		const [h, s, _] = [host, name, lastCheck];
-		const load = () =>
+		const load = () => {
 			api.events({ host: h, service: s, type: 'service,flapping', limit: 20 }).then(
 				(ev) => (events = ev),
 				(e) => (noHistory = e instanceof ApiError && e.noDatabase)
 			);
+			api.notifications({ host: h, service: s, limit: 20 }).then(
+				(list) => (notifications = list),
+				() => {}
+			);
+		};
 		load();
 		const later = setTimeout(load, HISTORY_DELAY);
 		return () => clearTimeout(later);
@@ -201,6 +208,10 @@
 					<a class="more" href="/alerts?host={encodeURIComponent(host)}&service={encodeURIComponent(name)}">All</a>
 				</div>
 				<AlertTable {events} empty="No state changes." />
+			</section>
+			<section class="panel">
+				<div class="panel-title">Notifications</div>
+				<NotificationTable {notifications} />
 			</section>
 		{/if}
 	{/if}

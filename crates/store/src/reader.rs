@@ -16,6 +16,7 @@ pub const READABLE: &[&str] = &[
     "state_events",
     "flags",
     "downtimes",
+    "notifications",
     "v_metrics",
     "v_service_state",
 ];

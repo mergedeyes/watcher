@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { api, ApiError, HISTORY_DELAY, serviceHref, type Flag, type HostView, type ServiceView, type StateEvent } from '#lib/api.ts';
+	import { api, ApiError, HISTORY_DELAY, serviceHref, type Flag, type HostView, type SentNotification, type ServiceView, type StateEvent } from '#lib/api.ts';
 	import AlertTable from '#lib/AlertTable.svelte';
+	import NotificationTable from '#lib/NotificationTable.svelte';
 	import { auth } from '#lib/auth.svelte.ts';
 	import { editHref } from '#lib/config.svelte.ts';
 	import Commands from '#lib/Commands.svelte';
@@ -40,6 +41,7 @@
 	let flags = $state<Flag[]>([]);
 	let missing = $state(false);
 	let events = $state<StateEvent[]>([]);
+	let notifications = $state<SentNotification[]>([]);
 	/** Set when the hub has no database: there is no history to show. */
 	let noHistory = $state(false);
 
@@ -48,12 +50,17 @@
 	let lastChange = $derived(host?.last_change ?? null);
 	$effect(() => {
 		const [current, _] = [name, lastChange];
-		const load = () =>
+		const load = () => {
 			// Host UP/DOWN, and acknowledgements and downtimes of the host itself.
 			api.events({ host: current, type: 'host,ack,downtime', limit: 40 }).then(
 				(ev) => (events = ev.filter((e) => e.kind === 'host' || e.service === '' || e.service === host?.check).slice(0, 20)),
 				(e) => (noHistory = e instanceof ApiError && e.noDatabase)
 			);
+			api.notifications({ host: current, host_check: true, limit: 20 }).then(
+				(list) => (notifications = list),
+				() => {}
+			);
+		};
 		load();
 		const later = setTimeout(load, HISTORY_DELAY);
 		return () => clearTimeout(later);
@@ -213,6 +220,10 @@
 					<a class="more" href="/alerts?host={encodeURIComponent(name)}">All</a>
 				</div>
 				<AlertTable {events} empty={host.check ? 'No state changes.' : 'No host check.'} />
+			</section>
+			<section class="panel">
+				<div class="panel-title">Notifications</div>
+				<NotificationTable {notifications} />
 			</section>
 		{/if}
 	{/if}
