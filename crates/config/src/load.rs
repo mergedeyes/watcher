@@ -2061,6 +2061,27 @@ impl<'a> Compiler<'a> {
                     token: g.token,
                 }),
                 pagerduty: def.pagerduty.map(|k| k.trim().to_string()),
+                jira: def.jira.map(|j| {
+                    let url = j.url.trim().trim_end_matches('/').to_string();
+                    let cloud = j.cloud.unwrap_or_else(|| {
+                        url.split('/')
+                            .nth(2)
+                            .is_some_and(|host| host.ends_with(".atlassian.net"))
+                    });
+                    crate::Jira {
+                        cloud,
+                        url,
+                        project: j.project.trim().to_string(),
+                        email: j.email.map(|e| e.trim().to_string()),
+                        token: j.token.trim().to_string(),
+                        issue_type: j
+                            .issue_type
+                            .map(|t| t.trim().to_string())
+                            .filter(|t| !t.is_empty())
+                            .unwrap_or_else(|| crate::Jira::DEFAULT_ISSUE_TYPE.to_string()),
+                        close: j.close.map(|c| c.trim().to_string()),
+                    }
+                }),
                 script: def.script,
             };
             let urls = [
@@ -2072,6 +2093,7 @@ impl<'a> Compiler<'a> {
                     "gotify.url",
                     channels.gotify.as_ref().map(|g| g.url.as_str()),
                 ),
+                ("jira.url", channels.jira.as_ref().map(|j| j.url.as_str())),
             ];
             for (field, url) in urls {
                 if let Some(url) = url
@@ -2104,6 +2126,44 @@ impl<'a> Compiler<'a> {
                 channels.gotify.as_ref().map(|g| g.token.as_str()),
             );
             empty("pagerduty", channels.pagerduty.as_deref());
+            if let Some(jira) = &channels.jira {
+                empty("jira.project", Some(&jira.project));
+                empty("jira.token", Some(&jira.token));
+                empty("jira.close", jira.close.as_deref());
+                // Cloud authenticates with email + API token, Data
+                // Center/Server with a bare personal access token.
+                match (jira.cloud, &jira.email) {
+                    (true, None) => {
+                        self.sink.error(
+                            Some(&raw.origin),
+                            format!(
+                                "{what}: jira: Jira Cloud needs email (the account the API token belongs to)"
+                            ),
+                        );
+                        ok = false;
+                    }
+                    (false, Some(_)) => {
+                        self.sink.error(
+                            Some(&raw.origin),
+                            format!(
+                                "{what}: jira: Data Center/Server uses a personal access token without email; set cloud = true for Jira Cloud"
+                            ),
+                        );
+                        ok = false;
+                    }
+                    _ => {}
+                }
+                if jira.email.as_ref().is_some_and(|e| !e.contains('@')) {
+                    self.sink.error(
+                        Some(&raw.origin),
+                        format!(
+                            "{what}: jira: invalid email {:?}",
+                            jira.email.as_deref().unwrap_or_default()
+                        ),
+                    );
+                    ok = false;
+                }
+            }
             if let Some(script) = &channels.script
                 && let Err(msg) = watcher_exec::CommandLine::parse(script, false)
             {
@@ -2794,9 +2854,22 @@ struct ContactDef {
     ntfy: Option<NtfyDef>,
     gotify: Option<GotifyDef>,
     pagerduty: Option<String>,
+    jira: Option<JiraDef>,
     script: Option<String>,
     #[serde(default)]
     groups: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JiraDef {
+    url: String,
+    project: String,
+    cloud: Option<bool>,
+    email: Option<String>,
+    token: String,
+    issue_type: Option<String>,
+    close: Option<String>,
 }
 
 #[derive(Deserialize)]

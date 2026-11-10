@@ -151,8 +151,8 @@ JSON body:
 ## Chat, push and paging services
 
 Besides email and webhooks, a [contact](../objects/contact.md) can get
-notifications on Slack, Microsoft Teams, Telegram, ntfy, Gotify and
-PagerDuty, or through a script. Each service gets the same text as an
+notifications on Slack, Microsoft Teams, Telegram, ntfy, Gotify,
+PagerDuty and Jira, or through a script. Each service gets the same text as an
 email: what happened, the check output, host, service, state, time and
 the link to Watcher. Colours and priorities follow the state: CRITICAL
 and DOWN are red or urgent, recoveries green.
@@ -263,6 +263,48 @@ Flapping and downtime messages are not sent to PagerDuty. `watcher notify
 test` opens a test incident and resolves it right away.
 
 *Not yet:* acknowledging in PagerDuty doesn't acknowledge in Watcher.
+
+### Jira
+
+Problems become Jira issues: one issue per open problem. Repeats and
+escalations add comments to it instead of opening new issues, a state
+change (WARNING to CRITICAL) comments too, and the RECOVERY adds a
+comment and can close the issue. Flapping and downtime messages don't
+become tickets.
+
+For **Jira Cloud** (`*.atlassian.net`):
+
+1. Create an API token for the account that should open the issues:
+   <https://id.atlassian.com/manage-profile/security/api-tokens>.
+2. Put the site, project, account email and token on a contact:
+
+```toml
+[contact.helpdesk]
+jira = { url = "https://acme.atlassian.net", project = "OPS", email = "watcher-bot@acme.com", token = "ATATT…", close = "Done" }
+```
+
+For **Jira Data Center or Server**, create a personal access token
+(profile menu → **Personal Access Tokens**) and leave `email` out:
+
+```toml
+[contact.helpdesk]
+jira = { url = "https://jira.acme.com", project = "OPS", token = "NjE2…", issue_type = "Incident" }
+```
+
+How it behaves:
+
+- `issue_type` (default `Task`) must exist in the project.
+- `close` names a transition, by the transition's name or the status it
+  leads to, for example `Done`. It runs when the problem recovers.
+  Without `close`, the recovery only comments.
+- Watcher finds the issue for a problem again by a label
+  (`watcher-…`), so restarts don't open duplicates — also without a
+  database. If someone closes the issue while the problem is still
+  open, the next repeat opens a new one.
+- Which Jira edition is spoken to is detected from the URL
+  (`*.atlassian.net` is Cloud); `cloud = true/false` overrides it.
+- `watcher notify test <contact>` creates a test issue and, with
+  `close` set, closes it right away.
 
 ### Scripts
 

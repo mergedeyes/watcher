@@ -165,6 +165,7 @@ impl Kind {
                 "ntfy",
                 "gotify",
                 "pagerduty",
+                "jira",
                 "script",
                 "groups",
             ],

@@ -1,8 +1,8 @@
 # contact
 
 A contact is someone who receives notifications: by email, webhook,
-Slack, Microsoft Teams, Telegram, ntfy, Gotify, PagerDuty or a script of
-your own, or several of them. A contact alone receives nothing: a
+Slack, Microsoft Teams, Telegram, ntfy, Gotify, PagerDuty, Jira or a
+script of your own, or several of them. A contact alone receives nothing: a
 [notify rule](notify.md) decides which contacts get which notifications.
 
 ```toml
@@ -32,6 +32,13 @@ Email needs an SMTP server in `watcher.toml`, see
 | `gotify.url` | | Gotify: the server's URL. See [Gotify](../guides/notifications.md#gotify). |
 | `gotify.token` | | Gotify: an application token. |
 | `pagerduty` | | A PagerDuty Events API v2 routing key (integration key). Problems open incidents, recoveries resolve them. See [PagerDuty](../guides/notifications.md#pagerduty). |
+| `jira.url` | | The Jira site, `https://acme.atlassian.net` or an on-premise server. Problems become issues, one per open problem; repeats and escalations add comments; the recovery comments and can close the issue. See [Jira](../guides/notifications.md#jira). |
+| `jira.project` | | The key of the project issues are created in, for example `OPS`. |
+| `jira.email` | | Jira Cloud: the account the API token belongs to. Leave out for Data Center/Server. |
+| `jira.token` | | Jira Cloud: an API token. Data Center/Server: a personal access token. |
+| `jira.cloud` | detected | `true` for Jira Cloud (REST v3), `false` for Data Center/Server (REST v2). Detected from `*.atlassian.net` in the URL. |
+| `jira.issue_type` | `Task` | The issue type new issues get. It must exist in the project. |
+| `jira.close` | | A transition (by its name, or the status it leads to, for example `Done`) run when the problem recovers. Without it, recoveries only comment. |
 | `script` | | A program to run for each notification, with arguments, for example `/usr/local/bin/send-sms --to ops`. It gets the notification as JSON on stdin. See [Scripts](../guides/notifications.md#scripts). |
 | `groups` | | Contact groups the contact belongs to. See [contactgroup](contactgroup.md). |
 
@@ -102,6 +109,21 @@ gotify = { url = "https://gotify.example.com", token = "AbCdEf…" }
 ```toml
 [contact.pagerduty]
 pagerduty = "R0123456789ABCDEF0123456789ABCD"
+```
+
+### Jira
+
+```toml
+[contact.helpdesk]
+jira = { url = "https://acme.atlassian.net", project = "OPS", email = "watcher-bot@acme.com", token = "ATATT…", close = "Done" }
+```
+
+On a self-hosted Jira (Data Center/Server), with a personal access
+token and no email:
+
+```toml
+[contact.helpdesk]
+jira = { url = "https://jira.acme.com", project = "OPS", token = "NjE2…", issue_type = "Incident" }
 ```
 
 ### A script

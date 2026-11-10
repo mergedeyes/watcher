@@ -51,7 +51,7 @@ fn level(n: &Notification) -> Level {
 }
 
 /// Output cut to `max` characters, for services with message limits.
-fn cut(text: &str, max: usize) -> String {
+pub(crate) fn cut(text: &str, max: usize) -> String {
     match text.char_indices().nth(max) {
         Some((i, _)) => format!("{}…", &text[..i]),
         None => text.to_string(),
@@ -59,7 +59,7 @@ fn cut(text: &str, max: usize) -> String {
 }
 
 /// The output and long output, as one text.
-fn output(n: &Notification, max: usize) -> String {
+pub(crate) fn output(n: &Notification, max: usize) -> String {
     let text = match n.long_output.is_empty() {
         true => n.output.clone(),
         false => format!("{}\n{}", n.output, n.long_output),

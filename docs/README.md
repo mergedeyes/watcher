@@ -33,7 +33,7 @@ for common cases.
 
 ## Guides
 
-- [Notifications](guides/notifications.md): SMTP, email format, webhooks, Slack, Teams, Telegram, ntfy, Gotify, PagerDuty, scripts, notification log
+- [Notifications](guides/notifications.md): SMTP, email format, webhooks, Slack, Teams, Telegram, ntfy, Gotify, PagerDuty, Jira, scripts, notification log
 - [Alerting recipes](guides/alerting-recipes.md): ready-made setups for reminders, escalations, teams, customers and maintenance windows
 - [Checks over SSH](guides/ssh.md): running checks on the hosts, secrets, host keys
 - [Operations](guides/operations.md): acknowledgements, downtimes, muting, turning checks off

@@ -10,6 +10,7 @@
 
 mod channels;
 mod email;
+mod jira;
 mod repeat;
 mod webhook;
 
@@ -456,6 +457,11 @@ impl Notifier {
             let api = &self.endpoints.pagerduty;
             let result = retry(|| channels::pagerduty(http, api, &events)).await;
             results.push(("pagerduty", result));
+        }
+        if let Some(j) = &ch.jira
+            && jira::takes(n.kind)
+        {
+            results.push(("jira", retry(|| jira::deliver(http, j, n)).await));
         }
         if let Some(script) = &ch.script {
             results.push(("script", channels::script(script, &contact.name, n).await));

@@ -177,6 +177,17 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 				{ key: 'pagerduty', label: 'PagerDuty', type: 'text', help: 'Events API v2 routing key' },
 				{ key: 'script', label: 'Script', type: 'mono', placeholder: '/usr/local/bin/notify-sms', help: 'gets the notification as JSON on stdin' }
 			]
+		},
+		{
+			title: 'Jira',
+			fields: [
+				{ key: 'jira.url', label: 'Jira Site', type: 'text', short: true, placeholder: 'https://acme.atlassian.net', help: 'problems become issues; repeats and escalations comment' },
+				{ key: 'jira.project', label: 'Project', type: 'text', placeholder: 'OPS' },
+				{ key: 'jira.email', label: 'Email', type: 'text', help: 'Cloud: the account the API token belongs to; empty for Data Center' },
+				{ key: 'jira.token', label: 'Token', type: 'text', help: 'Cloud: API token; Data Center: personal access token' },
+				{ key: 'jira.issue_type', label: 'Issue Type', type: 'text', placeholder: 'Task' },
+				{ key: 'jira.close', label: 'Close Transition', type: 'text', placeholder: 'Done', help: 'run on recovery; empty: only comment' }
+			]
 		}
 	],
 	downtimegroup: [

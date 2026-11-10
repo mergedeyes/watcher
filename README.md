@@ -87,7 +87,7 @@ set it, and every alert to the rule that sent it.
   automatic script copies.
 - **Alerting:** SOFT and HARD states with retries, host UP/DOWN, flap
   detection; email, webhooks, Slack, Microsoft Teams, Telegram, ntfy,
-  Gotify, PagerDuty and scripts; reminders, escalations and time periods
+  Gotify, PagerDuty, Jira and scripts; reminders, escalations and time periods
   (business hours, on-call at night).
 - **Operations:** acknowledgements, one-off and recurring downtimes,
   muting, re-checks from a right-click menu.
