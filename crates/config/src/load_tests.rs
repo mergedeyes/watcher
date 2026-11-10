@@ -416,6 +416,9 @@ after = "0"
         names(config.escalation_recoveries(s, false, "critical")),
         ["boss"]
     );
+    // A host without host check: escalations get no downtime messages.
+    let (_, host) = config.host_named("a").unwrap();
+    assert_eq!(names(config.host_downtime_recipients(host)), ["ops"]);
 
     let (_, diags) = compile(&[(
         "a.toml",

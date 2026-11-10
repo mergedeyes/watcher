@@ -699,7 +699,9 @@ impl Config {
         }
         let mut names: Vec<&str> = Vec::new();
         for rule in &self.notify {
+            // Escalations only take problems and recoveries.
             let takes = rule.enabled
+                && rule.after.is_none()
                 && rule.on.downtime
                 && rule.services.is_none()
                 && rule
