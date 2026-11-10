@@ -237,6 +237,29 @@ paths:
               schema: { type: array, items: { $ref: "#/components/schemas/StateEvent" } }
         "503": { $ref: "#/components/responses/Error" }
 
+  /notifications:
+    get:
+      summary: The notification log, newest first
+      description: |
+        One entry per contact and channel: who got which notification, and
+        whether it was delivered. Entries are kept for 90 days.
+      parameters:
+        - { name: host, in: query, schema: { type: string } }
+        - { name: service, in: query, description: For host notifications the host check, schema: { type: string } }
+        - { name: contact, in: query, schema: { type: string } }
+        - { name: host_check, in: query, description: "true: only host notifications; false: only service notifications", schema: { type: boolean } }
+        - { name: failed, in: query, description: Only failed deliveries, schema: { type: boolean } }
+        - { name: before, in: query, description: For paging, like `from` of points, schema: { type: string } }
+        - { name: since, in: query, description: Like `from` of points, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 100 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/SentNotification" } }
+        "503": { $ref: "#/components/responses/Error" }
+
   /actions/{action}:
     post:
       summary: Act on hosts and services
@@ -1240,6 +1263,20 @@ components:
         hard: { type: boolean }
         output: { type: string }
         title: { type: [string, "null"], description: The service's title now }
+    SentNotification:
+      type: object
+      properties:
+        ts: { $ref: "#/components/schemas/Time" }
+        host: { type: string }
+        service: { type: string, description: For host notifications the host check }
+        host_check: { type: boolean }
+        kind: { type: string, enum: [problem, recovery, flappingstart, flappingstop, downtimestart, downtimeend] }
+        state: { type: string, description: "ok, warning, critical, unknown, up or down" }
+        repeat: { type: boolean, description: "A problem sent again: a repeat or an escalation" }
+        since: { type: [string, "null"], format: date-time, description: "Problems: when it reached its state" }
+        contact: { type: string }
+        channel: { type: string, description: "email, webhook, or empty if the contact has neither" }
+        error: { type: [string, "null"], description: "null: delivered" }
     RunResult:
       type: object
       properties:

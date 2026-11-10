@@ -160,6 +160,38 @@ no notification for web01/http: in downtime (hostgroup linux)
 no notification for db01/replication: acknowledged
 ```
 
+## Notification log
+
+With a database, Watcher writes down every notification it sends: when,
+to which contact, over which channel, and whether it arrived. The host
+and service pages show the latest ones under **Notifications**, failed
+ones with the reason:
+
+```
+Time                 Type             Status    Contact  Channel  Result
+2026-11-10 11:30:02  PROBLEM again    CRITICAL  lead     email    SENT
+2026-11-10 10:00:04  PROBLEM          CRITICAL  team     webhook  FAILED webhook: ... Connection refused
+```
+
+`again` marks a problem sent again: a [repeat](../objects/notify.md#repeat)
+or an [escalation](../objects/notify.md#after).
+
+The log also keeps repeats and escalations on time across restarts:
+Watcher reads from it who already got an open problem. Without a
+database, that is kept in memory only, and a restart starts the time
+again.
+
+Entries are kept for 90 days. To find failed deliveries, or everything a
+contact got:
+
+```sh
+curl -H "Authorization: Bearer $T" '.../api/v1/notifications?failed=true&since=7d'
+curl -H "Authorization: Bearer $T" '.../api/v1/notifications?contact=lead&since=24h'
+```
+
+The table `notifications` can also be read with SQL, see
+[Data](data.md#tables-and-views).
+
 ## Who gets a notification
 
 ```sh

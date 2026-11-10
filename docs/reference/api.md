@@ -191,6 +191,7 @@ These endpoints need a database.
 | Method and path | Description |
 |---|---|
 | `GET events` | Alert history, newest first. |
+| `GET notifications` | The notification log, newest first: one entry per contact and channel, with `error` if delivery failed. |
 | `GET services/{host}/{service}/series` | The metric series of a service, with `warn` and `crit`: the threshold bounds of the latest result. |
 | `GET series/{id}/points` | The points of a series, grouped into buckets. |
 
@@ -205,6 +206,17 @@ Parameters for `GET events`:
 | `hard=true` | Only confirmed problems and their recoveries. |
 | `since`, `before` | Time range. |
 | `limit` | Maximum number of events. |
+
+Parameters for `GET notifications`:
+
+| Parameter | Description |
+|---|---|
+| `host`, `service` | Only notifications about this host or service. For host notifications, `service` is the host check. |
+| `contact` | Only notifications to this contact. |
+| `host_check` | `true`: only host notifications. `false`: only service notifications. |
+| `failed=true` | Only failed deliveries. |
+| `since`, `before` | Time range. |
+| `limit` | Maximum number of entries (default 100). |
 
 Parameters for `GET series/{id}/points`:
 

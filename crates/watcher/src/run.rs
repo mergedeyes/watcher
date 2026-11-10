@@ -16,8 +16,10 @@ use watcher_core::StateType;
 use watcher_exec::scheduler::{Control, Event, schedule};
 use watcher_exec::ssh::Pool;
 use watcher_hub::{AuthSettings, ConfigFiles, Hub, StoreVault, jobs, specs};
-use watcher_notify::{DowntimeChange, Message, Notifier, OpenProblem, setup_warnings};
-use watcher_store::{Record, Store, StoredState, ingest};
+use watcher_notify::{
+    DowntimeChange, Message, Notifier, OpenProblem, Repeats, Sent, setup_warnings,
+};
+use watcher_store::{Record, SentNotification, Store, StoredState, ingest};
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -135,7 +137,6 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
     }
     let (config_tx, config_rx) = watch::channel(config.clone());
     let (notify_tx, notify_rx) = mpsc::channel(1000);
-    tokio::spawn(watcher_notify::run(notifier.clone(), config_rx, notify_rx));
 
     let database = match args.no_database {
         true => None,
@@ -153,6 +154,24 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
             (None, HashMap::new())
         }
     };
+    // The notifier goes on with the repeat clock from the log.
+    let (repeats, log) = match &storage {
+        Some(s) => {
+            let (repeats, log) = notification_log(s.store.clone())
+                .await
+                .context("cannot read the notification log")?;
+            (repeats, Some(log))
+        }
+        None => (Repeats::default(), None),
+    };
+    tokio::spawn(watcher_notify::run(
+        notifier.clone(),
+        config_rx,
+        notify_rx,
+        repeats,
+        log,
+    ));
+
     let initial = restored
         .iter()
         .map(|(id, s)| (id.clone(), s.state.clone()))
@@ -295,6 +314,58 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
     }
     running.sinks.shutdown().await;
     Ok(ExitCode::SUCCESS)
+}
+
+/// How long the notification log keeps entries.
+const NOTIFICATION_LOG_KEEP: Duration = Duration::from_secs(90 * 86400);
+
+/// The repeat clock from the notification log, and a sender for new
+/// entries: a task writes them (in batches) and deletes old ones hourly.
+async fn notification_log(store: Arc<Store>) -> anyhow::Result<(Repeats, mpsc::Sender<Sent>)> {
+    let start = store.notification_log_start().await?;
+    // Open problems older than this have their clock started anew.
+    let history = store.last_problems(NOTIFICATION_LOG_KEEP).await?;
+    let (tx, mut rx) = mpsc::channel::<Sent>(1000);
+    tokio::spawn(async move {
+        let mut purge = tokio::time::interval(Duration::from_secs(3600));
+        loop {
+            tokio::select! {
+                entry = rx.recv() => {
+                    let Some(entry) = entry else { break };
+                    let mut batch = vec![log_row(entry)];
+                    while let Ok(more) = rx.try_recv() {
+                        batch.push(log_row(more));
+                    }
+                    if let Err(err) = store.add_notifications(&batch).await {
+                        warn!("cannot write {} entries to the notification log: {err}", batch.len());
+                    }
+                }
+                _ = purge.tick() => match store.purge_notifications(NOTIFICATION_LOG_KEEP).await {
+                    Ok(0) => {}
+                    Ok(n) => info!("removed {n} old entries from the notification log"),
+                    Err(err) => warn!("cannot clean up the notification log: {err}"),
+                },
+            }
+        }
+    });
+    Ok((Repeats::restore(history, start), tx))
+}
+
+fn log_row(s: Sent) -> SentNotification {
+    let n = &s.notification;
+    SentNotification {
+        ts: s.time,
+        host: n.host.clone(),
+        service: n.service.clone(),
+        host_check: n.host_check,
+        kind: n.kind.as_str().to_ascii_lowercase(),
+        state: n.state_name().to_ascii_lowercase(),
+        repeat: n.repeat,
+        since: n.since,
+        contact: s.contact,
+        channel: s.channel.to_string(),
+        error: s.error,
+    }
 }
 
 /// Where results go, and what a reload updates.

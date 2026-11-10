@@ -51,7 +51,7 @@ Single server:
 - **Operations:** acknowledgements, one-off and recurring downtimes, muted
   notifications, disabled checks, re-check, process info, scheduling queue.
 - **Notifications:** email, webhooks, reminders for open problems,
-  escalations.
+  escalations, a log of every notification sent.
 - **Storage:** PostgreSQL or TimescaleDB, SQL views, read-only database
   login, copies to another PostgreSQL (sinks).
 - **Access:** users, sessions, API tokens, HTTPS; the full API, everything

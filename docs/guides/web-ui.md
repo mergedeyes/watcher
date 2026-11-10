@@ -31,9 +31,9 @@ login off even with a database, also only on loopback.
 |---|---|
 | Tactical Overview | Hosts that are DOWN, service problems, totals. |
 | Hosts | All hosts with their state and their services per state, with totals. Search by name, address or host group. |
-| Host | One host: its services, commands, graphs and alert history. |
+| Host | One host: its services, commands, graphs, alert history and notifications. |
 | Services | All services, with totals. Filter by state, or search by host, service or output. |
-| Service | One service: state, output, commands, metrics with thresholds, graphs and alert history. |
+| Service | One service: state, output, commands, metrics with thresholds, graphs, alert history and notifications. |
 | Problems | Hosts that are DOWN and all services that are not OK. |
 | Host Groups, Service Groups | Status totals per group. |
 | Alerts | The alert history, filtered by host, type, state, SOFT/HARD and time range. |

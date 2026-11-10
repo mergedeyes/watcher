@@ -18,7 +18,9 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::oneshot;
 use watcher_core::{RawOutput, State, Termination};
 use watcher_exec::scheduler::Control;
-use watcher_store::{EventFilter, FlagKind, Points, StateEvent, Store};
+use watcher_store::{
+    EventFilter, FlagKind, NotificationFilter, Points, SentNotification, StateEvent, Store,
+};
 
 type Shared = AxState<Arc<Hub>>;
 
@@ -38,6 +40,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/services/{host}/{service}/series", get(series))
         .route("/api/v1/series/{id}/points", get(points))
         .route("/api/v1/events", get(events))
+        .route("/api/v1/notifications", get(notifications))
         .route("/api/v1/actions/{action}", post(ops::action))
         .route("/api/v1/flags", get(ops::flags))
         .route("/api/v1/downtimes", get(ops::downtimes))
@@ -492,6 +495,42 @@ async fn events(AxState(hub): Shared, Query(q): Query<EventsQuery>) -> ApiResult
             })
             .collect(),
     ))
+}
+
+#[derive(Debug, Deserialize)]
+struct NotificationsQuery {
+    host: Option<String>,
+    /// For host notifications: the host check.
+    service: Option<String>,
+    contact: Option<String>,
+    /// `true`: only host notifications, `false`: only service notifications.
+    host_check: Option<bool>,
+    before: Option<String>,
+    since: Option<String>,
+    /// Only failed deliveries.
+    #[serde(default)]
+    failed: bool,
+    limit: Option<i64>,
+}
+
+/// The notification log, newest first.
+async fn notifications(
+    AxState(hub): Shared,
+    Query(q): Query<NotificationsQuery>,
+) -> ApiResult<Vec<SentNotification>> {
+    let now = SystemTime::now();
+    let time = |s: &Option<String>| s.as_deref().map(|s| parse_time(s, now)).transpose();
+    let filter = NotificationFilter {
+        host: q.host,
+        service: q.service,
+        contact: q.contact,
+        host_check: q.host_check,
+        before: time(&q.before)?,
+        since: time(&q.since)?,
+        failed: q.failed,
+        limit: q.limit.unwrap_or(100),
+    };
+    Ok(Json(store(&hub)?.notifications(&filter).await?))
 }
 
 /// RFC 3339, unix seconds, `now`, or a duration back from `now` (`6h`).

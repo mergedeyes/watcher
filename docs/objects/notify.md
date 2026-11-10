@@ -92,7 +92,11 @@ How the time is counted:
   over, if they have been open long enough.
 - If several rules with `repeat` give a contact the same problem, the
   shortest time applies.
-- After a restart, the time starts again for problems that are already
+- With a database, a restart changes nothing: Watcher reads from the
+  [notification log](../guides/notifications.md#notification-log) who got
+  which problem when, and goes on from there. A repeat that fell due while
+  Watcher was stopped goes out right after the start, once.
+- Without a database, the time starts again for problems that are already
   open. A restart never sends a wave of repeated notifications.
 
 No repeats are sent while the problem is acknowledged, in a downtime,
@@ -142,9 +146,13 @@ How it works:
   Use `on = ["problem"]` if they shouldn't get recoveries at all.
 - Contacts who already got the problem from another rule are not sent it
   again by the escalation.
-- After a restart, the time starts again for problems that are already
-  open, as with `repeat`. Escalations that were sent before the restart
-  don't get a RECOVERY afterwards.
+- With a database, a restart changes nothing, as with `repeat`: an
+  escalation that fell due while Watcher was stopped goes out right after
+  the start, and contacts who got the problem before the restart still get
+  the RECOVERY.
+- Without a database, the time starts again after a restart for problems
+  that are already open, and escalations sent before the restart get no
+  RECOVERY.
 
 Several rules with different `after` times make escalation levels, for
 example the team lead after 30 minutes and the manager after 2 hours.

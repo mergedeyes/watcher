@@ -456,14 +456,29 @@ pub fn setup_warnings(config: &Config, notifier: &Notifier) -> Vec<String> {
     warnings
 }
 
+/// One notification to one contact over one channel, for the
+/// notification log.
+#[derive(Debug, Clone)]
+pub struct Sent {
+    pub notification: Notification,
+    pub contact: String,
+    /// `email`, `webhook`, or empty if the contact has neither.
+    pub channel: &'static str,
+    /// `None`: delivered.
+    pub error: Option<String>,
+    pub time: SystemTime,
+}
+
 /// Sends notifications for `messages` until the channel closes. `config`
-/// follows reloads.
+/// follows reloads. `repeats` is the repeat clock to go on with
+/// ([`Repeats::restore`]); every delivery goes to `log`.
 pub async fn run(
     notifier: Arc<Notifier>,
     config: watch::Receiver<Arc<Config>>,
     mut messages: mpsc::Receiver<Message>,
+    mut repeats: Repeats,
+    log: Option<mpsc::Sender<Sent>>,
 ) {
-    let mut repeats = Repeats::default();
     while let Some(message) = messages.recv().await {
         let config = config.borrow().clone();
         let url = notifier.public_url();
@@ -489,9 +504,33 @@ pub async fn run(
             n.instance = notifier.instance.clone();
             for contact in contacts {
                 let (notifier, contact, n) = (notifier.clone(), contact.clone(), n.clone());
+                let log = log.clone();
                 // Deliveries retry with delays; don't hold up later events.
                 tokio::spawn(async move {
-                    for (channel, result) in notifier.deliver(&contact, &n).await {
+                    let time = SystemTime::now();
+                    let mut results = notifier.deliver(&contact, &n).await;
+                    if let Some(log) = &log {
+                        let mut entries: Vec<(&'static str, Option<String>)> = results
+                            .iter()
+                            .map(|(channel, r)| (*channel, r.as_ref().err().map(|e| e.to_string())))
+                            .collect();
+                        if entries.is_empty() {
+                            entries.push(("", Some("contact has no email or webhook".into())));
+                        }
+                        for (channel, error) in entries {
+                            let entry = Sent {
+                                notification: n.clone(),
+                                contact: contact.name.clone(),
+                                channel,
+                                error,
+                                time,
+                            };
+                            if log.try_send(entry).is_err() {
+                                warn!("notification log is full; an entry was dropped");
+                            }
+                        }
+                    }
+                    for (channel, result) in results.drain(..) {
                         let kind = match n.repeat {
                             true => "PROBLEM (repeat)",
                             false => n.kind.as_str(),

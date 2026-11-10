@@ -692,3 +692,119 @@ async fn secrets_and_host_keys() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn notification_log() {
+    use watcher_store::{NotificationFilter, SentNotification};
+    each_server(|store, _, _| async move {
+        let store = Arc::new(store);
+        let now = SystemTime::now();
+        let min = Duration::from_secs(60);
+        let entry = |ago: u32, service: &str, kind: &str, contact: &str, error: Option<&str>| {
+            SentNotification {
+                ts: now - ago * min,
+                host: "web01".into(),
+                service: service.into(),
+                host_check: false,
+                kind: kind.into(),
+                state: "critical".into(),
+                repeat: false,
+                since: Some(now - 100 * min),
+                contact: contact.into(),
+                channel: "email".into(),
+                error: error.map(String::from),
+            }
+        };
+        let start = store.notification_log_start().await.unwrap();
+        // The start stays the same.
+        assert_eq!(store.notification_log_start().await.unwrap(), start);
+
+        store
+            .add_notifications(&[
+                entry(90, "disk", "problem", "ops", None),
+                entry(60, "disk", "problem", "ops", None),
+                entry(10, "disk", "problem", "boss", Some("smtp: refused")),
+                entry(5, "http", "recovery", "ops", None),
+                entry(200 * 24 * 60, "disk", "problem", "ops", None),
+            ])
+            .await
+            .unwrap();
+        store.add_notifications(&[]).await.unwrap();
+
+        let list = |f: NotificationFilter| {
+            let store = store.clone();
+            async move {
+                store
+                    .notifications(&NotificationFilter { limit: 100, ..f })
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|n| format!("{} {} {}", n.service, n.kind, n.contact))
+                    .collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(
+            list(NotificationFilter {
+                host: Some("web01".into()),
+                service: Some("disk".into()),
+                ..Default::default()
+            })
+            .await,
+            [
+                "disk problem boss",
+                "disk problem ops",
+                "disk problem ops",
+                "disk problem ops"
+            ]
+        );
+        assert_eq!(
+            list(NotificationFilter {
+                failed: true,
+                ..Default::default()
+            })
+            .await,
+            ["disk problem boss"]
+        );
+        let full = store
+            .notifications(&NotificationFilter {
+                failed: true,
+                limit: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(full[0].error.as_deref(), Some("smtp: refused"));
+        assert_eq!(
+            full[0]
+                .since
+                .map(|s| (now.duration_since(s).unwrap().as_secs() + 30) / 60),
+            Some(100)
+        );
+
+        // The last problem per contact, within the time asked for.
+        let mut last: Vec<(String, String, u64)> = store
+            .last_problems(Duration::from_secs(90 * 86400))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(id, c, t)| (id, c, (now.duration_since(t).unwrap().as_secs() + 30) / 60))
+            .collect();
+        last.sort();
+        assert_eq!(
+            last,
+            [
+                ("web01/disk".into(), "boss".into(), 10),
+                ("web01/disk".into(), "ops".into(), 60)
+            ]
+        );
+
+        assert_eq!(
+            store
+                .purge_notifications(Duration::from_secs(90 * 86400))
+                .await
+                .unwrap(),
+            1
+        );
+    })
+    .await;
+}

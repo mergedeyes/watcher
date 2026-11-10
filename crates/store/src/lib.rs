@@ -6,6 +6,7 @@
 
 mod auth;
 mod ingest;
+mod notifications;
 mod ops;
 mod query;
 mod reader;
@@ -16,6 +17,7 @@ mod write;
 
 pub use auth::{ApiToken, TokenRef, User};
 pub use ingest::{Record, ingest, ingest_with};
+pub use notifications::{NotificationFilter, SentNotification};
 pub use ops::{Downtime, Flag, FlagKind, OpsEvent};
 pub use query::{EventFilter, Points, Series, StateEvent};
 pub use reader::READABLE;
