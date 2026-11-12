@@ -22,8 +22,8 @@ mod select;
 pub mod tree;
 
 pub use bootstrap::{
-    Acme, Bootstrap, BootstrapError, ConfigMode, Database, InstanceRole, LETS_ENCRYPT, Smtp,
-    SmtpTls, Tls,
+    Acme, Bootstrap, BootstrapError, ConfigMode, Database, HubSettings, InstanceRole, LETS_ENCRYPT,
+    NodeSettings, Smtp, SmtpTls, Tls,
 };
 pub use check_dirs::CheckDirs;
 pub use expr::{Expr, ExprError};

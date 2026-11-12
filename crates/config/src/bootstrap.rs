@@ -35,6 +35,10 @@ pub struct Bootstrap {
     pub timezone: Option<String>,
     /// Serve HTTPS instead of HTTP.
     pub tls: Option<Tls>,
+    /// With `role = "hub"`: where nodes connect.
+    pub hub: Option<HubSettings>,
+    /// With `role = "node"`: the hub this node connects to.
+    pub node: Option<NodeSettings>,
     /// Where bare command names are looked up before PATH, in order.
     /// Relative paths are resolved like `conf_dir`. Default: `checks/`,
     /// then the monitoring-plugins directories that exist.
@@ -42,6 +46,40 @@ pub struct Bootstrap {
     /// The directory of watcher.toml.
     #[serde(skip)]
     pub dir: PathBuf,
+}
+
+/// The hub's side of the node link.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HubSettings {
+    /// Address nodes connect to.
+    #[serde(default = "default_hub_listen")]
+    pub listen: String,
+    /// How nodes reach the hub, e.g. `https://hub.example.com:7443`; shown
+    /// in join commands. Default: the host of `public_url`, else this
+    /// machine's name, with the port of `listen`.
+    pub url: Option<String>,
+}
+
+impl Default for HubSettings {
+    fn default() -> Self {
+        HubSettings {
+            listen: default_hub_listen(),
+            url: None,
+        }
+    }
+}
+
+fn default_hub_listen() -> String {
+    "0.0.0.0:7443".into()
+}
+
+/// The node's side of the node link.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeSettings {
+    /// The hub's node link, e.g. `https://hub.example.com:7443`.
+    pub hub: String,
 }
 
 /// Certificate for HTTPS.
@@ -303,6 +341,21 @@ impl Bootstrap {
         {
             *file = base.join(&*file);
         }
+        let role = bootstrap.role;
+        let misplaced = match (&bootstrap.hub, &bootstrap.node) {
+            (Some(_), _) if role != InstanceRole::Hub => Some("[hub] is for role = \"hub\""),
+            (_, Some(_)) if role != InstanceRole::Node => Some("[node] is for role = \"node\""),
+            (_, None) if role == InstanceRole::Node => Some(
+                "role = \"node\" needs [node] with hub = \"https://…\" (watcher node join writes it)",
+            ),
+            _ => None,
+        };
+        if let Some(message) = misplaced {
+            return Err(BootstrapError::Invalid {
+                path: path.into(),
+                message: message.into(),
+            });
+        }
         if let Some(name) = &bootstrap.timezone
             && let Err(err) = jiff::tz::TimeZone::get(name)
         {
@@ -418,6 +471,21 @@ mod tests {
             Bootstrap::load(&path).unwrap_err().to_string()
         };
         assert!(err("[tls.acme]\n").contains("set domains"));
+        assert!(err("[hub]\n").contains("[hub] is for role = \"hub\""));
+        assert!(err("role = \"node\"\n").contains("needs [node]"));
+        assert!(err("role = \"hub\"\n[node]\nhub = \"h\"\n").contains("[node] is for"));
+
+        // The node link.
+        std::fs::write(&path, "role = \"hub\"\n[hub]\n").unwrap();
+        assert_eq!(
+            Bootstrap::load(&path).unwrap().hub.unwrap(),
+            HubSettings::default()
+        );
+        std::fs::write(&path, "role = \"node\"\n[node]\nhub = \"https://h:1\"\n").unwrap();
+        assert_eq!(
+            Bootstrap::load(&path).unwrap().node.unwrap().hub,
+            "https://h:1"
+        );
         assert!(err("public_url = \"https://10.0.0.1/\"\n[tls.acme]\n").contains("set domains"));
         assert!(err("[tls.acme]\ndomains = [\"10.0.0.1\"]\n").contains("not a host name"));
         assert!(

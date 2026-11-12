@@ -389,6 +389,31 @@ export interface HostKey {
 	hosts: string[];
 }
 
+/** A node of this hub (`GET /nodes`). */
+export interface Node {
+	name: string;
+	/** `offline`: joined, not connected; `new`: not joined yet. */
+	state: 'connected' | 'offline' | 'new';
+	connected_since: string | null;
+	joined: string | null;
+	/** When the unused join token expires. */
+	token_expires: string | null;
+	last_seen: string | null;
+	version: string | null;
+	hostname: string | null;
+	address: string | null;
+	/** Hosts in the configuration with this node. */
+	hosts: string[];
+}
+
+export interface JoinToken {
+	name: string;
+	token: string;
+	expires: string;
+	/** Run on the node's machine. */
+	command: string;
+}
+
 export interface User {
 	id: number;
 	username: string;
@@ -655,6 +680,12 @@ export const api = {
 	updateUser: (name: string, change: { password?: string; admin?: boolean; disabled?: boolean; totp?: false }) =>
 		send<User>('PUT', `/users/${seg(name)}`, change),
 	deleteUser: (name: string) => send<void>('DELETE', `/users/${seg(name)}`),
+
+	nodes: () => get<Node[]>('/nodes'),
+	addNode: (name: string) => send<JoinToken>('POST', '/nodes', { name }),
+	/** Also for a node that has joined already (a reinstalled machine). */
+	nodeToken: (name: string) => send<JoinToken>('POST', `/nodes/${seg(name)}/token`),
+	removeNode: (name: string) => send<void>('DELETE', `/nodes/${seg(name)}`),
 
 	secrets: () => get<Secret[]>('/ssh/secrets'),
 	createSecret: (secret: NewSecret) => send<Secret>('POST', '/ssh/secrets', secret),

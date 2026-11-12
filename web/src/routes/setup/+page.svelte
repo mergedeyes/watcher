@@ -380,8 +380,8 @@
 					<div class="fields">
 						<label for="role">Role</label>
 						<select id="role" bind:value={role}>
-							<option value="standalone">standalone (hub + local checks)</option>
-							<option value="hub">hub</option>
+							<option value="standalone">standalone (one server)</option>
+							<option value="hub">hub (nodes at other sites connect to it)</option>
 						</select>
 						<label for="name">Instance Name</label>
 						<div>

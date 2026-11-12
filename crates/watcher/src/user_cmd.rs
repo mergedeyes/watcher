@@ -23,6 +23,19 @@ pub struct DbArgs {
 }
 
 impl DbArgs {
+    /// The watcher.toml given with `-c`.
+    pub fn config_path(&self) -> Option<&std::path::Path> {
+        self.config.as_deref()
+    }
+
+    /// watcher.toml (`-c`, or the default places).
+    pub fn bootstrap(&self) -> Result<watcher_config::Bootstrap> {
+        match config_cmd::locate(self.config.as_deref())? {
+            (Some(bootstrap), _) => Ok(bootstrap),
+            (None, _) => bail!("this needs watcher.toml, not a directory"),
+        }
+    }
+
     /// `data_dir` from watcher.toml (where `secret.key` is).
     pub fn data_dir(&self) -> Result<PathBuf> {
         let (bootstrap, _) = config_cmd::locate(self.config.as_deref())?;

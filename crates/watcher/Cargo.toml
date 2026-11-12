@@ -28,13 +28,16 @@ serde_json.workspace = true
 shell-words.workspace = true
 tokio.workspace = true
 toml.workspace = true
+toml_edit.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 watcher-config.workspace = true
 watcher-core.workspace = true
 watcher-exec.workspace = true
 watcher-hub.workspace = true
+watcher-node.workspace = true
 watcher-notify.workspace = true
+watcher-proto.workspace = true
 watcher-store.workspace = true
 x509-parser.workspace = true
 

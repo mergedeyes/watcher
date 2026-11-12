@@ -79,6 +79,7 @@
 			title: 'System',
 			items: [
 				{ href: '/downtimes', label: 'Downtimes' },
+				{ href: '/nodes', label: 'Nodes' },
 				{ href: '/process', label: 'Process Info' },
 				{ href: '/scheduler', label: 'Scheduling Queue' }
 			]

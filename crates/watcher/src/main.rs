@@ -1,6 +1,7 @@
 mod acme;
 mod config_cmd;
 mod init_cmd;
+mod node_cmd;
 mod notify_cmd;
 mod run;
 mod run_check;
@@ -69,6 +70,16 @@ enum Cmd {
         db: user_cmd::DbArgs,
     },
 
+    /// Nodes: machines at other sites that connect to a hub.
+    ///
+    /// On the hub: add, token, list, remove. On the node's machine: join.
+    Node {
+        #[command(subcommand)]
+        command: node_cmd::NodeCommand,
+        #[command(flatten)]
+        db: user_cmd::DbArgs,
+    },
+
     /// Manage keys and passwords for checks over SSH (stored encrypted in
     /// the database, with the key in data_dir/secret.key).
     Secret {
@@ -130,6 +141,7 @@ async fn main() -> ExitCode {
         Cmd::User { command, db } => (user_cmd::user(command, db).await, ExitCode::FAILURE),
         Cmd::Token { command, db } => (user_cmd::token(command, db).await, ExitCode::FAILURE),
         Cmd::Db { command, db } => (user_cmd::database(command, db).await, ExitCode::FAILURE),
+        Cmd::Node { command, db } => (node_cmd::run(command, db).await, ExitCode::FAILURE),
         Cmd::Secret { command, db } => (ssh_cmd::secret(command, db).await, ExitCode::FAILURE),
         Cmd::Hostkey { command, db } => (ssh_cmd::host_key(command, db).await, ExitCode::FAILURE),
     };
