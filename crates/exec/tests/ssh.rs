@@ -41,8 +41,12 @@ impl server::Server for TestServer {
 impl server::Handler for TestServer {
     type Error = russh::Error;
 
-    async fn auth_publickey(&mut self, _: &str, key: &PublicKey) -> Result<Auth, Self::Error> {
-        Ok(match key.key_data() == self.key.key_data() {
+    async fn auth_publickey(
+        &mut self,
+        _: &str,
+        key: server::VerifiedPublicKey<'_>,
+    ) -> Result<Auth, Self::Error> {
+        Ok(match key.public_key.key_data() == self.key.key_data() {
             true => Auth::Accept,
             false => Auth::reject(),
         })
