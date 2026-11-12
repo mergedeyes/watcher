@@ -18,6 +18,7 @@ script that prints a result work as checks.
 | [contact](objects/contact.md) | Someone who receives notifications: by email, webhook, Slack, Teams, Telegram, ntfy, Gotify, PagerDuty, Jira or a script. |
 | [contact group](objects/contactgroup.md) | A set of contacts. |
 | [notify rule](objects/notify.md) | Which contacts get which notifications. |
+| [dependency](objects/dependency.md) | Holds notifications back while another host or service has a problem, like the router in front of them. |
 | [downtime group](objects/downtimegroup.md) | Hosts with recurring downtime windows. |
 | [time period](objects/timeperiod.md) | When notify rules apply, for example business hours. |
 | [sink](objects/sink.md) | A second database that receives a copy of all results. |
@@ -53,8 +54,9 @@ Single server:
   notifications, disabled checks, re-check, process info, scheduling queue.
 - **Notifications:** email, webhooks, Slack, Microsoft Teams, Telegram,
   ntfy, Gotify, PagerDuty, Jira tickets and scripts; reminders for open problems,
-  escalations, time periods (business hours, on-call at night), a log of
-  every notification sent.
+  escalations, time periods (business hours, on-call at night),
+  dependencies (one alert about the router, not fifty about the hosts
+  behind it), a log of every notification sent.
 - **Storage:** PostgreSQL or TimescaleDB, SQL views, read-only database
   login, copies to another PostgreSQL (sinks).
 - **Access:** users, sessions, API tokens, HTTPS; the full API, everything
@@ -67,6 +69,5 @@ Single server:
 | Nodes and hub, UNREACHABLE state | 2 |
 | Data repair in graphs, rollups, retention | 3 |
 | IBM i, AIX, HMC, MQ checks | 3b |
-| Dependencies | 4 |
 | Tenants, roles and permissions, TOTP | 4 |
 | SNMP, Prometheus, WinRM, discovery, Nagios config import | 5 |
