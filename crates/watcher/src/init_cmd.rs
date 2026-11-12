@@ -561,6 +561,10 @@ pub(crate) async fn apply(a: &Answers, plan: &Plan) -> Result<()> {
         }
     }
 
+    // conf.d may get no file (no contact, this machine not monitored), but
+    // it has to exist for the check below and for `watcher run`.
+    std::fs::create_dir_all(&plan.conf_dir)
+        .with_context(|| format!("cannot create {}", plan.conf_dir.display()))?;
     for file in &plan.files {
         if let Some(parent) = file.path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -757,6 +761,17 @@ mod tests {
         let transcript = String::from_utf8(out).unwrap();
         assert!(transcript.contains("unknown role: nope"));
         assert!(transcript.contains("non-loopback addresses need a database"));
+    }
+
+    #[tokio::test]
+    async fn creates_conf_d_without_files_for_it() {
+        let dir = temp_dir("empty");
+        let answers: Answers = toml::from_str("monitor_localhost = false").unwrap();
+        let plan = Plan::new(&answers, &dir).unwrap();
+        assert_eq!(plan.files.len(), 1, "only watcher.toml");
+        apply(&answers, &plan).await.unwrap();
+        assert!(dir.join("conf.d").is_dir());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
