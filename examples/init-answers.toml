@@ -16,6 +16,8 @@ test_notification = false           # send a test to the contact after setup
 
 [tls]                               # serve HTTPS; omit for HTTP or a TLS proxy
 self_signed = true                  # or: cert = "/etc/ssl/w.pem" and key = "/etc/ssl/w.key"
+                                    # or, in place of both, Let's Encrypt:
+                                    # [tls.acme] with email = "ops@example.com"
 
 [admin]                             # needs database_url
 username = "admin"

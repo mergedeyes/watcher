@@ -60,7 +60,8 @@ Single server:
 - **Storage:** PostgreSQL or TimescaleDB, SQL views, read-only database
   login, copies to another PostgreSQL (sinks).
 - **Access:** users, sessions, two-factor authentication (TOTP), API
-  tokens, HTTPS; the full API, everything the web UI does.
+  tokens, HTTPS (also with certificates from Let's Encrypt or another
+  ACME CA); the full API, everything the web UI does.
 
 *Not yet:*
 

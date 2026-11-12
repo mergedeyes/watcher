@@ -97,7 +97,7 @@ set it, and every alert to the rule that sent it.
 - **Data:** PostgreSQL or TimescaleDB, SQL views, read-only database
   logins, copies to a central database.
 - **Access:** user accounts with admin rights, two-factor
-  authentication (TOTP), HTTPS.
+  authentication (TOTP), HTTPS with certificates from Let's Encrypt.
 - **API:** everything the web UI does, with tokens for your scripts.
 
 <p align="center">

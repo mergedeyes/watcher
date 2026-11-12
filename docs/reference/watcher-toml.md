@@ -45,7 +45,7 @@ from = "Watcher <watcher@example.com>"
 | `listen` | `127.0.0.1:8080` | Address and port of the web UI and API. Any address other than loopback needs a database, because logins need one. |
 | `public_url` | | The URL users open Watcher with. Used for links in notifications. With `https://`, session cookies are marked Secure. |
 | `conf_dir` | `conf.d` | Directory with the object files. Every `*.toml` below it is read. |
-| `data_dir` | `data` | Directory for sink buffers, the instance ID, the self-signed certificate and `secret.key`, which encrypts [SSH secrets](../guides/ssh.md#secrets) and the secrets of [two-factor authentication](../guides/web-ui.md#two-factor-authentication). |
+| `data_dir` | `data` | Directory for sink buffers, the instance ID, the self-signed certificate, the ACME account and certificate (`acme/`) and `secret.key`, which encrypts [SSH secrets](../guides/ssh.md#secrets) and the secrets of [two-factor authentication](../guides/web-ui.md#two-factor-authentication). |
 | `config_mode` | `hybrid` | `hybrid`: web UI and files can both change the config. `files`: the web UI is read-only. `ui`: files are not watched. See [Config mode](../guides/web-ui.md#config-mode). |
 | `check_dirs` | `checks`, then the plugin directories | Where commands without a path are looked up, before `PATH`. |
 
@@ -68,7 +68,8 @@ in memory, no history and no logins. See [Data](../guides/data.md).
 
 ## [tls]
 
-HTTPS for the web UI and API. Set `cert` and `key`, or `self_signed`.
+HTTPS for the web UI and API. Set `cert` and `key`, `self_signed`, or
+[`[tls.acme]`](#tlsacme) for certificates from Let's Encrypt.
 
 | Key | Default | Description |
 |---|---|---|
@@ -83,6 +84,33 @@ self_signed = true
 
 Alternatively, run Watcher behind a reverse proxy, see
 [HTTPS](../install.md#https).
+
+### [tls.acme]
+
+Certificates from Let's Encrypt or another CA that speaks ACME. Watcher
+orders one when it starts without one, and a new one when a third of its
+lifetime is left (at most 30 days before it ends). To check each name,
+the CA connects to port 443 of the name, which has to reach Watcher. Step
+by step: [Certificates from Let's Encrypt](../install.md#certificates-from-lets-encrypt).
+
+| Key | Default | Description |
+|---|---|---|
+| `domains` | the host of `public_url` | Names the certificate is for. IP addresses don't work. |
+| `email` | | Address the CA writes to about expiring certificates and problems. |
+| `directory` | Let's Encrypt | ACME directory URL of the CA. Let's Encrypt's test CA: `https://acme-staging-v02.api.letsencrypt.org/directory`. |
+| `ca` | | PEM file with the root certificate of the CA's own HTTPS, if the system doesn't trust it (internal CAs). Relative paths are resolved like `conf_dir`. |
+| `eab_kid` | | External account binding, for CAs that require it (ZeroSSL, Google Trust Services): the key ID from the CA. Needs `eab_hmac_key`. |
+| `eab_hmac_key` | | The HMAC key that goes with `eab_kid`, base64url as the CA shows it. |
+
+```toml
+public_url = "https://watcher.example.com"
+
+[tls.acme]
+email = "ops@example.com"
+```
+
+`[tls.acme]` can't be combined with `cert`, `key` or `self_signed`. The
+account, the certificate and its key are kept in `data_dir/acme/`.
 
 ## [smtp]
 
