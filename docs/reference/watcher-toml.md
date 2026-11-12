@@ -41,7 +41,7 @@ from = "Watcher <watcher@example.com>"
 |---|---|---|
 | `role` | `standalone` | `standalone`, `hub` or `node`. *Not yet:* `hub` and `node` behave like `standalone`. |
 | `instance_name` | | Name of this installation, shown in the sidebar, the page title and the mail subject. |
-| `timezone` | the system's | IANA time zone name, like `Europe/Berlin`. Used for downtime group windows. |
+| `timezone` | the system's | IANA time zone name, like `Europe/Berlin`. Used for downtime group windows and time periods. `watcher init` and the setup in the browser write it, with this server's zone as the suggestion. |
 | `listen` | `127.0.0.1:8080` | Address and port of the web UI and API. Any address other than loopback needs a database, because logins need one. |
 | `public_url` | | The URL users open Watcher with. Used for links in notifications. With `https://`, session cookies are marked Secure. |
 | `conf_dir` | `conf.d` | Directory with the object files. Every `*.toml` below it is read. |

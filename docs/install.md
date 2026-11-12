@@ -58,9 +58,10 @@ watcher setup --listen 0.0.0.0:8080 # to set up a remote machine
 ```
 
 The log prints a setup token; enter it on the page. The wizard asks for
-the instance name, the database, web access (listen address, public URL,
-TLS), the admin account, notifications and checks for this machine, and
-shows a summary. **Write & Start** writes the files and starts Watcher.
+the instance name and time zone, the database, web access (listen
+address, public URL, TLS), the admin account, notifications and checks
+for this machine, and shows a summary. **Write & Start** writes the
+files and starts Watcher.
 
 For the admin account you can turn on
 [two-factor authentication](guides/web-ui.md#two-factor-authentication)

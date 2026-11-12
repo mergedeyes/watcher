@@ -6,6 +6,7 @@ role = "standalone"                 # standalone | hub
 instance_name = "msp-hub"           # sidebar, page title, mail subject
 listen = "127.0.0.1:8080"           # non-loopback needs database_url
 public_url = "https://watcher.example.com"
+timezone = "Europe/Berlin"          # downtime windows, time periods; default: the system's
 database_url = "postgres://watcher:secret@db.example.com/watcher"
 
 alert_email = ["ops@example.com"]   # contact "admins"
