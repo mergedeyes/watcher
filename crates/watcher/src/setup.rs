@@ -167,8 +167,22 @@ async fn defaults(State(setup): Shared, headers: HeaderMap) -> Response {
         "plugins": init_cmd::plugin_dir(),
         "existing": existing,
         "min_password": init_cmd::MIN_PASSWORD,
+        "timezone": init_cmd::system_timezone(),
+        "timezones": timezones(),
     }))
     .into_response()
+}
+
+/// IANA time zone names for suggestions, without the `posix/` and
+/// `right/` copies some systems have.
+fn timezones() -> Vec<String> {
+    let mut names: Vec<String> = jiff::tz::db()
+        .available()
+        .map(|name| name.to_string())
+        .filter(|name| !name.starts_with("posix") && !name.starts_with("right/"))
+        .collect();
+    names.sort();
+    names
 }
 
 #[derive(Deserialize)]

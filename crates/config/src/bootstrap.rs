@@ -30,8 +30,8 @@ pub struct Bootstrap {
     pub config_mode: ConfigMode,
     /// Name of this instance, shown in the web UI and notifications.
     pub instance_name: Option<String>,
-    /// IANA time zone of downtime windows, e.g. `Europe/Berlin`. Default:
-    /// the system's.
+    /// IANA time zone of downtime windows and time periods, e.g.
+    /// `Europe/Berlin`. Default: the system's.
     pub timezone: Option<String>,
     /// Serve HTTPS instead of HTTP.
     pub tls: Option<Tls>,

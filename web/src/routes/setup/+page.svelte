@@ -13,6 +13,9 @@
 		plugins: string | null;
 		existing: string[];
 		min_password: number;
+		/** The server's time zone, and all IANA names for suggestions. */
+		timezone: string;
+		timezones: string[];
 	}
 
 	interface PlannedFile {
@@ -32,6 +35,7 @@
 	// Answers
 	let role = $state<'standalone' | 'hub'>('standalone');
 	let instanceName = $state('');
+	let timezone = $state('');
 	let databaseUrl = $state('');
 	let dbResult = $state<string | null>(null);
 	let listen = $state('127.0.0.1:8080');
@@ -106,6 +110,7 @@
 			defaults = await call<Defaults>('GET', '');
 			listen = defaults.listen;
 			instanceName ||= defaults.hostname;
+			timezone ||= defaults.timezone;
 			step = 1;
 		});
 	}
@@ -187,6 +192,7 @@
 			instance_name: instanceName.trim() || null,
 			listen: listen.trim(),
 			public_url: publicUrl.trim() || null,
+			timezone: timezone.trim() || null,
 			tls:
 				tlsMode === 'self'
 					? { self_signed: true }
@@ -219,6 +225,11 @@
 					return `Password: min. ${defaults?.min_password ?? 10} characters.`;
 				if (adminPassword !== adminConfirm) return 'Passwords differ.';
 				if (totpOn && !totpVerified) return 'Two-factor: enter the code from the app and click Verify, or turn it off.';
+				return null;
+			case 'Instance':
+				// The server checks too; without a list (no time zone data) leave it to it.
+				if (timezone.trim() && defaults?.timezones.length && !defaults.timezones.includes(timezone.trim()))
+					return `Timezone: unknown "${timezone.trim()}" (an IANA name like Europe/Berlin).`;
 				return null;
 			case 'Web Access':
 				if (tlsMode === 'files' && (!cert.trim() || !key.trim())) return 'Certificate and key paths required.';
@@ -347,6 +358,14 @@
 						<div>
 							<input id="name" bind:value={instanceName} />
 							<div class="help">sidebar, page title, mail subject</div>
+						</div>
+						<label for="tz">Timezone</label>
+						<div>
+							<input id="tz" list="timezones" autocomplete="off" bind:value={timezone} />
+							<datalist id="timezones">
+								{#each defaults?.timezones ?? [] as name (name)}<option value={name}></option>{/each}
+							</datalist>
+							<div class="help">downtime windows and time periods; default: this server's</div>
 						</div>
 					</div>
 				{:else if STEPS[step] === 'Database'}

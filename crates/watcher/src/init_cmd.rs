@@ -40,6 +40,9 @@ pub struct Answers {
     pub instance_name: Option<String>,
     pub listen: Option<String>,
     pub public_url: Option<String>,
+    /// IANA time zone of downtime windows and time periods, like
+    /// `Europe/Berlin`.
+    pub timezone: Option<String>,
     /// HTTPS: certificate files or self-signed.
     pub tls: Option<Tls>,
     pub database_url: Option<String>,
@@ -200,6 +203,15 @@ async fn ask(p: &mut Prompter<'_>) -> Result<Answers> {
         listen.ip().to_string()
     };
     a.public_url = Some(p.ask("Public URL", &format!("http://{host}:{}", listen.port()))?);
+    a.timezone = loop {
+        let value = p.ask("Timezone", &system_timezone())?;
+        match jiff::tz::TimeZone::get(&value) {
+            Ok(_) => break Some(value),
+            Err(_) => p.note(&format!(
+                "error: unknown time zone {value:?} (an IANA name like Europe/Berlin)"
+            ))?,
+        }
+    };
 
     if a.database_url.is_some() {
         let username = p.ask("Admin user", "admin")?;
@@ -453,6 +465,11 @@ impl Plan {
         {
             bail!("instance_name: empty");
         }
+        if let Some(tz) = &a.timezone
+            && jiff::tz::TimeZone::get(tz).is_err()
+        {
+            bail!("timezone {tz:?}: unknown (an IANA name like Europe/Berlin)");
+        }
         if a.admin.is_some() && a.database_url.is_none() {
             bail!("admin: needs database_url");
         }
@@ -496,6 +513,12 @@ impl Plan {
         }
         if let Some(name) = &a.instance_name {
             toml += &format!("instance_name = {}\n", q(name.trim()));
+        }
+        if let Some(tz) = &a.timezone {
+            toml += &format!(
+                "# Time zone of downtime windows and time periods.\ntimezone = {}\n",
+                q(tz)
+            );
         }
         if let Some(tls) = &a.tls {
             toml += "\n[tls]\n";
@@ -775,6 +798,14 @@ pub(crate) fn plugin_dir() -> Option<PathBuf> {
         .find(|d| d.join("check_disk").exists())
 }
 
+/// The system's time zone as an IANA name; UTC if it has none.
+pub(crate) fn system_timezone() -> String {
+    jiff::tz::TimeZone::system()
+        .iana_name()
+        .unwrap_or("UTC")
+        .to_string()
+}
+
 pub(crate) fn hostname() -> String {
     std::fs::read_to_string("/proc/sys/kernel/hostname")
         .map(|h| h.trim().to_string())
@@ -809,8 +840,9 @@ mod tests {
 
     #[tokio::test]
     async fn prompts_take_defaults_and_skip() {
-        // Role, database, listen, public URL, SMTP host, alert email, webhook, monitor.
-        let input = "\nnone\n\n\nnone\nnone\nnone\nn\n";
+        // Role, database, listen, public URL, timezone, SMTP host, alert
+        // email, webhook, monitor.
+        let input = "\nnone\n\n\n\nnone\nnone\nnone\nn\n";
         let mut reader = input.as_bytes();
         let mut out = Vec::new();
         let mut p = Prompter {
@@ -823,6 +855,7 @@ mod tests {
         assert_eq!(a.database_url, None);
         assert_eq!(a.listen.as_deref(), Some("127.0.0.1:8080"));
         assert_eq!(a.public_url.as_deref(), Some("http://127.0.0.1:8080"));
+        assert_eq!(a.timezone, Some(system_timezone()));
         assert!(a.smtp.is_none() && a.alert_email.is_empty() && !a.monitor_localhost);
         let transcript = String::from_utf8(out).unwrap();
         assert!(
@@ -833,8 +866,10 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_invalid_answers_and_asks_again() {
-        // Unknown role, then default; non-loopback without database, then loopback.
-        let input = "nope\n\nnone\n0.0.0.0:8080\n127.0.0.1:9000\n\nnone\nnone\nnone\nn\n";
+        // Unknown role, then default; non-loopback without database, then
+        // loopback; unknown time zone, then one that exists.
+        let input = "nope\n\nnone\n0.0.0.0:8080\n127.0.0.1:9000\n\nMars/Olympus\nEurope/Berlin\n\
+                     none\nnone\nnone\nn\n";
         let mut reader = input.as_bytes();
         let mut out = Vec::new();
         let mut p = Prompter {
@@ -844,8 +879,10 @@ mod tests {
         };
         let a = ask(&mut p).await.unwrap();
         assert_eq!(a.listen.as_deref(), Some("127.0.0.1:9000"));
+        assert_eq!(a.timezone.as_deref(), Some("Europe/Berlin"));
         let transcript = String::from_utf8(out).unwrap();
         assert!(transcript.contains("unknown role: nope"));
+        assert!(transcript.contains("unknown time zone \"Mars/Olympus\""));
         assert!(transcript.contains("non-loopback addresses need a database"));
     }
 
@@ -868,6 +905,7 @@ mod tests {
 listen = "127.0.0.1:8080"
 public_url = "https://watcher.example.com"
 instance_name = "msp-hub"
+timezone = "Europe/Berlin"
 alert_email = ["ops@example.com"]
 alert_webhook = "https://hooks.example.com/w"
 
@@ -907,6 +945,7 @@ from = "Watcher <watcher@example.com>"
 
         let bootstrap = Bootstrap::load(&dir.join("watcher.toml")).unwrap();
         assert_eq!(bootstrap.instance_name.as_deref(), Some("msp-hub"));
+        assert_eq!(bootstrap.timezone.as_deref(), Some("Europe/Berlin"));
         assert!(bootstrap.tls.unwrap().self_signed);
         let smtp = bootstrap.smtp.unwrap();
         assert_eq!(smtp.password_file.unwrap(), dir.join("smtp.pass"));
@@ -941,6 +980,7 @@ from = "Watcher <watcher@example.com>"
         let text = include_str!("../../../examples/init-answers.toml");
         let a: Answers = toml::from_str(text).unwrap();
         assert_eq!(a.admin.unwrap().username, "admin");
+        assert_eq!(a.timezone.as_deref(), Some("Europe/Berlin"));
         assert_eq!(a.smtp.unwrap().port(), 587);
     }
 
@@ -967,6 +1007,7 @@ from = "Watcher <watcher@example.com>"
         assert!(err("[tls]\ncert = \"/nonexistent.pem\"\nkey = \"/k.pem\"").contains("no file"));
         assert!(err("[tls]\ncert = \"/c.pem\"").contains("cert and key"));
         assert!(err("instance_name = \" \"").contains("empty"));
+        assert!(err(r#"timezone = "Mars/Olympus""#).contains("timezone"));
         assert!(
             err(
                 "database_url = \"postgres://x\"\n[admin]\nusername = \"a\"\n\
