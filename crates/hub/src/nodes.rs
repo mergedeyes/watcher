@@ -116,6 +116,11 @@ impl Registry {
 /// Node names: 1 to 64 letters, digits, `.`, `_` and `-`, starting with a
 /// letter or digit, as they also appear in host names.
 pub fn check_name(name: &str) -> Result<(), String> {
+    if name == watcher_config::LOCAL_NODE {
+        return Err(format!(
+            "node name {name:?} is reserved: node = \"{name}\" means the hub itself"
+        ));
+    }
     let ok = !name.is_empty()
         && name.len() <= 64
         && name.starts_with(|c: char| c.is_ascii_alphanumeric())
@@ -313,7 +318,7 @@ mod tests {
         for ok in ["site-a", "dc1.example", "a", "A_1", &"x".repeat(64)] {
             assert!(check_name(ok).is_ok(), "{ok}");
         }
-        for bad in ["", "-a", ".a", "a b", "a/b", "ä", &"x".repeat(65)] {
+        for bad in ["", "local", "-a", ".a", "a b", "a/b", "ä", &"x".repeat(65)] {
             assert!(check_name(bad).is_err(), "{bad}");
         }
     }

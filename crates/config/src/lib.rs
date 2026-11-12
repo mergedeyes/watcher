@@ -153,12 +153,18 @@ pub struct ServiceObject {
     pub origin: Origin,
 }
 
+/// The node name of this instance itself: `node = "local"` on a host is
+/// the same as no `node`, and selectors, expressions and `$host.node$` see
+/// hosts without a node as `local`. No node can be named so.
+pub const LOCAL_NODE: &str = "local";
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Host {
     pub name: String,
     /// Defaults to the name.
     pub address: String,
-    /// The node that runs this host's checks; `None` for the local instance.
+    /// The node that runs this host's checks; `None` for this instance
+    /// ([`LOCAL_NODE`]).
     pub node: Option<String>,
     /// Host groups.
     pub groups: Vec<Assigned>,
@@ -180,6 +186,11 @@ pub struct Host {
 }
 
 impl Host {
+    /// The host's node, [`LOCAL_NODE`] for this instance.
+    pub fn node_name(&self) -> &str {
+        self.node.as_deref().unwrap_or(LOCAL_NODE)
+    }
+
     /// The service whose graphs show on the host page: `graph`, or the host
     /// check.
     pub fn graph_check(&self) -> Option<&str> {

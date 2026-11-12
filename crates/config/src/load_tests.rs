@@ -1577,3 +1577,55 @@ jira = { url = "ftp://jira", project = " ", token = "" }
         "{text}"
     );
 }
+
+#[test]
+fn node_local_is_this_instance() {
+    let (config, diags) = compile(&[(
+        "conf.d/hosts.toml",
+        r#"
+[service.show]
+command = "echo $host.node$"
+
+[contact.ops]
+email = "ops@example.com"
+
+[[host]]
+name = "branch-router"
+node = "branch-office"
+services = ["show"]
+
+[[host]]
+name = "hq-router"
+node = "local"
+services = ["show"]
+
+[[host]]
+name = "hq-nas"
+services = ["show"]
+
+[[notify]]
+contacts = ["ops"]
+hosts = { node = "local" }
+"#,
+    )]);
+    // `local` is always known: no warning about an unknown node.
+    assert_eq!(messages(&diags), Vec::<String>::new());
+    let host = |name: &str| config.hosts.iter().find(|h| h.name == name).unwrap();
+    assert_eq!(host("hq-router").node, None);
+    assert_eq!(host("hq-router").node_name(), "local");
+    assert_eq!(host("branch-router").node_name(), "branch-office");
+    let show = |h: &str| argv(config.service(&format!("{h}/show")).unwrap()).join(" ");
+    assert_eq!(show("hq-nas"), "echo local");
+    assert_eq!(show("branch-router"), "echo branch-office");
+    let local = HostSelector::parse(&toml::Value::Table(
+        toml::from_str(r#"node = "local""#).unwrap(),
+    ))
+    .unwrap();
+    let matched: Vec<&str> = config
+        .hosts
+        .iter()
+        .filter(|h| local.matches(h).is_some())
+        .map(|h| h.name.as_str())
+        .collect();
+    assert_eq!(matched, ["hq-router", "hq-nas"]);
+}

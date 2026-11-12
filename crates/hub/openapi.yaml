@@ -718,7 +718,7 @@ paths:
               type: object
               required: [name]
               properties:
-                name: { type: string, description: "1 to 64 letters, digits, '.', '_' and '-'" }
+                name: { type: string, description: "1 to 64 letters, digits, '.', '_' and '-'; not `local` (the hub itself)" }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/JoinToken" } } } }
         "400": { $ref: "#/components/responses/Error" }

@@ -81,8 +81,9 @@ export class Suggest {
 		return uniq(this.of(kind).flatMap((o) => scalars(o.fields[key])));
 	}
 
+	/** Node names hosts use, and `local`: this instance itself. */
 	nodes(): string[] {
-		return this.used('host', 'node');
+		return uniq(['local', ...this.used('host', 'node')]);
 	}
 
 	/** Service names: services on hosts, service objects, host services, checks. */
