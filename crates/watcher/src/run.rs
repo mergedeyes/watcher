@@ -110,15 +110,23 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
         .as_ref()
         .map(|b| (b.smtp.clone(), b.public_url.clone()))
         .unwrap_or_default();
-    let tls = match bootstrap
+    // With ACME, the task that gets the certificates starts once the
+    // server listens.
+    let (tls, acme) = match bootstrap
         .as_ref()
         .and_then(|b| b.tls.as_ref().map(|t| (t, &b.data_dir)))
     {
-        Some((t, data_dir)) => {
-            let names = crate::tls::names(listen, public_url.as_deref());
-            Some(crate::tls::config(t, data_dir, &names).await?)
-        }
-        None => None,
+        Some((t, data_dir)) => match &t.acme {
+            Some(settings) => {
+                let (config, acme) = crate::acme::setup(settings, data_dir, listen)?;
+                (Some(config), Some(acme))
+            }
+            None => {
+                let names = crate::tls::names(listen, public_url.as_deref());
+                (Some(crate::tls::config(t, data_dir, &names).await?), None)
+            }
+        },
+        None => (None, None),
     };
     // Behind a TLS proxy (public_url) or serving TLS itself.
     let https = tls.is_some()
@@ -250,6 +258,9 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
     };
     let scheme = if tls.is_some() { "https" } else { "http" };
     let server = serve(listen, hub.clone().router(), tls)?;
+    if let Some(acme) = acme {
+        tokio::spawn(acme.run());
+    }
     info!(
         "started with {} services from {}; web UI on {scheme}://{listen}",
         config.services.len(),

@@ -55,12 +55,94 @@ pub struct Tls {
     /// Generate a self-signed certificate in `data_dir/tls/` instead.
     #[serde(default)]
     pub self_signed: bool,
+    /// Get certificates from an ACME CA such as Let's Encrypt instead.
+    pub acme: Option<Acme>,
+}
+
+/// Let's Encrypt's ACME directory, the default CA.
+pub const LETS_ENCRYPT: &str = "https://acme-v02.api.letsencrypt.org/directory";
+
+/// Certificates from an ACME CA (RFC 8555). The CA checks each name with
+/// TLS-ALPN-01: it connects to port 443 of the name, which must reach this
+/// server.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Acme {
+    /// Names the certificate is for. Default: the host of `public_url`.
+    #[serde(default)]
+    pub domains: Vec<String>,
+    /// Where the CA writes about expiring certificates and problems.
+    pub email: Option<String>,
+    /// The CA's ACME directory URL. Default: Let's Encrypt.
+    #[serde(default = "lets_encrypt")]
+    pub directory: String,
+    /// PEM root certificate of the ACME server's own HTTPS, for internal CAs
+    /// that the system doesn't trust. Relative paths are resolved like
+    /// `conf_dir`.
+    pub ca: Option<PathBuf>,
+    /// External account binding, for CAs that require it (ZeroSSL, Google):
+    /// the key ID and the HMAC key (base64url) from the CA's console.
+    pub eab_kid: Option<String>,
+    pub eab_hmac_key: Option<String>,
+}
+
+fn lets_encrypt() -> String {
+    LETS_ENCRYPT.into()
+}
+
+impl Acme {
+    /// Checks the settings and fills in the domains from `public_url`.
+    pub fn resolve(&mut self, public_url: Option<&str>) -> Result<(), String> {
+        if self.domains.is_empty()
+            && let Some(host) = public_url.and_then(url_host)
+        {
+            self.domains.push(host.to_string());
+        }
+        if self.domains.is_empty() {
+            return Err("[tls.acme]: set domains, or a public_url with a host name".into());
+        }
+        for name in &mut self.domains {
+            *name = name.trim().to_ascii_lowercase();
+            if name.parse::<std::net::IpAddr>().is_ok()
+                || name.is_empty()
+                || name.contains(['/', ':', ' '])
+            {
+                return Err(format!(
+                    "[tls.acme] domains: {name:?} is not a host name (IP addresses don't work)"
+                ));
+            }
+        }
+        if !(self.directory.starts_with("https://") || self.directory.starts_with("http://")) {
+            return Err(format!(
+                "[tls.acme] directory: {:?} is not a URL",
+                self.directory
+            ));
+        }
+        let set = |value: &Option<String>| value.as_deref().is_some_and(|v| !v.trim().is_empty());
+        if (self.eab_kid.is_some() || self.eab_hmac_key.is_some())
+            && !(set(&self.eab_kid) && set(&self.eab_hmac_key))
+        {
+            return Err("[tls.acme]: set both eab_kid and eab_hmac_key, or neither".into());
+        }
+        Ok(())
+    }
+}
+
+/// The host of an http(s) URL, if it is a name (not an IP address).
+fn url_host(url: &str) -> Option<&str> {
+    let rest = url.split_once("://")?.1;
+    let host = rest.split(['/', ':', '?', '#']).next()?;
+    (!host.is_empty() && !host.starts_with('[') && host.parse::<std::net::IpAddr>().is_err())
+        .then_some(host)
 }
 
 impl Tls {
     /// Certificate and key files: the configured ones, or the self-signed
-    /// pair below `data_dir`.
+    /// pair below `data_dir`. `None` with ACME, which keeps its own.
     pub fn files(&self, data_dir: &Path) -> Option<(PathBuf, PathBuf)> {
+        if self.acme.is_some() {
+            return None;
+        }
         match (&self.cert, &self.key, self.self_signed) {
             (Some(cert), Some(key), false) => Some((cert.clone(), key.clone())),
             (None, None, true) => {
@@ -230,11 +312,31 @@ impl Bootstrap {
             });
         }
         if let Some(tls) = &mut bootstrap.tls {
-            if tls.files(&bootstrap.data_dir).is_none() {
-                return Err(BootstrapError::Invalid {
-                    path: path.into(),
-                    message: "[tls]: set cert and key, or self_signed = true".into(),
-                });
+            let invalid = |message: String| BootstrapError::Invalid {
+                path: path.into(),
+                message,
+            };
+            let acme_only = tls.cert.is_none() && tls.key.is_none() && !tls.self_signed;
+            let has_files = tls.files(&bootstrap.data_dir).is_some();
+            match &mut tls.acme {
+                Some(_) if !acme_only => {
+                    return Err(invalid(
+                        "[tls]: [tls.acme] replaces cert, key and self_signed; remove them".into(),
+                    ));
+                }
+                Some(acme) => {
+                    acme.resolve(bootstrap.public_url.as_deref())
+                        .map_err(invalid)?;
+                    if let Some(ca) = &mut acme.ca {
+                        *ca = base.join(&*ca);
+                    }
+                }
+                None if !has_files => {
+                    return Err(invalid(
+                        "[tls]: set cert and key, self_signed = true, or [tls.acme]".into(),
+                    ));
+                }
+                None => {}
             }
             for file in [&mut tls.cert, &mut tls.key].into_iter().flatten() {
                 *file = base.join(&*file);
@@ -297,6 +399,39 @@ mod tests {
         );
         std::fs::write(&path, "[tls]\ncert = \"c.pem\"\n").unwrap();
         assert!(Bootstrap::load(&path).is_err());
+
+        // ACME: the domain from public_url, the default CA.
+        std::fs::write(
+            &path,
+            "public_url = \"https://Watcher.Example.com:8443/\"\n[tls.acme]\nca = \"root.pem\"\n",
+        )
+        .unwrap();
+        let b = Bootstrap::load(&path).unwrap();
+        let tls = b.tls.unwrap();
+        let acme = tls.acme.as_ref().unwrap();
+        assert_eq!(acme.domains, ["watcher.example.com"]);
+        assert_eq!(acme.directory, LETS_ENCRYPT);
+        assert_eq!(acme.ca.as_deref(), Some(dir.join("root.pem").as_path()));
+        assert_eq!(tls.files(&b.data_dir), None);
+        let err = |text: &str| {
+            std::fs::write(&path, text).unwrap();
+            Bootstrap::load(&path).unwrap_err().to_string()
+        };
+        assert!(err("[tls.acme]\n").contains("set domains"));
+        assert!(err("public_url = \"https://10.0.0.1/\"\n[tls.acme]\n").contains("set domains"));
+        assert!(err("[tls.acme]\ndomains = [\"10.0.0.1\"]\n").contains("not a host name"));
+        assert!(
+            err("[tls]\nself_signed = true\n[tls.acme]\ndomains = [\"w.example\"]\n")
+                .contains("replaces")
+        );
+        assert!(
+            err("[tls.acme]\ndomains = [\"w.example\"]\neab_kid = \"k\"\n")
+                .contains("eab_hmac_key")
+        );
+        assert!(
+            err("[tls.acme]\ndomains = [\"w.example\"]\neab_kid = \"k\"\neab_hmac_key = \"\"\n")
+                .contains("eab_hmac_key")
+        );
 
         std::fs::write(&path, "rol = \"hub\"\n").unwrap();
         let err = Bootstrap::load(&path).unwrap_err().to_string();

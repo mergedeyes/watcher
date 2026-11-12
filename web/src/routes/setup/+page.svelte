@@ -40,9 +40,12 @@
 	let dbResult = $state<string | null>(null);
 	let listen = $state('127.0.0.1:8080');
 	let publicUrl = $state('');
-	let tlsMode = $state<'none' | 'self' | 'files'>('none');
+	let tlsMode = $state<'none' | 'self' | 'files' | 'acme'>('none');
 	let cert = $state('');
 	let key = $state('');
+	let acmeDomains = $state('');
+	let acmeEmail = $state('');
+	let acmeDirectory = $state('');
 	let adminName = $state('admin');
 	let adminPassword = $state('');
 	let adminConfirm = $state('');
@@ -151,6 +154,18 @@
 		copied = true;
 	}
 
+	/** The first name the ACME certificate is for: the domains, else the public URL's host. */
+	function acmeHost(): string {
+		const first = list(acmeDomains)[0];
+		if (first) return first;
+		try {
+			const host = new URL(publicUrl.trim()).hostname;
+			return /^[\d.]+$|^\[/.test(host) ? '' : host;
+		} catch {
+			return '';
+		}
+	}
+
 	function list(text: string) {
 		return text
 			.split(',')
@@ -198,7 +213,16 @@
 					? { self_signed: true }
 					: tlsMode === 'files'
 						? { cert: cert.trim(), key: key.trim() }
-						: null,
+						: tlsMode === 'acme'
+							? {
+									acme: {
+										domains: list(acmeDomains),
+										email: acmeEmail.trim() || null,
+										// Left out, the server uses Let's Encrypt.
+										...(acmeDirectory.trim() ? { directory: acmeDirectory.trim() } : {})
+									}
+								}
+							: null,
 			database_url: database ? databaseUrl.trim() : null,
 			admin: database
 				? {
@@ -233,6 +257,7 @@
 				return null;
 			case 'Web Access':
 				if (tlsMode === 'files' && (!cert.trim() || !key.trim())) return 'Certificate and key paths required.';
+				if (tlsMode === 'acme' && !acmeHost()) return 'ACME: domains, or a public URL with a host name, required.';
 				return null;
 			default:
 				return null;
@@ -266,7 +291,11 @@
 			}
 			const [host, port] = splitAddr(r.listen);
 			const sameHost = ['0.0.0.0', '[::]', '::'].includes(host) ? location.hostname : host;
-			const url = `${r.scheme}://${sameHost.includes(':') && !sameHost.startsWith('[') ? `[${sameHost}]` : sameHost}:${port}/`;
+			// The ACME certificate is for its domain, not for the listen address.
+			const url =
+				tlsMode === 'acme'
+					? `https://${acmeHost()}${port === '443' ? '' : `:${port}`}/`
+					: `${r.scheme}://${sameHost.includes(':') && !sameHost.startsWith('[') ? `[${sameHost}]` : sameHost}:${port}/`;
 			done = { url, recovery: r.recovery_codes ?? [] };
 			// The server restarts with the new config; continue there, unless
 			// there are recovery codes to save first.
@@ -398,12 +427,30 @@
 							<option value="none">none (HTTP, or a TLS reverse proxy)</option>
 							<option value="self">self-signed certificate</option>
 							<option value="files">certificate files</option>
+							<option value="acme">ACME (Let's Encrypt)</option>
 						</select>
 						{#if tlsMode === 'files'}
 							<label for="cert">Certificate</label>
 							<input id="cert" class="mono" placeholder="/etc/ssl/watcher/fullchain.pem" bind:value={cert} />
 							<label for="key">Key</label>
 							<input id="key" class="mono" placeholder="/etc/ssl/watcher/privkey.pem" bind:value={key} />
+						{/if}
+						{#if tlsMode === 'acme'}
+							<label for="acme-domains">Domains</label>
+							<div>
+								<input id="acme-domains" placeholder={acmeHost() || 'watcher.example.com'} bind:value={acmeDomains} />
+								<div class="help">comma-separated; default: the public URL's host. The CA connects to port 443 of each.</div>
+							</div>
+							<label for="acme-email">Email</label>
+							<div>
+								<input id="acme-email" placeholder="ops@example.com" bind:value={acmeEmail} />
+								<div class="help">the CA writes here about expiring certificates</div>
+							</div>
+							<label for="acme-dir">Directory</label>
+							<div>
+								<input id="acme-dir" class="mono" placeholder="Let's Encrypt" bind:value={acmeDirectory} />
+								<div class="help">ACME directory URL of another CA, e.g. an internal step-ca</div>
+							</div>
 						{/if}
 					</div>
 				{:else if STEPS[step] === 'Admin'}

@@ -7,7 +7,9 @@ use std::io::{BufRead, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use watcher_config::{Bootstrap, Contact, InstanceRole, Smtp, SmtpTls, Tls, load_dir};
+use watcher_config::{
+    Acme, Bootstrap, Contact, InstanceRole, LETS_ENCRYPT, Smtp, SmtpTls, Tls, load_dir,
+};
 use watcher_exec::ssh::Sealer;
 use watcher_hub::auth::{self, hash_password};
 use watcher_hub::totp;
@@ -447,17 +449,27 @@ impl Plan {
         {
             bail!("public_url: must start with http:// or https://");
         }
+        // ACME with its domains filled in from public_url, as watcher run
+        // would; written out so watcher.toml says which names it covers.
+        let mut acme = None;
         if let Some(tls) = &a.tls {
-            match (&tls.cert, &tls.key, tls.self_signed) {
-                (Some(cert), Some(key), false) => {
+            match (&tls.cert, &tls.key, tls.self_signed, &tls.acme) {
+                (Some(cert), Some(key), false, None) => {
                     for (what, file) in [("cert", cert), ("key", key)] {
                         if !file.is_file() {
                             bail!("tls {what}: no file {}", file.display());
                         }
                     }
                 }
-                (None, None, true) => {}
-                _ => bail!("tls: set cert and key, or self_signed = true"),
+                (None, None, true, None) => {}
+                (None, None, false, Some(settings)) => {
+                    let mut settings = settings.clone();
+                    settings
+                        .resolve(a.public_url.as_deref())
+                        .map_err(anyhow::Error::msg)?;
+                    acme = Some(settings);
+                }
+                _ => bail!("tls: set cert and key, self_signed = true, or acme"),
             }
         }
         if let Some(name) = &a.instance_name
@@ -520,7 +532,9 @@ impl Plan {
                 q(tz)
             );
         }
-        if let Some(tls) = &a.tls {
+        if let Some(acme) = &acme {
+            toml += &acme_section(acme);
+        } else if let Some(tls) = &a.tls {
             toml += "\n[tls]\n";
             match (&tls.cert, &tls.key) {
                 (Some(cert), Some(key)) => {
@@ -615,6 +629,31 @@ impl Plan {
             data_dir: dir.join("data"),
         })
     }
+}
+
+/// `[tls.acme]` for watcher.toml; the directory only if it isn't the
+/// default.
+fn acme_section(acme: &Acme) -> String {
+    let domains: Vec<String> = acme.domains.iter().map(|d| q(d)).collect();
+    let mut out = format!(
+        "\n# HTTPS certificates from an ACME CA. It connects to port 443 of each\n\
+         # domain to check it, which has to reach this server.\n\
+         [tls.acme]\ndomains = [{}]\n",
+        domains.join(", ")
+    );
+    if let Some(email) = &acme.email {
+        out += &format!("email = {}\n", q(email));
+    }
+    if acme.directory != LETS_ENCRYPT {
+        out += &format!("directory = {}\n", q(&acme.directory));
+    }
+    if let Some(ca) = &acme.ca {
+        out += &format!("ca = {}\n", q(&ca.display().to_string()));
+    }
+    if let (Some(kid), Some(key)) = (&acme.eab_kid, &acme.eab_hmac_key) {
+        out += &format!("eab_kid = {}\neab_hmac_key = {}\n", q(kid), q(key));
+    }
+    out
 }
 
 pub(crate) fn admin_password(admin: &Admin) -> Result<String> {
@@ -884,6 +923,42 @@ mod tests {
         assert!(transcript.contains("unknown role: nope"));
         assert!(transcript.contains("unknown time zone \"Mars/Olympus\""));
         assert!(transcript.contains("non-loopback addresses need a database"));
+    }
+
+    #[test]
+    fn writes_acme_settings() {
+        let dir = temp_dir("acme");
+        let answers: Answers = toml::from_str(
+            r#"
+listen = "0.0.0.0:443"
+database_url = "postgres://x"
+public_url = "https://watcher.example.com"
+monitor_localhost = false
+
+[tls.acme]
+email = "ops@example.com"
+"#,
+        )
+        .unwrap();
+        let plan = Plan::new(&answers, &dir).unwrap();
+        let toml = &plan.files[0].contents;
+        assert!(
+            toml.contains("[tls.acme]\ndomains = [\"watcher.example.com\"]\n"),
+            "{toml}"
+        );
+        assert!(!toml.contains("directory"), "the default CA: {toml}");
+        write_file(&plan.files[0].path, toml, true).unwrap();
+        let tls = Bootstrap::load(&plan.files[0].path).unwrap().tls.unwrap();
+        assert_eq!(tls.acme.unwrap().email.as_deref(), Some("ops@example.com"));
+
+        let err = |text: &str| {
+            Plan::new(&toml::from_str(text).unwrap(), &dir)
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(err("[tls.acme]\n").contains("set domains"));
+        assert!(err("[tls]\nself_signed = true\n[tls.acme]\n").contains("or acme"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]
