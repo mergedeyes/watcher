@@ -543,6 +543,12 @@ paths:
               properties:
                 username: { type: string }
                 password: { type: string }
+                code:
+                  type: string
+                  description: >
+                    For users with two-factor authentication: the six-digit
+                    code from their app, or one of their recovery codes.
+                    Each code works once.
       responses:
         "200":
           description: Logged in
@@ -552,14 +558,103 @@ paths:
                 type: object
                 properties:
                   user: { $ref: "#/components/schemas/User" }
-        "401": { $ref: "#/components/responses/Error" }
+        "401":
+          description: >
+            Wrong username or password; or the password was right and
+            `totp_required` asks for a (valid) `code`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  totp_required: { type: boolean }
         "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
 
   /auth/logout:
     post:
       summary: End the session
       responses:
         "204": { description: Logged out }
+
+  /auth/totp:
+    get:
+      summary: The current user's two-factor authentication
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: { type: boolean }
+                  recovery_codes: { type: integer, description: Recovery codes left }
+    put:
+      summary: Turn on two-factor authentication
+      description: >
+        Takes the secret from `POST /auth/totp/setup` and a code the app
+        made from it, which shows the app is set up right. The secret is
+        stored sealed with `secret.key`. Returns ten recovery codes, shown
+        only in this response.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [secret, code]
+              properties:
+                secret: { type: string, description: Base32 }
+                code: { type: string, example: "123456" }
+      responses:
+        "200": { $ref: "#/components/responses/RecoveryCodes" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    delete:
+      summary: Turn off two-factor authentication
+      description: Needs a code from the app or a recovery code.
+      requestBody: { $ref: "#/components/requestBodies/Code" }
+      responses:
+        "204": { description: Turned off }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+
+  /auth/totp/setup:
+    post:
+      summary: A new secret for an authenticator app
+      description: >
+        Nothing is stored yet: `PUT /auth/totp` with a code turns
+        two-factor on. The issuer in `uri` is `instance_name`, or Watcher.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret: { type: string, description: "Base32, to type into the app" }
+                  uri: { type: string, example: "otpauth://totp/Watcher:alice?secret=...&issuer=Watcher&algorithm=SHA1&digits=6&period=30" }
+                  qr: { type: string, description: "`uri` as a QR code, an SVG image" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /auth/totp/recovery:
+    post:
+      summary: New recovery codes
+      description: >
+        Needs a code from the app or a recovery code. The old recovery
+        codes stop working.
+      requestBody: { $ref: "#/components/requestBodies/Code" }
+      responses:
+        "200": { $ref: "#/components/responses/RecoveryCodes" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
 
   /tokens:
     get:
@@ -639,6 +734,12 @@ paths:
                 password: { type: string, minLength: 10 }
                 admin: { type: boolean }
                 disabled: { type: boolean }
+                totp:
+                  type: boolean
+                  description: >
+                    `false` turns two-factor authentication off, for a user
+                    who lost their device. Users turn it on themselves
+                    (`PUT /auth/totp`).
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
         "403": { $ref: "#/components/responses/Error" }
@@ -1037,6 +1138,15 @@ components:
     lease: { name: X-Watcher-Lease, in: header, description: "Edit leases held, comma-separated (config/locks)", schema: { type: string } }
 
   requestBodies:
+    Code:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [code]
+            properties:
+              code: { type: string, description: A code from the app, or a recovery code }
     Changes:
       required: true
       content:
@@ -1052,6 +1162,14 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
+    RecoveryCodes:
+      description: New recovery codes, shown only now
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              recovery_codes: { type: array, items: { type: string, example: k7mqa-x3vbn } }
     Conflict:
       description: A file changed since it was read
       content:
@@ -1322,6 +1440,7 @@ components:
         disabled: { type: boolean }
         created: { $ref: "#/components/schemas/Time" }
         last_login: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+        totp: { type: boolean, description: Two-factor authentication is on }
     ApiToken:
       type: object
       properties:

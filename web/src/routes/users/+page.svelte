@@ -51,6 +51,11 @@
 		if (pw) void act(`Password of ${u.username} set`, () => api.updateUser(u.username, { password: pw }));
 	}
 
+	function resetTotp(u: User) {
+		if (confirm(`Turn off two-factor for ${u.username}? The password alone logs in until they set it up again.`))
+			void act(`Two-factor of ${u.username} off`, () => api.updateUser(u.username, { totp: false }));
+	}
+
 	function remove(u: User) {
 		if (confirm(`Delete user ${u.username} with their tokens?`)) void act(`User ${u.username} deleted`, () => api.deleteUser(u.username));
 	}
@@ -83,6 +88,7 @@
 						<th>Username</th>
 						<th>Role</th>
 						<th>Status</th>
+						<th>2FA</th>
 						<th class="hide-narrow">Created</th>
 						<th class="hide-narrow">Last Login</th>
 						<th></th>
@@ -95,9 +101,10 @@
 							<td class="nowrap">{u.username}{#if self}<span class="muted"> (you)</span>{/if}</td>
 							<td>{u.admin ? 'admin' : 'user'}</td>
 							<td>{#if u.disabled}<span class="tag off">DISABLED</span>{:else}active{/if}</td>
+							<td>{#if u.totp}TOTP{:else}<span class="muted">off</span>{/if}</td>
 							<td class="nowrap hide-narrow">{datetime(u.created)}</td>
 							<td class="nowrap hide-narrow">{u.last_login ? datetime(u.last_login) : 'never'}</td>
-							<td class="nowrap actions">
+							<td class="actions">
 								<button type="button" class="btn small" onclick={() => setPassword(u)}>Password</button>
 								{#if !self}
 									<button
@@ -113,6 +120,7 @@
 											act(`${u.username} ${u.disabled ? 'enabled' : 'disabled'}`, () => api.updateUser(u.username, { disabled: !u.disabled }))}
 										>{u.disabled ? 'Enable' : 'Disable'}</button
 									>
+									{#if u.totp}<button type="button" class="btn small" onclick={() => resetTotp(u)}>Reset 2FA</button>{/if}
 									<button type="button" class="btn small danger" onclick={() => remove(u)}>Delete</button>
 								{/if}
 							</td>
@@ -135,6 +143,11 @@
 
 	.actions {
 		text-align: right;
+	}
+
+	/* The buttons wrap when the window is narrow; keep wrapped rows apart. */
+	.actions .btn {
+		margin: 1px 0;
 	}
 
 	.btn.small {

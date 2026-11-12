@@ -73,6 +73,11 @@ pub enum UserCommand {
     List,
     /// Delete a user account with its sessions and API tokens.
     Remove { name: String },
+    /// Turn off two-factor authentication (TOTP) for a user.
+    ///
+    /// For a user who lost their device and their recovery codes. They can
+    /// turn it on again on their Account page.
+    TotpOff { name: String },
 }
 
 #[derive(clap::Subcommand)]
@@ -134,6 +139,9 @@ pub async fn user(command: UserCommand, db: DbArgs) -> Result<ExitCode> {
                 if u.disabled {
                     flags.push("disabled");
                 }
+                if u.totp {
+                    flags.push("totp");
+                }
                 let last = u.last_login.map_or("never logged in".to_string(), |t| {
                     format!("last login {}", humantime::format_rfc3339_seconds(t))
                 });
@@ -146,6 +154,12 @@ pub async fn user(command: UserCommand, db: DbArgs) -> Result<ExitCode> {
             }
             println!("removed user {name}");
         }
+        UserCommand::TotpOff { name } => {
+            if !store.disable_totp(&name).await? {
+                bail!("no user {name:?}");
+            }
+            println!("two-factor authentication is off for {name}; the password alone logs in");
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -157,7 +171,7 @@ pub async fn token(command: TokenCommand, db: DbArgs) -> Result<ExitCode> {
         let store = &store;
         async move {
             match store.login_user(&name).await? {
-                Some((user, _)) => Ok(user),
+                Some(login) => Ok(login.user),
                 None => bail!("no user {name:?}"),
             }
         }

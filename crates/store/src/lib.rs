@@ -15,7 +15,7 @@ mod ssh;
 mod sync;
 mod write;
 
-pub use auth::{ApiToken, TokenRef, User};
+pub use auth::{ApiToken, Login, TokenRef, User};
 pub use ingest::{Record, ingest, ingest_with};
 pub use notifications::{NotificationFilter, SentNotification};
 pub use ops::{Downtime, Flag, FlagKind, OpsEvent};

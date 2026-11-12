@@ -38,7 +38,7 @@ impl StoreVault {
     }
 
     /// The sealer; with `create`, `secret.key` is made if missing.
-    fn sealer(&self, create: bool) -> Result<Arc<Sealer>, String> {
+    pub(crate) fn sealer(&self, create: bool) -> Result<Arc<Sealer>, String> {
         let mut cached = self.sealer.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(sealer) = &*cached {
             return Ok(sealer.clone());

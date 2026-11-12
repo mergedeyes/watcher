@@ -5,6 +5,7 @@
 
 use crate::Hub;
 use crate::api::ApiError;
+use crate::totp;
 use argon2::Argon2;
 use argon2::password_hash::phc::PasswordHash;
 use argon2::password_hash::{PasswordHasher, PasswordVerifier};
@@ -21,7 +22,8 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use watcher_store::{ApiToken, TokenRef, User};
+use watcher_exec::ssh::Sealer;
+use watcher_store::{ApiToken, Store, TokenRef, User};
 
 pub const SESSION_COOKIE: &str = "watcher_session";
 /// Idle timeout of a session; every use extends it.
@@ -228,6 +230,15 @@ pub async fn status(
 pub struct LoginBody {
     username: String,
     password: String,
+    /// An app code or a recovery code, for users with two-factor on.
+    #[serde(default)]
+    code: Option<String>,
+}
+
+/// 401 that asks for the second factor: the password was right.
+fn code_required(message: &str) -> Response {
+    let body = json!({ "error": message, "totp_required": true });
+    (StatusCode::UNAUTHORIZED, Json(body)).into_response()
 }
 
 pub async fn login(
@@ -251,7 +262,7 @@ pub async fn login(
     // time doesn't reveal which usernames exist.
     static DUMMY: OnceLock<String> = OnceLock::new();
     let hash = match &found {
-        Some((user, hash)) if !user.disabled => hash.clone(),
+        Some(login) if !login.user.disabled => login.password_hash.clone(),
         _ => DUMMY
             .get_or_init(|| hash_password("not a real password").unwrap_or_default())
             .clone(),
@@ -260,14 +271,27 @@ pub async fn login(
     let valid = tokio::task::spawn_blocking(move || verify_password(&password, &hash))
         .await
         .unwrap_or(false);
-    let user = match found {
-        Some((user, _)) if valid && !user.disabled => user,
+    let login = match found {
+        Some(login) if valid && !login.user.disabled => login,
         _ => {
             hub.limiter.fail(&body.username);
             tracing::info!("failed login for {:?}", body.username);
             return Err(ApiError::Unauthorized);
         }
     };
+    let user = login.user;
+    if let Some(sealed) = &login.totp_sealed {
+        let code = body.code.as_deref().map(str::trim).unwrap_or_default();
+        // A missing code is the first step of a login, not a failure.
+        if code.is_empty() {
+            return Ok(code_required("two-factor code required"));
+        }
+        if !use_code(&hub, &store, user.id, sealed, code).await? {
+            hub.limiter.fail(&body.username);
+            tracing::info!("wrong two-factor code for {:?}", body.username);
+            return Ok(code_required("invalid two-factor code"));
+        }
+    }
     hub.limiter.succeed(&body.username);
 
     let (session, hash) = new_secret("");
@@ -355,6 +379,193 @@ pub async fn delete_token(
     }
 }
 
+/// The label TOTP secrets are sealed with: a secret opens only for its user.
+fn totp_label(user_id: i32) -> String {
+    format!("users/{user_id}/totp")
+}
+
+/// The server's `secret.key`, which seals TOTP secrets as it seals SSH
+/// secrets. With `create`, it is made if missing.
+fn sealer(hub: &Hub, create: bool) -> Result<Arc<Sealer>, ApiError> {
+    let vault = hub
+        .ssh
+        .get()
+        .and_then(|access| access.vault.as_deref())
+        .ok_or_else(|| {
+            ApiError::Unavailable(
+                "two-factor authentication needs watcher.toml: its data_dir holds secret.key"
+                    .into(),
+            )
+        })?;
+    vault.sealer(create).map_err(|e| {
+        tracing::warn!("two-factor authentication: {e}");
+        ApiError::Unavailable("secret.key can't be read; see the server log".into())
+    })
+}
+
+/// Checks an app code or a recovery code of a user with two-factor on, and
+/// uses it up: each code works once.
+async fn use_code(
+    hub: &Hub,
+    store: &Store,
+    user_id: i32,
+    sealed: &[u8],
+    code: &str,
+) -> Result<bool, ApiError> {
+    if !totp::is_code(code) {
+        return Ok(store
+            .use_recovery_code(user_id, &totp::recovery_hash(code))
+            .await?);
+    }
+    let secret = sealer(hub, false)?
+        .open_bytes(&totp_label(user_id), sealed)
+        .map_err(|e| {
+            tracing::warn!("two-factor secret of user {user_id}: {e}");
+            ApiError::Unavailable("the two-factor secret can't be read; see the server log".into())
+        })?;
+    match totp::verify(&secret, code, totp::now()) {
+        Some(step) => Ok(store.use_totp_step(user_id, step as i64).await?),
+        None => Ok(false),
+    }
+}
+
+/// Like [`use_code`] for a logged-in user, counted like failed logins so
+/// that a stolen session can't guess its way to turning two-factor off.
+async fn confirm_code(hub: &Hub, store: &Store, user: &User, code: &str) -> Result<(), ApiError> {
+    if let Err(wait) = hub.limiter.check(&user.username) {
+        return Err(ApiError::TooManyRequests(format!(
+            "too many wrong codes; try again in {}s",
+            wait.as_secs() + 1
+        )));
+    }
+    let sealed = store
+        .totp_sealed(user.id)
+        .await?
+        .ok_or_else(|| ApiError::Conflict("two-factor authentication is off".into()))?;
+    match use_code(hub, store, user.id, &sealed, code.trim()).await? {
+        true => Ok(()),
+        false => {
+            hub.limiter.fail(&user.username);
+            Err(ApiError::BadRequest("invalid code".into()))
+        }
+    }
+}
+
+/// New recovery codes and the hashes to store for them.
+fn recovery_codes() -> (Vec<String>, Vec<Vec<u8>>) {
+    let codes = totp::new_recovery_codes();
+    let hashes = codes.iter().map(|c| totp::recovery_hash(c)).collect();
+    (codes, hashes)
+}
+
+/// Whether the current user has two-factor on, and how many recovery
+/// codes are left.
+pub async fn totp_status(
+    State(hub): State<Arc<Hub>>,
+    user: Option<Extension<CurrentUser>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = current(user)?;
+    let store = hub.store.as_deref().ok_or(ApiError::NoDatabase)?;
+    let enabled = store.totp_sealed(user.id).await?.is_some();
+    let left = store.recovery_codes_left(user.id).await?;
+    Ok(Json(json!({ "enabled": enabled, "recovery_codes": left })))
+}
+
+/// A new secret for the current user's authenticator app, with its QR
+/// code. Nothing is stored until a code from the app confirms it.
+pub async fn totp_setup(
+    State(hub): State<Arc<Hub>>,
+    user: Option<Extension<CurrentUser>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = current(user)?;
+    if user.totp {
+        return Err(ApiError::Conflict(
+            "two-factor authentication is on already".into(),
+        ));
+    }
+    // Fail now rather than after the user scanned the code.
+    sealer(&hub, true)?;
+    let secret = totp::new_secret();
+    let issuer = hub
+        .instance
+        .get()
+        .filter(|name| !name.is_empty())
+        .map_or("Watcher", String::as_str);
+    let uri = totp::uri(issuer, &user.username, &secret);
+    let qr = totp::qr_svg(&uri).map_err(ApiError::Internal)?;
+    Ok(Json(
+        json!({ "secret": totp::encode(&secret), "uri": uri, "qr": qr }),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TotpEnable {
+    secret: String,
+    code: String,
+}
+
+/// Turns two-factor on with the secret from [`totp_setup`], once a code
+/// from the app shows it was set up right. Returns the recovery codes,
+/// shown only here.
+pub async fn totp_enable(
+    State(hub): State<Arc<Hub>>,
+    user: Option<Extension<CurrentUser>>,
+    Json(body): Json<TotpEnable>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = current(user)?;
+    let store = hub.store.as_deref().ok_or(ApiError::NoDatabase)?;
+    let secret = totp::decode(&body.secret)
+        .ok_or_else(|| ApiError::BadRequest("secret: not a base32 TOTP secret".into()))?;
+    let step = totp::verify(&secret, &body.code, totp::now()).ok_or_else(|| {
+        ApiError::BadRequest("invalid code; is the clock of the device right?".into())
+    })?;
+    let sealed = sealer(&hub, true)?
+        .seal_bytes(&totp_label(user.id), &secret)
+        .map_err(ApiError::Internal)?;
+    let (codes, hashes) = recovery_codes();
+    store
+        .enable_totp(user.id, &sealed, step as i64, &hashes)
+        .await?;
+    tracing::info!("{}: turned on two-factor authentication", user.username);
+    Ok(Json(json!({ "recovery_codes": codes })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodeBody {
+    code: String,
+}
+
+/// Turns the current user's two-factor off; needs a current code.
+pub async fn totp_disable(
+    State(hub): State<Arc<Hub>>,
+    user: Option<Extension<CurrentUser>>,
+    Json(body): Json<CodeBody>,
+) -> Result<StatusCode, ApiError> {
+    let user = current(user)?;
+    let store = hub.store.as_deref().ok_or(ApiError::NoDatabase)?;
+    confirm_code(&hub, store, &user, &body.code).await?;
+    store.disable_totp(&user.username).await?;
+    tracing::info!("{}: turned off two-factor authentication", user.username);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Replaces the current user's recovery codes; needs a current code.
+pub async fn totp_recovery(
+    State(hub): State<Arc<Hub>>,
+    user: Option<Extension<CurrentUser>>,
+    Json(body): Json<CodeBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = current(user)?;
+    let store = hub.store.as_deref().ok_or(ApiError::NoDatabase)?;
+    confirm_code(&hub, store, &user, &body.code).await?;
+    let (codes, hashes) = recovery_codes();
+    store.replace_recovery_codes(user.id, &hashes).await?;
+    tracing::info!("{}: made new recovery codes", user.username);
+    Ok(Json(json!({ "recovery_codes": codes })))
+}
+
 /// Admins only; without login, anyone (the server is on loopback then).
 pub(crate) fn admin_user(
     hub: &Hub,
@@ -428,6 +639,9 @@ pub struct UserChange {
     password: Option<String>,
     admin: Option<bool>,
     disabled: Option<bool>,
+    /// `false` turns two-factor off (a lost phone). Users turn it on
+    /// themselves, with their app.
+    totp: Option<bool>,
 }
 
 /// Changes a user: admins anything, users their own password.
@@ -441,7 +655,7 @@ pub async fn update_user(
     let own = user
         .as_ref()
         .is_some_and(|Extension(CurrentUser(u))| u.username.eq_ignore_ascii_case(&name));
-    let only_password = body.admin.is_none() && body.disabled.is_none();
+    let only_password = body.admin.is_none() && body.disabled.is_none() && body.totp.is_none();
     let by = match (own && only_password, admin_user(&hub, &user)) {
         (true, _) => name.clone(),
         (false, Ok(by)) => by,
@@ -450,6 +664,11 @@ pub async fn update_user(
     if own && body.disabled == Some(true) {
         return Err(ApiError::BadRequest("you can't disable yourself".into()));
     }
+    if body.totp == Some(true) {
+        return Err(ApiError::BadRequest(
+            "users turn on two-factor authentication themselves, on their Account page".into(),
+        ));
+    }
     let not_found = || ApiError::NotFound(format!("no user {name:?}"));
     if let Some(password) = &body.password {
         check_password(password)?;
@@ -457,6 +676,9 @@ pub async fn update_user(
         if !store.set_password(&name, &hash).await? {
             return Err(not_found());
         }
+    }
+    if body.totp == Some(false) && !store.disable_totp(&name).await? {
+        return Err(not_found());
     }
     let updated = store
         .update_user(&name, body.admin, body.disabled)

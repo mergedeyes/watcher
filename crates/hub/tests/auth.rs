@@ -523,3 +523,211 @@ async fn ssh_secrets_and_host_keys() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     std::fs::remove_dir_all(&data_dir).unwrap();
 }
+
+#[tokio::test]
+async fn two_factor_login() {
+    use watcher_exec::ssh::Pool;
+    use watcher_hub::{StoreVault, totp};
+
+    let Some((url, _)) = database("totp").await else {
+        eprintln!("skipped: set WATCHER_TEST_POSTGRES_URL");
+        return;
+    };
+    let store = Arc::new(Store::connect(&url).await.unwrap());
+    store
+        .create_user("carol", &hash_password("carol's password").unwrap(), false)
+        .await
+        .unwrap();
+    let admin = store
+        .create_user("root", &hash_password("root's password").unwrap(), true)
+        .await
+        .unwrap();
+    let (admin_token, admin_hash) = new_api_token();
+    store
+        .create_token(admin.id, "admin", &admin_hash)
+        .await
+        .unwrap();
+    let admin_bearer = format!("Bearer {admin_token}");
+
+    let (control, _rx) = mpsc::channel(1);
+    let auth = AuthSettings {
+        required: true,
+        secure_cookies: false,
+    };
+    let hub = Hub::new(
+        Arc::new(Config::default()),
+        HashMap::new(),
+        control,
+        Some(store.clone()),
+        auth,
+    );
+    let mut c = Client { hub, cookie: None };
+    let login = |code: Option<&str>| {
+        let mut body = json!({"username": "carol", "password": "carol's password"});
+        if let Some(code) = code {
+            body["code"] = json!(code);
+        }
+        Some(body)
+    };
+    let (status, _) = c.call("POST", "/api/v1/auth/login", login(None), &[]).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Without watcher.toml there is no secret.key to seal the secret with.
+    let (status, err) = c.call("POST", "/api/v1/auth/totp/setup", None, &[]).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{err}");
+    let data_dir = std::env::temp_dir().join(format!("watcher-hub-totp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&data_dir);
+    let vault = Arc::new(StoreVault::new(store.clone(), data_dir.clone()));
+    c.hub
+        .enable_ssh(Arc::new(Pool::new(vault.clone())), Some(vault));
+
+    // Setting up: a secret and its QR code, stored once a code confirms it.
+    let (_, st) = c.call("GET", "/api/v1/auth/totp", None, &[]).await;
+    assert_eq!(st, json!({"enabled": false, "recovery_codes": 0}));
+    let (status, setup) = c.call("POST", "/api/v1/auth/totp/setup", None, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{setup}");
+    assert!(data_dir.join("secret.key").exists());
+    assert!(
+        setup["uri"]
+            .as_str()
+            .unwrap()
+            .starts_with("otpauth://totp/Watcher:carol?secret=")
+    );
+    assert!(setup["qr"].as_str().unwrap().contains("<svg"));
+    let secret_text = setup["secret"].as_str().unwrap().to_string();
+    let secret = totp::decode(&secret_text).unwrap();
+    let now = totp::now();
+    let code = totp::code(&secret, now);
+    let wrong = format!("{:06}", (code.parse::<u32>().unwrap() + 1) % 1_000_000);
+    let enable = |code: &str| Some(json!({"secret": secret_text, "code": code}));
+    let (status, _) = c
+        .call("PUT", "/api/v1/auth/totp", enable(&wrong), &[])
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, on) = c.call("PUT", "/api/v1/auth/totp", enable(&code), &[]).await;
+    assert_eq!(status, StatusCode::OK, "{on}");
+    let recovery: Vec<String> = serde_json::from_value(on["recovery_codes"].clone()).unwrap();
+    assert_eq!(recovery.len(), 10);
+    let (status, _) = c.call("PUT", "/api/v1/auth/totp", enable(&code), &[]).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (_, st) = c.call("GET", "/api/v1/auth/status", None, &[]).await;
+    assert_eq!(st["user"]["totp"], true);
+
+    // Logging in: the password first, then a code; each code works once.
+    c.call("POST", "/api/v1/auth/logout", None, &[]).await;
+    let (status, body) = c.call("POST", "/api/v1/auth/login", login(None), &[]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["totp_required"], true, "{body}");
+    assert!(c.cookie.is_none());
+    let (status, body) = c
+        .call("POST", "/api/v1/auth/login", login(Some(&code)), &[])
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "the code that turned it on"
+    );
+    assert_eq!(body["error"], "invalid two-factor code");
+    let next = totp::code(&secret, now + 1);
+    let spaced = format!("{} {}", &next[..3], &next[3..]);
+    let (status, body) = c
+        .call("POST", "/api/v1/auth/login", login(Some(&spaced)), &[])
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(c.cookie.is_some());
+
+    c.call("POST", "/api/v1/auth/logout", None, &[]).await;
+    let upper = recovery[0].to_uppercase();
+    let (status, _) = c
+        .call("POST", "/api/v1/auth/login", login(Some(&upper)), &[])
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    c.call("POST", "/api/v1/auth/logout", None, &[]).await;
+    let (status, _) = c
+        .call("POST", "/api/v1/auth/login", login(Some(&recovery[0])), &[])
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "a used recovery code");
+    let (status, _) = c
+        .call("POST", "/api/v1/auth/login", login(Some(&recovery[1])), &[])
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, st) = c.call("GET", "/api/v1/auth/totp", None, &[]).await;
+    assert_eq!(st, json!({"enabled": true, "recovery_codes": 8}));
+
+    // New recovery codes replace the old ones; both need a code.
+    let code_body = |code: &str| Some(json!({ "code": code }));
+    let (status, _) = c
+        .call("POST", "/api/v1/auth/totp/recovery", code_body("nope"), &[])
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, fresh) = c
+        .call(
+            "POST",
+            "/api/v1/auth/totp/recovery",
+            code_body(&recovery[2]),
+            &[],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{fresh}");
+    let fresh: Vec<String> = serde_json::from_value(fresh["recovery_codes"].clone()).unwrap();
+    let (status, _) = c
+        .call("DELETE", "/api/v1/auth/totp", code_body(&recovery[3]), &[])
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "an old recovery code");
+
+    // Only admins turn off another user's two-factor, and nobody turns it on.
+    let (status, _) = c
+        .call(
+            "PUT",
+            "/api/v1/users/carol",
+            Some(json!({"totp": false})),
+            &[],
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = c
+        .call(
+            "PUT",
+            "/api/v1/users/carol",
+            Some(json!({"totp": true})),
+            &[("authorization", &admin_bearer)],
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Turning it off with a code: the password alone is enough again.
+    let (status, _) = c
+        .call("DELETE", "/api/v1/auth/totp", code_body(&fresh[0]), &[])
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, st) = c.call("GET", "/api/v1/auth/totp", None, &[]).await;
+    assert_eq!(st, json!({"enabled": false, "recovery_codes": 0}));
+    c.call("POST", "/api/v1/auth/logout", None, &[]).await;
+    let (status, _) = c.call("POST", "/api/v1/auth/login", login(None), &[]).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // A lost phone: an admin turns it off.
+    let (_, setup) = c.call("POST", "/api/v1/auth/totp/setup", None, &[]).await;
+    let secret_text = setup["secret"].as_str().unwrap().to_string();
+    let code = totp::code(&totp::decode(&secret_text).unwrap(), totp::now());
+    let (status, _) = c
+        .call(
+            "PUT",
+            "/api/v1/auth/totp",
+            Some(json!({"secret": secret_text, "code": code})),
+            &[],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, user) = c
+        .call(
+            "PUT",
+            "/api/v1/users/carol",
+            Some(json!({"totp": false})),
+            &[("authorization", &admin_bearer)],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{user}");
+    assert_eq!(user["totp"], false);
+    std::fs::remove_dir_all(&data_dir).unwrap();
+}

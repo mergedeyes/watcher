@@ -6,6 +6,9 @@
 
 	let username = $state('');
 	let password = $state('');
+	/** Two-factor: the password was right, the server wants a code. */
+	let needCode = $state(false);
+	let code = $state('');
 	let error = $state<string | null>(null);
 	let busy = $state(false);
 
@@ -25,19 +28,37 @@
 		busy = true;
 		error = null;
 		try {
-			await api.login(username, password);
+			await api.login(username, password, needCode ? code : undefined);
 			await auth.refresh();
 		} catch (e) {
-			error =
-				e instanceof ApiError && e.status === 401
-					? 'Invalid credentials.'
-					: e instanceof Error
-						? e.message
-						: String(e);
-			password = '';
+			if (e instanceof ApiError && e.status === 401 && e.body.totp_required) {
+				error = needCode ? 'Invalid code.' : null;
+				needCode = true;
+			} else {
+				error =
+					e instanceof ApiError && e.status === 401
+						? 'Invalid credentials.'
+						: e instanceof Error
+							? e.message
+							: String(e);
+				if (!needCode) password = '';
+			}
+			code = '';
 		} finally {
 			busy = false;
 		}
+	}
+
+	function back() {
+		needCode = false;
+		password = '';
+		code = '';
+		error = null;
+	}
+
+	/** Puts the cursor into the field when it appears. */
+	function focus(node: HTMLInputElement) {
+		node.focus();
 	}
 </script>
 
@@ -49,18 +70,35 @@
 			<p class="notice">No users. Create one: <code>watcher user add &lt;name&gt; --admin</code></p>
 		{/if}
 
-		<label>
-			Username
-			<input name="username" autocomplete="username" required bind:value={username} />
-		</label>
-		<label>
-			Password
-			<input name="password" type="password" autocomplete="current-password" required bind:value={password} />
-		</label>
+		{#if needCode}
+			<label>
+				Code
+				<input
+					name="code"
+					autocomplete="one-time-code"
+					autocapitalize="off"
+					spellcheck="false"
+					required
+					bind:value={code}
+					use:focus
+				/>
+				<span class="hint">Authenticator app or recovery code</span>
+			</label>
+		{:else}
+			<label>
+				Username
+				<input name="username" autocomplete="username" required bind:value={username} />
+			</label>
+			<label>
+				Password
+				<input name="password" type="password" autocomplete="current-password" required bind:value={password} />
+			</label>
+		{/if}
 
 		{#if error}<p class="error" role="alert">{error}</p>{/if}
 
-		<button type="submit" class="btn primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+		<button type="submit" class="btn primary" disabled={busy}>{busy ? 'Signing in…' : needCode ? 'Verify' : 'Sign in'}</button>
+		{#if needCode}<button type="button" class="btn" onclick={back}>Back</button>{/if}
 	</form>
 </div>
 
@@ -106,6 +144,10 @@
 	button {
 		margin-top: 4px;
 		padding: 7px;
+	}
+
+	.hint {
+		font-weight: 400;
 	}
 
 	.error {
