@@ -112,8 +112,9 @@ set it, and every alert to the rule that sent it.
 Watcher is in early development. A single instance monitors your
 network today; see [what works today](docs/introduction.md#what-works-today).
 
-Coming next: remote nodes reporting to a central hub, repairing data in
-graphs, and native checks for IBM i, AIX, HMC and MQ.
+Coming next: checks on remote nodes that report to a central hub (nodes
+can already join a hub and stay connected), repairing data in graphs, and
+native checks for IBM i, AIX, HMC and MQ.
 
 ## Getting started
 

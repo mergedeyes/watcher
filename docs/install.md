@@ -48,7 +48,9 @@ metric samples are stored in a compressed hypertable.
 ## Setup
 
 Run the setup in an empty directory, for example `/etc/watcher`. There are
-three ways, and all of them write the same files.
+three ways, and all of them write the same files. For a
+[node](guides/nodes.md) at another site, skip the setup: `watcher node
+join` sets up the machine, see [Add a node](guides/nodes.md#add-a-node).
 
 **In the browser:**
 
@@ -58,10 +60,11 @@ watcher setup --listen 0.0.0.0:8080 # to set up a remote machine
 ```
 
 The log prints a setup token; enter it on the page. The wizard asks for
-the instance name and time zone, the database, web access (listen
-address, public URL, TLS: none, self-signed, certificate files or
-Let's Encrypt), the admin account, notifications and checks for this
-machine, and shows a summary. **Write & Start** writes the files and
+the role (standalone, or a hub that [nodes](guides/nodes.md) connect to;
+a hub needs the database), the instance name and time zone, the
+database, web access (listen address, public URL, TLS: none, self-signed,
+certificate files or Let's Encrypt), the admin account, notifications and
+checks for this machine, and shows a summary. **Write & Start** writes the files and
 starts Watcher.
 
 For the admin account you can turn on
