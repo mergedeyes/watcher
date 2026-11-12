@@ -58,7 +58,8 @@ other's certificate on every connection (mutual TLS).
 
 1. On the hub, open **Nodes** (under System) and add the node with a name,
    for example `branch-office`. Names have up to 64 letters, digits, `.`,
-   `_` and `-`. Or on the command line:
+   `_` and `-`. `local` is taken: it means the hub itself. Or on the
+   command line:
 
    ```sh
    watcher node add branch-office
@@ -109,6 +110,11 @@ node = "branch-office"
 
 A name that hosts use shows up on the Nodes page even before the node is
 added, as NOT JOINED, with a **Join Command** button.
+
+Hosts without `node` are checked by the hub itself. Their node is called
+`local`: `node = "local"` on a host means the same as no `node`, and
+selectors like `hosts = { node = "local" }` in [notify rules](../objects/notify.md)
+match them.
 
 ## The Nodes page
 

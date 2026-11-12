@@ -162,7 +162,7 @@ the command runs.
 | `$name$` | the var `name`, see [Vars](#vars) |
 | `$host.name$` or `$HOSTNAME$` | the host name |
 | `$host.address$` or `$HOSTADDRESS$` | the host address; the host name if no address is set |
-| `$host.node$` | the host's `node` |
+| `$host.node$` | the host's `node`; `local` for hosts without one |
 | `$host.vars.x$` | the host var `x`; nested: `$host.vars.x.y$` |
 | `$service.name$` | the service name |
 | `$service.key$` | the key of the `for_each` entry, see [for_each](service.md#one-service-per-item-for_each) |
