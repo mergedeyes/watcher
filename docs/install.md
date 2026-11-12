@@ -107,6 +107,10 @@ Then create an admin account:
 watcher user add admin --admin -c /etc/watcher/watcher.toml
 ```
 
+After the first login, turn on
+[two-factor authentication](guides/web-ui.md#two-factor-authentication)
+for the account on the Account page.
+
 All options: [watcher.toml](reference/watcher-toml.md).
 
 ## Run

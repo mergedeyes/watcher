@@ -45,7 +45,7 @@ from = "Watcher <watcher@example.com>"
 | `listen` | `127.0.0.1:8080` | Address and port of the web UI and API. Any address other than loopback needs a database, because logins need one. |
 | `public_url` | | The URL users open Watcher with. Used for links in notifications. With `https://`, session cookies are marked Secure. |
 | `conf_dir` | `conf.d` | Directory with the object files. Every `*.toml` below it is read. |
-| `data_dir` | `data` | Directory for sink buffers, the instance ID, the self-signed certificate and `secret.key` (see [SSH secrets](../guides/ssh.md#secrets)). |
+| `data_dir` | `data` | Directory for sink buffers, the instance ID, the self-signed certificate and `secret.key`, which encrypts [SSH secrets](../guides/ssh.md#secrets) and the secrets of [two-factor authentication](../guides/web-ui.md#two-factor-authentication). |
 | `config_mode` | `hybrid` | `hybrid`: web UI and files can both change the config. `files`: the web UI is read-only. `ui`: files are not watched. See [Config mode](../guides/web-ui.md#config-mode). |
 | `check_dirs` | `checks`, then the plugin directories | Where commands without a path are looked up, before `PATH`. |
 

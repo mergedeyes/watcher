@@ -37,7 +37,7 @@ for common cases.
 - [Alerting recipes](guides/alerting-recipes.md): ready-made setups for reminders, escalations, teams, customers and maintenance windows
 - [Checks over SSH](guides/ssh.md): running checks on the hosts, secrets, host keys
 - [Operations](guides/operations.md): acknowledgements, downtimes, muting, turning checks off
-- [Web UI](guides/web-ui.md): pages, logins, editing the configuration
+- [Web UI](guides/web-ui.md): pages, logins, two-factor authentication, editing the configuration
 - [Data](guides/data.md): database, SQL views, Grafana
 
 ## Reference

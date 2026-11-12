@@ -16,7 +16,8 @@ watcher user passwd alice           # set a new password
 ```
 
 Admins can also manage accounts in the web UI under Settings → Users.
-Everyone can change their own password under Account.
+Everyone can change their own password under Account, and turn on
+[two-factor authentication](#two-factor-authentication) there.
 
 After five failed logins, the username is locked for a minute. A session
 lasts 14 days after it was last used.
@@ -24,6 +25,69 @@ lasts 14 days after it was last used.
 Without a database there are no accounts and no login. The web UI then only
 listens on the local machine (loopback). `watcher run --no-auth` turns the
 login off even with a database, also only on loopback.
+
+## Two-factor authentication
+
+With two-factor authentication, the login asks for a code after the
+password. The code comes from an authenticator app on your phone, such as
+Google Authenticator, Microsoft Authenticator, Aegis or 1Password. It has
+six digits and changes every 30 seconds; this kind of code is called TOTP
+(time-based one-time password). Someone who learns your password still
+can't log in without your phone.
+
+Each user turns it on for their own account:
+
+1. Open Settings → Account and click **Set Up** under Two-Factor
+   Authentication.
+2. Scan the QR code with the app. If you can't scan it, type the key next
+   to it into the app instead.
+3. Enter the code the app shows, and click **Enable**.
+4. Save the ten recovery codes that appear. They are shown only once.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../images/two-factor-dark.png">
+    <img src="../images/two-factor.png" alt="The Two-Factor Authentication panel on the Account page: a QR code, the key, and a field for the code from the app" width="860">
+  </picture>
+  <br>
+  <sub>Setting up two-factor authentication on the Account page.</sub>
+</p>
+
+From then on, you log in with your password first and then with the
+current code from the app. Each code works only once: to log in again
+right away, for example in a second browser, wait for the next code.
+
+**Recovery codes** stand in for the app when you don't have your phone.
+Type one into the code field at the login. Each recovery code works once.
+Under Account, **New Recovery Codes** replaces all of them, and **Turn
+Off** switches two-factor authentication off again. Both need a code from
+the app or a recovery code, so that someone who finds your browser logged
+in can't turn it off.
+
+**Lost your phone and your recovery codes?** An admin turns two-factor
+authentication off for you under Settings → Users → **Reset 2FA**, or on
+the server:
+
+```sh
+watcher user totp-off alice
+```
+
+Then log in with your password alone, and set it up again.
+
+Good to know:
+
+- It needs a `watcher.toml`. The app secrets are stored encrypted in the
+  database, with the key file `data_dir/secret.key` (the same file that
+  encrypts [SSH secrets](ssh.md#secrets)). **Back it up together with the
+  database**: without it, users with two-factor authentication can't log
+  in until an admin turns it off with `watcher user totp-off`.
+- The clock of the server must be right (use NTP). Codes from 30 seconds
+  before or after are accepted too, for phones whose clock is a little
+  off.
+- Wrong codes count like wrong passwords: after five failed attempts, the
+  username is locked for a minute.
+- [API tokens](#api-tokens) don't need a code: scripts keep working with
+  their token alone.
 
 ## Pages
 
@@ -41,8 +105,8 @@ login off even with a database, also only on loopback.
 | Process Info | Running time and results per minute; switches for notifications and active checks. |
 | Scheduling Queue | When each service is checked next. |
 | Configuration | Forms and a file editor for the configuration (admins). |
-| Account | Your user, password and API tokens. |
-| Users | Add, disable and delete accounts, set passwords and admin rights (admins). |
+| Account | Your user, password, two-factor authentication and API tokens. |
+| Users | Add, disable and delete accounts, set passwords and admin rights, reset two-factor authentication (admins). |
 
 Status totals are links to the filtered lists. On a group's list
 (`/hosts?group=linux`), the totals count only that group. Click a column

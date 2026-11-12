@@ -239,18 +239,27 @@ curl -H "Authorization: Bearer $T" '.../api/v1/series/42/points?from=2026-10-01T
 | Method and path | Description |
 |---|---|
 | `GET auth/status` | Whether a login is needed, and the current user. |
-| `POST auth/login` | `{"username", "password"}`. Sets the session cookie. 429 when the username is locked. |
+| `POST auth/login` | `{"username", "password", "code"}`. Sets the session cookie. `code` is only for users with two-factor authentication: a code from their app or a recovery code. Without it, or with a wrong one, the answer is 401 with `"totp_required": true`. 429 when the username is locked. |
 | `POST auth/logout` | Log out. |
+| `GET auth/totp` | `{"enabled", "recovery_codes"}`: whether your two-factor authentication is on, and how many recovery codes are left. |
+| `POST auth/totp/setup` | A new secret for the authenticator app: `{"secret", "uri", "qr"}`. `uri` is the `otpauth://` link, `qr` the same as an SVG image. Nothing is stored yet. |
+| `PUT auth/totp` | `{"secret", "code"}` turns two-factor authentication on, once the code shows that the app is set up right. Answers `{"recovery_codes": [...]}`, shown only this once. |
+| `DELETE auth/totp` | `{"code"}` turns it off. The code is from the app or a recovery code. |
+| `POST auth/totp/recovery` | `{"code"}` → `{"recovery_codes": [...]}`: ten new recovery codes. The old ones stop working. |
 | `GET tokens` | Your API tokens. |
 | `POST tokens` | `{"name"}` → `{"token": "wt_...", "info"}`. The token is shown only once. |
 | `DELETE tokens/{id}` | Revoke a token. |
 | `GET users` | All accounts. Admins only. |
 | `POST users` | `{"username", "password", "admin"}`. Admins only. |
-| `PUT users/{name}` | `{"password", "admin", "disabled"}`. Everyone may change their own password. |
+| `PUT users/{name}` | `{"password", "admin", "disabled", "totp"}`. Everyone may change their own password. `"totp": false` turns a user's two-factor authentication off (admins). |
 | `DELETE users/{name}` | Delete an account with its sessions and tokens. Admins only, not yourself. |
 
 Passwords need at least 10 characters. A new password, or disabling an
 account, logs the user out everywhere.
+
+Each two-factor code works once. Wrong codes count like wrong passwords:
+after five, the username is locked for a minute. See
+[Two-factor authentication](../guides/web-ui.md#two-factor-authentication).
 
 ## SSH
 

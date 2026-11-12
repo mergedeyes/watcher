@@ -59,8 +59,8 @@ Single server:
   behind it), a log of every notification sent.
 - **Storage:** PostgreSQL or TimescaleDB, SQL views, read-only database
   login, copies to another PostgreSQL (sinks).
-- **Access:** users, sessions, API tokens, HTTPS; the full API, everything
-  the web UI does.
+- **Access:** users, sessions, two-factor authentication (TOTP), API
+  tokens, HTTPS; the full API, everything the web UI does.
 
 *Not yet:*
 
@@ -69,5 +69,5 @@ Single server:
 | Nodes and hub, UNREACHABLE state | 2 |
 | Data repair in graphs, rollups, retention | 3 |
 | IBM i, AIX, HMC, MQ checks | 3b |
-| Tenants, roles and permissions, TOTP | 4 |
+| Tenants, roles and permissions | 4 |
 | SNMP, Prometheus, WinRM, discovery, Nagios config import | 5 |

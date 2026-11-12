@@ -86,7 +86,8 @@ Rust `rsa` library has an unfixed timing side channel (RUSTSEC-2023-0071).
 Secrets are stored encrypted in the database. The encryption key is the
 file `data_dir/secret.key`, created with the first secret (mode 0600).
 **Back it up together with the database**: without it, the secrets can't
-be decrypted.
+be decrypted. The same file encrypts the secrets of
+[two-factor authentication](web-ui.md#two-factor-authentication).
 
 ## Host keys
 
