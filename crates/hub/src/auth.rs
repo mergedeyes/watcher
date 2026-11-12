@@ -451,8 +451,14 @@ async fn confirm_code(hub: &Hub, store: &Store, user: &User, code: &str) -> Resu
     }
 }
 
+/// A user's TOTP secret, sealed for storage with
+/// [`Store::enable_totp`]. Also used by the setup wizard.
+pub fn seal_totp_secret(sealer: &Sealer, user_id: i32, secret: &[u8]) -> Result<Vec<u8>, String> {
+    sealer.seal_bytes(&totp_label(user_id), secret)
+}
+
 /// New recovery codes and the hashes to store for them.
-fn recovery_codes() -> (Vec<String>, Vec<Vec<u8>>) {
+pub fn recovery_codes() -> (Vec<String>, Vec<Vec<u8>>) {
     let codes = totp::new_recovery_codes();
     let hashes = codes.iter().map(|c| totp::recovery_hash(c)).collect();
     (codes, hashes)
@@ -520,9 +526,8 @@ pub async fn totp_enable(
     let step = totp::verify(&secret, &body.code, totp::now()).ok_or_else(|| {
         ApiError::BadRequest("invalid code; is the clock of the device right?".into())
     })?;
-    let sealed = sealer(&hub, true)?
-        .seal_bytes(&totp_label(user.id), &secret)
-        .map_err(ApiError::Internal)?;
+    let sealer = sealer(&hub, true)?;
+    let sealed = seal_totp_secret(&sealer, user.id, &secret).map_err(ApiError::Internal)?;
     let (codes, hashes) = recovery_codes();
     store
         .enable_totp(user.id, &sealed, step as i64, &hashes)

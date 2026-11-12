@@ -8,7 +8,9 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use watcher_config::{Bootstrap, Contact, InstanceRole, Smtp, SmtpTls, Tls, load_dir};
-use watcher_hub::auth::hash_password;
+use watcher_exec::ssh::Sealer;
+use watcher_hub::auth::{self, hash_password};
+use watcher_hub::totp;
 use watcher_notify::{Mailer, Notification, Notifier};
 use watcher_store::Store;
 
@@ -58,6 +60,9 @@ pub struct Admin {
     pub username: String,
     pub password: Option<String>,
     pub password_file: Option<PathBuf>,
+    /// Turns on two-factor authentication with this key (base32), the one
+    /// the authenticator app has.
+    pub totp_secret: Option<String>,
 }
 
 fn yes() -> bool {
@@ -110,7 +115,12 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         println!("  {}", file.path.display());
     }
     if let Some(admin) = &answers.admin {
-        println!("Create user: {} (admin)", admin.username);
+        let totp = if admin.totp_secret.is_some() {
+            ", two-factor"
+        } else {
+            ""
+        };
+        println!("Create user: {} (admin{totp})", admin.username);
     }
     if interactive {
         let stdin = std::io::stdin();
@@ -128,7 +138,16 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         }
     }
 
-    apply(&answers, &plan).await?;
+    let recovery = apply(&answers, &plan).await?;
+    if let Some(admin) = answers.admin.as_ref().filter(|_| !recovery.is_empty()) {
+        println!(
+            "\nRecovery codes for {} (shown only now; each works once, in place of a code from the app):",
+            admin.username
+        );
+        for code in &recovery {
+            println!("  {code}");
+        }
+    }
     let config = args.dir.join("watcher.toml");
     println!("\nDone. Start: watcher run {}", config.display());
     Ok(ExitCode::SUCCESS)
@@ -196,10 +215,12 @@ async fn ask(p: &mut Prompter<'_>) -> Result<Answers> {
             }
             break first;
         };
+        let totp_secret = ask_totp(p, &username, &totp::new_secret())?;
         a.admin = Some(Admin {
             username,
             password: Some(password),
             password_file: None,
+            totp_secret,
         });
     }
 
@@ -271,6 +292,35 @@ async fn ask(p: &mut Prompter<'_>) -> Result<Answers> {
         }
     }
     Ok(a)
+}
+
+/// Offers two-factor authentication for the admin with `secret`: shows the
+/// QR code and the key, then takes a code from the app, which shows the app
+/// is set up right. Returns the key (base32), or `None` if declined.
+fn ask_totp(p: &mut Prompter<'_>, username: &str, secret: &[u8]) -> Result<Option<String>> {
+    if !p.yes("Two-factor authentication (TOTP)?", false)? {
+        return Ok(None);
+    }
+    let key = totp::encode(secret);
+    let qr = totp::qr_text(&totp::uri("Watcher", username, secret)).map_err(anyhow::Error::msg)?;
+    writeln!(p.output, "\n{qr}")?;
+    p.note("Scan with an authenticator app, or enter the key:")?;
+    let groups: Vec<&str> = key
+        .as_bytes()
+        .chunks(4)
+        .map(|c| std::str::from_utf8(c).unwrap_or_default())
+        .collect();
+    p.note(&groups.join(" "))?;
+    loop {
+        let Some(code) = p.ask_opt("Code from the app", "")? else {
+            p.note("two-factor authentication: skipped")?;
+            return Ok(None);
+        };
+        match totp::verify(secret, &code, totp::now()) {
+            Some(_) => return Ok(Some(key)),
+            None => p.note("error: invalid code; is the clock of the device right?")?,
+        }
+    }
 }
 
 /// Terminal prompts. Without a terminal, passwords are read as plain lines,
@@ -362,6 +412,8 @@ pub(crate) struct PlannedFile {
 pub(crate) struct Plan {
     pub files: Vec<PlannedFile>,
     conf_dir: PathBuf,
+    /// Where `secret.key` goes (watcher.toml keeps the default `data`).
+    data_dir: PathBuf,
 }
 
 impl Plan {
@@ -408,6 +460,11 @@ impl Plan {
             let password = admin_password(admin)?;
             if password.chars().count() < MIN_PASSWORD {
                 bail!("admin password: min. {MIN_PASSWORD} characters");
+            }
+            if let Some(key) = &admin.totp_secret
+                && totp::decode(key).is_none()
+            {
+                bail!("admin totp_secret: not a TOTP key (base32, at least 26 characters)");
             }
         }
         if let Some(smtp) = &a.smtp {
@@ -529,7 +586,11 @@ impl Plan {
                 });
             }
         }
-        Ok(Plan { files, conf_dir })
+        Ok(Plan {
+            files,
+            conf_dir,
+            data_dir: dir.join("data"),
+        })
     }
 }
 
@@ -545,14 +606,23 @@ pub(crate) fn admin_password(admin: &Admin) -> Result<String> {
 }
 
 /// Creates the admin, writes the files, checks they load, sends the test.
-pub(crate) async fn apply(a: &Answers, plan: &Plan) -> Result<()> {
+/// Returns the admin's recovery codes if two-factor authentication was
+/// turned on.
+pub(crate) async fn apply(a: &Answers, plan: &Plan) -> Result<Vec<String>> {
+    let mut recovery = Vec::new();
     if let Some(url) = &a.database_url {
         let store = Store::connect(url).await.context("database")?;
         println!("Database: {}", store.backend());
         if let Some(admin) = &a.admin {
             let hash = hash_password(&admin_password(admin)?).map_err(anyhow::Error::msg)?;
             match store.create_user(&admin.username, &hash, true).await {
-                Ok(_) => println!("User: {} created", admin.username),
+                Ok(user) => {
+                    println!("User: {} created", admin.username);
+                    if let Some(secret) = admin.totp_secret.as_deref().and_then(totp::decode) {
+                        recovery = enable_totp(&store, &plan.data_dir, user.id, &secret).await?;
+                        println!("Two-factor authentication: on");
+                    }
+                }
                 Err(watcher_store::Error::Conflict(_)) => {
                     println!("User: {} exists, unchanged", admin.username)
                 }
@@ -611,7 +681,23 @@ pub(crate) async fn apply(a: &Answers, plan: &Plan) -> Result<()> {
             }
         }
     }
-    Ok(())
+    Ok(recovery)
+}
+
+/// Turns on two-factor authentication for a new user: the secret sealed
+/// with `data_dir/secret.key` (created if missing), and recovery codes.
+async fn enable_totp(
+    store: &Store,
+    data_dir: &Path,
+    user_id: i32,
+    secret: &[u8],
+) -> Result<Vec<String>> {
+    let sealer = Sealer::open_or_create(data_dir).map_err(anyhow::Error::msg)?;
+    let sealed = auth::seal_totp_secret(&sealer, user_id, secret).map_err(anyhow::Error::msg)?;
+    let (codes, hashes) = auth::recovery_codes();
+    // The user hasn't logged in yet, so every current code may be used.
+    store.enable_totp(user_id, &sealed, 0, &hashes).await?;
+    Ok(codes)
 }
 
 pub(crate) fn write_file(path: &Path, contents: &str, private: bool) -> std::io::Result<()> {
@@ -881,7 +967,43 @@ from = "Watcher <watcher@example.com>"
         assert!(err("[tls]\ncert = \"/nonexistent.pem\"\nkey = \"/k.pem\"").contains("no file"));
         assert!(err("[tls]\ncert = \"/c.pem\"").contains("cert and key"));
         assert!(err("instance_name = \" \"").contains("empty"));
+        assert!(
+            err(
+                "database_url = \"postgres://x\"\n[admin]\nusername = \"a\"\n\
+                 password = \"long enough pw\"\ntotp_secret = \"JBSWY3DP\""
+            )
+            .contains("totp_secret")
+        );
         assert!(toml::from_str::<Answers>("typo = 1").is_err());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn asks_for_two_factor() {
+        let secret = totp::new_secret();
+        let ask = |input: String| {
+            let mut reader = input.as_bytes();
+            let mut out = Vec::new();
+            let mut p = Prompter {
+                input: &mut reader,
+                output: &mut out,
+                tty: false,
+            };
+            let key = ask_totp(&mut p, "admin", &secret).unwrap();
+            (key, String::from_utf8(out).unwrap())
+        };
+        assert_eq!(ask("\n".into()).0, None, "off unless asked for");
+        let (key, transcript) = ask("y\nnone\n".into());
+        assert_eq!(key, None);
+        assert!(transcript.contains("skipped"), "{transcript}");
+
+        // A wrong code, then the one the app shows.
+        let code = totp::code(&secret, totp::now());
+        let wrong = format!("{:06}", (code.parse::<u32>().unwrap() + 1) % 1_000_000);
+        let (key, transcript) = ask(format!("y\n{wrong}\n{code}\n"));
+        assert_eq!(key, Some(totp::encode(&secret)));
+        assert!(transcript.contains('█'), "the QR code: {transcript}");
+        assert!(transcript.contains(&totp::encode(&secret)[..4]));
+        assert!(transcript.contains("invalid code"));
     }
 }

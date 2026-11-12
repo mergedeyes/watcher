@@ -42,6 +42,11 @@
 	let adminName = $state('admin');
 	let adminPassword = $state('');
 	let adminConfirm = $state('');
+	/** Two-factor authentication for the admin: a secret, confirmed with a code from the app. */
+	let totpOn = $state(false);
+	let totpSetup = $state<{ secret: string; qr: string } | null>(null);
+	let totpCode = $state('');
+	let totpVerified = $state(false);
 	let alertEmail = $state('');
 	let alertWebhook = $state('');
 	let smtpOn = $state(false);
@@ -49,7 +54,8 @@
 	let testResult = $state<string | null>(null);
 	let monitorLocalhost = $state(true);
 	let files = $state<PlannedFile[]>([]);
-	let done = $state<{ url: string } | null>(null);
+	let done = $state<{ url: string; recovery: string[] } | null>(null);
+	let copied = $state(false);
 
 	onMount(() => {
 		try {
@@ -112,6 +118,34 @@
 		});
 	}
 
+	function toggleTotp() {
+		if (!totpOn || totpSetup) return;
+		run(async () => {
+			totpSetup = await call<{ secret: string; qr: string }>('POST', '/totp', {
+				username: adminName.trim(),
+				issuer: instanceName.trim() || null
+			});
+		});
+	}
+
+	function verifyTotp() {
+		if (!totpSetup) return;
+		const secret = totpSetup.secret;
+		run(async () => {
+			await call('POST', '/totp/check', { secret, code: totpCode.trim() });
+			totpVerified = true;
+		});
+	}
+
+	/** The key in groups of four, as apps show it. */
+	const grouped = (secret: string) => secret.replace(/(.{4})(?=.)/g, '$1 ');
+
+	async function copyCodes() {
+		if (!done) return;
+		await navigator.clipboard.writeText(done.recovery.join('\n') + '\n');
+		copied = true;
+	}
+
 	function list(text: string) {
 		return text
 			.split(',')
@@ -160,7 +194,13 @@
 						? { cert: cert.trim(), key: key.trim() }
 						: null,
 			database_url: database ? databaseUrl.trim() : null,
-			admin: database ? { username: adminName.trim(), password: adminPassword } : null,
+			admin: database
+				? {
+						username: adminName.trim(),
+						password: adminPassword,
+						totp_secret: totpOn && totpVerified && totpSetup ? totpSetup.secret : null
+					}
+				: null,
 			smtp: smtpAnswer(),
 			alert_email: list(alertEmail),
 			alert_webhook: alertWebhook.trim() || null,
@@ -178,6 +218,7 @@
 				if (adminPassword.length < (defaults?.min_password ?? 10))
 					return `Password: min. ${defaults?.min_password ?? 10} characters.`;
 				if (adminPassword !== adminConfirm) return 'Passwords differ.';
+				if (totpOn && !totpVerified) return 'Two-factor: enter the code from the app and click Verify, or turn it off.';
 				return null;
 			case 'Web Access':
 				if (tlsMode === 'files' && (!cert.trim() || !key.trim())) return 'Certificate and key paths required.';
@@ -206,7 +247,7 @@
 
 	function apply() {
 		return run(async () => {
-			const r = await call<{ listen: string; scheme: string }>('POST', '/apply', answers());
+			const r = await call<{ listen: string; scheme: string; recovery_codes: string[] }>('POST', '/apply', answers());
 			try {
 				sessionStorage.removeItem('watcher-setup-token');
 			} catch {
@@ -215,9 +256,10 @@
 			const [host, port] = splitAddr(r.listen);
 			const sameHost = ['0.0.0.0', '[::]', '::'].includes(host) ? location.hostname : host;
 			const url = `${r.scheme}://${sameHost.includes(':') && !sameHost.startsWith('[') ? `[${sameHost}]` : sameHost}:${port}/`;
-			done = { url };
-			// The server restarts with the new config; continue there.
-			if (url.startsWith(location.origin)) waitFor(url);
+			done = { url, recovery: r.recovery_codes ?? [] };
+			// The server restarts with the new config; continue there, unless
+			// there are recovery codes to save first.
+			if (url.startsWith(location.origin) && done.recovery.length === 0) waitFor(url);
 		});
 	}
 
@@ -261,7 +303,16 @@
 			<div class="panel-title">Done</div>
 			<div class="body">
 				<p>Configuration written; Watcher is starting.</p>
-				<p>Continue at <a href={done.url}>{done.url}</a>{database ? ' and log in as ' + adminName : ''}.</p>
+				{#if done.recovery.length > 0}
+					<p>Recovery codes for {adminName} (shown once; each works once, in place of a code from the app):</p>
+					<div class="codes mono">
+						{#each done.recovery as c (c)}<code>{c}</code>{/each}
+					</div>
+					<p><button type="button" class="btn" onclick={copyCodes}>{copied ? 'Copied' : 'Copy'}</button></p>
+					<p>Save them, then continue at <a href={done.url}>{done.url}</a> and log in as {adminName}.</p>
+				{:else}
+					<p>Continue at <a href={done.url}>{done.url}</a>{database ? ' and log in as ' + adminName : ''}.</p>
+				{/if}
 			</div>
 		</section>
 	{:else}
@@ -350,6 +401,35 @@
 							</div>
 							<label for="pw2">Confirm</label>
 							<input id="pw2" type="password" autocomplete="new-password" bind:value={adminConfirm} />
+							<label for="totp">Two-Factor</label>
+							<div>
+								<input id="totp" type="checkbox" bind:checked={totpOn} onchange={toggleTotp} />
+								<span class="help">TOTP: a code from an authenticator app at each login</span>
+							</div>
+							{#if totpOn && totpSetup}
+								<span></span>
+								<div class="totp">
+									<img class="qr" src={`data:image/svg+xml;utf8,${encodeURIComponent(totpSetup.qr)}`} alt="QR code for the authenticator app" />
+									<div>
+										<p>Scan with an authenticator app, or enter the key:</p>
+										<code class="key">{grouped(totpSetup.secret)}</code>
+										{#if totpVerified}
+											<p class="ok">Verified.</p>
+										{:else}
+											<div class="verify">
+												<input
+													placeholder="Code from the app"
+													aria-label="Code from the app"
+													autocomplete="one-time-code"
+													inputmode="numeric"
+													bind:value={totpCode}
+												/>
+												<button type="button" class="btn" onclick={verifyTotp} disabled={busy || !totpCode.trim()}>Verify</button>
+											</div>
+										{/if}
+									</div>
+								</div>
+							{/if}
 						</div>
 					{/if}
 				{:else if STEPS[step] === 'Notifications'}
@@ -406,7 +486,7 @@
 							<pre class="mono">{f.contents}</pre>
 						</div>
 					{/each}
-					{#if database}<p>Create user: <strong>{adminName}</strong> (admin)</p>{/if}
+					{#if database}<p>Create user: <strong>{adminName}</strong> (admin{totpOn && totpVerified ? ', two-factor' : ''})</p>{/if}
 				{/if}
 				{#if error}<p class="error" role="alert">{error}</p>{/if}
 			</div>
@@ -537,6 +617,50 @@
 		border-radius: var(--radius);
 		max-height: 240px;
 		overflow: auto;
+	}
+
+	.totp {
+		display: flex;
+		gap: 14px;
+		flex-wrap: wrap;
+		align-items: flex-start;
+	}
+
+	.totp p {
+		margin: 0 0 6px;
+	}
+
+	.totp .ok {
+		margin: 0;
+	}
+
+	.qr {
+		width: 180px;
+		height: 180px;
+		image-rendering: pixelated;
+		border-radius: var(--radius);
+	}
+
+	.key {
+		display: inline-block;
+		margin-bottom: 8px;
+		padding: 4px 8px;
+		background: var(--panel-alt);
+		border: 1px solid var(--line);
+		border-radius: var(--radius);
+		overflow-wrap: anywhere;
+	}
+
+	.verify {
+		display: flex;
+		gap: 8px;
+	}
+
+	.codes {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+		gap: 4px 12px;
+		margin: 0 0 10px;
 	}
 
 	.foot {

@@ -126,6 +126,19 @@ pub fn qr_svg(uri: &str) -> Result<String, String> {
         .build())
 }
 
+/// `uri` as a QR code for a terminal, two rows per line in Unicode half
+/// blocks. Light modules are drawn, so it reads right on the usual dark
+/// terminal background.
+pub fn qr_text(uri: &str) -> Result<String, String> {
+    use qrcode::render::unicode::Dense1x2;
+    let code = qrcode::QrCode::new(uri.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(code
+        .render::<Dense1x2>()
+        .dark_color(Dense1x2::Light)
+        .light_color(Dense1x2::Dark)
+        .build())
+}
+
 /// New recovery codes, like `k7mqa-x3vbn` (50 bits each).
 pub fn new_recovery_codes() -> Vec<String> {
     (0..RECOVERY_CODES)
@@ -223,6 +236,8 @@ mod tests {
         );
         let svg = qr_svg(&uri).unwrap();
         assert!(svg.contains("<svg"), "{svg}");
+        let text = qr_text(&uri).unwrap();
+        assert!(text.lines().count() > 20 && text.contains('█'), "{text}");
     }
 
     #[test]
