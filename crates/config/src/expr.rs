@@ -151,7 +151,7 @@ fn resolve<'a>(op: &'a Operand, subject: &'a Subject) -> Value<'a> {
         Operand::List(l) => list(l.iter().map(String::as_str).collect()),
         Operand::Path(Path::Name) => Value::Str(&host.name),
         Operand::Path(Path::Address) => Value::Str(&host.address),
-        Operand::Path(Path::Node) => host.node.as_deref().map_or(Value::Missing, Value::Str),
+        Operand::Path(Path::Node) => Value::Str(host.node_name()),
         Operand::Path(Path::Groups) => list(host.groups.iter().map(|g| g.name.as_str()).collect()),
         Operand::Path(Path::Var(name)) => crate::var_at(&host.vars, name)
             .and_then(|v| v.as_text())
@@ -552,7 +552,9 @@ mod tests {
         assert!(!check(r#"host.vars.site == "klarsocial""#, &web));
         assert!(!check(r#"host.vars.missing == "x""#, &web));
         assert!(check(r#"host.vars.missing != "x""#, &web));
-        assert!(!check(r#"host.node ~ ".""#, &web));
+        assert!(!check(r#"host.vars.missing ~ ".""#, &web));
+        // Hosts without a node are on this instance.
+        assert!(check(r#"host.node == "local""#, &web));
         assert!(check(r#"host.groups ~ "^we""#, &web));
     }
 

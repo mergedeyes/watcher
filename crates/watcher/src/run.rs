@@ -11,7 +11,9 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
-use watcher_config::{CheckDirs, Config, ConfigMode, RunOn, Severity, files, load_dir};
+use watcher_config::{
+    CheckDirs, Config, ConfigMode, InstanceRole, RunOn, Severity, files, load_dir,
+};
 use watcher_core::StateType;
 use watcher_exec::scheduler::{Control, Event, schedule};
 use watcher_exec::ssh::Pool;
@@ -85,6 +87,14 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
         args.listen = None;
     }
     let (bootstrap, conf_dir) = config_cmd::locate(args.path.as_deref())?;
+    // A node only keeps the link to its hub.
+    if let Some(b) = bootstrap.as_ref().filter(|b| b.role == InstanceRole::Node) {
+        return crate::node_cmd::run_node(b).await;
+    }
+    let node_link = match bootstrap.as_ref().filter(|b| b.role == InstanceRole::Hub) {
+        Some(b) => Some(crate::node_cmd::link_plan(b)?),
+        None => None,
+    };
     let check_dirs = config_cmd::check_dirs(bootstrap.as_ref(), &conf_dir);
     let Some(config) = load(&conf_dir, &check_dirs) else {
         bail!("configuration has errors");
@@ -256,6 +266,10 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
             }
         },
     };
+    let link = match node_link {
+        Some(plan) => Some(crate::node_cmd::start_link(&hub, plan, storage.is_some())?),
+        None => None,
+    };
     let scheme = if tls.is_some() { "https" } else { "http" };
     let server = serve(listen, hub.clone().router(), tls)?;
     if let Some(acme) = acme {
@@ -323,6 +337,9 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
     }
     info!("stopping");
     server.abort();
+    if let Some(link) = link {
+        link.abort();
+    }
     scheduler.abort();
     if let Some(storage) = running.storage {
         storage.shutdown().await;

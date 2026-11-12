@@ -1,8 +1,9 @@
 # Watcher documentation
 
-This documentation describes the single-server version (Phase 1, November
-2026). Features that are planned but not available yet are marked
-*not yet*.
+This documentation describes Watcher as of November 2026: the
+single-server version, and the first part of nodes, which can join a hub
+and stay connected. Features that are planned but not available yet are
+marked *not yet*.
 
 ## Getting started
 
@@ -36,13 +37,14 @@ for common cases.
 - [Notifications](guides/notifications.md): SMTP, email format, webhooks, Slack, Teams, Telegram, ntfy, Gotify, PagerDuty, Jira, scripts, notification log
 - [Alerting recipes](guides/alerting-recipes.md): ready-made setups for reminders, escalations, teams, customers and maintenance windows
 - [Checks over SSH](guides/ssh.md): running checks on the hosts, secrets, host keys
+- [Nodes](guides/nodes.md): a hub and Watchers at other sites that connect to it
 - [Operations](guides/operations.md): acknowledgements, downtimes, muting, turning checks off
 - [Web UI](guides/web-ui.md): pages, logins, two-factor authentication, editing the configuration
 - [Data](guides/data.md): database, SQL views, Grafana
 
 ## Reference
 
-- [watcher.toml](reference/watcher-toml.md): listen address, database, TLS, SMTP
+- [watcher.toml](reference/watcher-toml.md): listen address, database, hub and node, TLS, SMTP
 - [Command line](reference/cli.md)
 - [HTTP API](reference/api.md)
 

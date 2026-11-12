@@ -136,7 +136,7 @@ hosts do (except the master's own alert).
 | `address` | whose address matches. One pattern or a list. |
 | `groups` | in any of these host groups |
 | `vars.<name>` | whose var has this value, or any value of a list |
-| `node` | with this node label, or any of a list |
+| `node` | on this [node](../guides/nodes.md), or any of a list. `local`: hosts without a node, checked by this Watcher itself. |
 | `exclude` | Another host selector. Hosts it matches are removed. |
 | `expr` | for which the [expression](#expressions) is true |
 
@@ -219,7 +219,7 @@ hosts = { expr = 'host.groups contains "branch" or host.name ~ "^shop"' }
 
 | Value | Type |
 |---|---|
-| `host.name`, `host.address`, `host.node` | text |
+| `host.name`, `host.address`, `host.node` | text. `host.node` is `local` for hosts without a node. |
 | `host.groups` | list |
 | `host.vars.x`, `host.vars.x.y` | var, nested var |
 | `service.name`, `service.check`, `service.groups` | text, text, list. Only in service selectors. |

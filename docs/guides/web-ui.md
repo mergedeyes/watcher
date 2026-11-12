@@ -103,6 +103,7 @@ Good to know:
 | Host Groups, Service Groups | Status totals per group. |
 | Alerts | The alert history, filtered by host, type, state, SOFT/HARD and time range. |
 | Downtimes | Schedule and end downtimes; acknowledged, muted and disabled services. |
+| Nodes | On a hub: which [nodes](nodes.md) are connected; add, join again and remove nodes (admins). |
 | Process Info | Running time and results per minute; switches for notifications and active checks. |
 | Scheduling Queue | When each service is checked next. |
 | Configuration | Forms and a file editor for the configuration (admins). |

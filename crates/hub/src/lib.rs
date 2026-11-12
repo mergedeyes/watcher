@@ -5,9 +5,12 @@
 
 mod api;
 pub mod auth;
+pub mod ca;
 pub mod config;
+mod link;
 mod list;
 mod locks;
+mod nodes;
 mod ops;
 pub mod ssh;
 mod stream;
@@ -28,6 +31,8 @@ use watcher_store::{HostSpec, ServiceSpec, Store, StoredState};
 
 pub use auth::AuthSettings;
 pub use config::{ConfigFiles, Reload};
+pub use link::serve as serve_node_link;
+pub use nodes::{NodeLink, TOKEN_TTL, check_name, join_command, new_join_token};
 pub use ops::{DowntimeChange, OpenProblem};
 pub use ssh::{StoreVault, remote};
 /// Serves the web UI files and app shell; for routers outside the hub.
@@ -114,6 +119,10 @@ pub struct Hub {
     generation: AtomicU64,
     /// The summary of a generation, serialized.
     summary: Mutex<Option<(u64, Arc<str>)>>,
+    /// Set on a hub: what nodes join with.
+    link: OnceLock<NodeLink>,
+    /// Nodes connected right now.
+    nodes: nodes::Registry,
 }
 
 impl Hub {
@@ -163,6 +172,8 @@ impl Hub {
             watches: Arc::default(),
             generation: AtomicU64::new(0),
             summary: Mutex::new(None),
+            link: OnceLock::new(),
+            nodes: nodes::Registry::default(),
         })
     }
 
@@ -216,6 +227,12 @@ impl Hub {
     /// or data directory).
     pub fn enable_ssh(&self, pool: Arc<watcher_exec::ssh::Pool>, vault: Option<Arc<StoreVault>>) {
         let _ = self.ssh.set(ssh::Access { pool, vault });
+    }
+
+    /// Lets nodes join and connect (see [`serve_node_link`]), and serves
+    /// them under `/api/v1/nodes`.
+    pub fn enable_nodes(&self, link: NodeLink) {
+        let _ = self.link.set(link);
     }
 
     /// Serves the object files under `/api/v1/config` (for admins).

@@ -1,0 +1,65 @@
+// The link between a node and its hub.
+//
+// The node always dials out: first Join, with a one-time token, to get its
+// certificate; from then on Session over mutual TLS. Fields are only ever
+// added, so hubs and nodes of different versions understand each other.
+syntax = "proto3";
+
+package watcher.link.v1;
+
+service Link {
+  // Exchanges a join token and a certificate signing request for the node's
+  // certificate. The only call that works without a client certificate.
+  rpc Join(JoinRequest) returns (JoinReply);
+
+  // The node's connection to the hub, open for as long as both run. The
+  // node sends Hello first; the hub answers with Welcome. (Not `Connect`:
+  // that would clash with the generated client's constructor.)
+  rpc Session(stream NodeMessage) returns (stream HubMessage);
+}
+
+message JoinRequest {
+  // The join token's secret (the part before the dot).
+  string token = 1;
+  // PKCS#10 certificate signing request for the node's key, DER.
+  bytes csr = 2;
+  // Watcher version of the node.
+  string version = 3;
+}
+
+message JoinReply {
+  // The node's name, as it was added on the hub.
+  string name = 1;
+  // The node's certificate, PEM.
+  string certificate = 2;
+  // The hub's CA certificate, PEM.
+  string ca = 3;
+}
+
+message NodeMessage {
+  oneof kind {
+    Hello hello = 1;
+  }
+}
+
+// The first message on a connection.
+message Hello {
+  // Watcher version of the node.
+  string version = 1;
+  // Host name of the machine the node runs on.
+  string hostname = 2;
+}
+
+message HubMessage {
+  oneof kind {
+    Welcome welcome = 1;
+  }
+}
+
+// The hub's answer to Hello.
+message Welcome {
+  // The node's name on the hub.
+  string name = 1;
+  // Watcher version of the hub.
+  string version = 2;
+}

@@ -3,7 +3,7 @@
 
 use crate::list::{self, HostList, HostQuery, ServiceList, ServiceQuery};
 use crate::view::{SeriesView, ServiceDetail};
-use crate::{Hub, auth, config, ops, ssh, stream};
+use crate::{Hub, auth, config, nodes, ops, ssh, stream};
 use axum::extract::{Path, Query, State as AxState};
 use axum::http::StatusCode;
 use axum::middleware;
@@ -48,6 +48,9 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/process", get(ops::process).put(ops::set_process))
         .route("/api/v1/scheduler", get(ops::scheduler))
         .route("/api/v1/run-check", post(ops::run_check))
+        .route("/api/v1/nodes", get(nodes::list).post(nodes::add))
+        .route("/api/v1/nodes/{name}", delete(nodes::remove))
+        .route("/api/v1/nodes/{name}/token", post(nodes::new_token))
         .route("/api/v1/users", get(auth::users).post(auth::create_user))
         .route(
             "/api/v1/ssh/secrets",

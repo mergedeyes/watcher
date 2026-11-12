@@ -169,7 +169,7 @@ async fn ask(p: &mut Prompter<'_>) -> Result<Answers> {
         match p.ask("Role (standalone, hub)", "standalone")?.as_str() {
             "standalone" => break InstanceRole::Standalone,
             "hub" => break InstanceRole::Hub,
-            "node" => p.note("node role: not available yet")?,
+            "node" => p.note("a node is set up with: watcher node join <hub> --token <token>")?,
             other => p.note(&format!("unknown role: {other}"))?,
         }
     };
@@ -177,6 +177,10 @@ async fn ask(p: &mut Prompter<'_>) -> Result<Answers> {
     // Database first: whether logins exist decides which addresses are allowed.
     a.database_url = loop {
         let Some(url) = p.ask_opt("Database URL", "postgres://watcher@localhost/watcher")? else {
+            if a.role == InstanceRole::Hub {
+                p.note("error: a hub needs a database (it keeps its nodes there)")?;
+                continue;
+            }
             break None;
         };
         match Store::connect(&url).await {
@@ -433,7 +437,10 @@ pub(crate) struct Plan {
 impl Plan {
     pub(crate) fn new(a: &Answers, dir: &Path) -> Result<Self> {
         if a.role == InstanceRole::Node {
-            bail!("role node: not available yet");
+            bail!("role node: a node is set up with: watcher node join <hub> --token <token>");
+        }
+        if a.role == InstanceRole::Hub && a.database_url.is_none() {
+            bail!("role hub: needs database_url (the hub keeps its nodes there)");
         }
         let listen: SocketAddr = a
             .listen
@@ -905,9 +912,10 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_invalid_answers_and_asks_again() {
-        // Unknown role, then default; non-loopback without database, then
-        // loopback; unknown time zone, then one that exists.
-        let input = "nope\n\nnone\n0.0.0.0:8080\n127.0.0.1:9000\n\nMars/Olympus\nEurope/Berlin\n\
+        // Unknown role, node (joins instead), then default; non-loopback
+        // without database, then loopback; unknown time zone, then one that
+        // exists.
+        let input = "nope\nnode\n\nnone\n0.0.0.0:8080\n127.0.0.1:9000\n\nMars/Olympus\nEurope/Berlin\n\
                      none\nnone\nnone\nn\n";
         let mut reader = input.as_bytes();
         let mut out = Vec::new();
@@ -921,6 +929,7 @@ mod tests {
         assert_eq!(a.timezone.as_deref(), Some("Europe/Berlin"));
         let transcript = String::from_utf8(out).unwrap();
         assert!(transcript.contains("unknown role: nope"));
+        assert!(transcript.contains("watcher node join"));
         assert!(transcript.contains("unknown time zone \"Mars/Olympus\""));
         assert!(transcript.contains("non-loopback addresses need a database"));
     }
@@ -1078,7 +1087,8 @@ from = "Watcher <watcher@example.com>"
         );
         assert!(err(r#"alert_email = ["nope"]"#).contains("invalid address"));
         assert!(err(r#"public_url = "watcher.example""#).contains("http"));
-        assert!(err(r#"role = "node""#).contains("not available"));
+        assert!(err(r#"role = "node""#).contains("watcher node join"));
+        assert!(err(r#"role = "hub""#).contains("needs database_url"));
         assert!(err("[tls]\ncert = \"/nonexistent.pem\"\nkey = \"/k.pem\"").contains("no file"));
         assert!(err("[tls]\ncert = \"/c.pem\"").contains("cert and key"));
         assert!(err("instance_name = \" \"").contains("empty"));

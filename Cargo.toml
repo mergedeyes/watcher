@@ -17,7 +17,9 @@ watcher-config = { path = "crates/config" }
 watcher-core = { path = "crates/core" }
 watcher-exec = { path = "crates/exec" }
 watcher-hub = { path = "crates/hub" }
+watcher-node = { path = "crates/node" }
 watcher-notify = { path = "crates/notify" }
+watcher-proto = { path = "crates/proto" }
 watcher-store = { path = "crates/store" }
 
 anyhow = "1"
@@ -31,6 +33,8 @@ data-encoding = "2"
 getrandom = "0.4"
 http-body-util = "0.1"
 humantime = "2"
+# TCP and TLS of the node link, under tonic.
+hyper-util = { version = "0.1", features = ["tokio"] }
 # DNS lookups for the built-in dns check (UDP/TCP, no DNSSEC).
 hickory-resolver = { version = "0.26", default-features = false, features = ["tokio", "system-config"] }
 # Certificates from ACME CAs such as Let's Encrypt (ring, as rustls uses;
@@ -42,6 +46,9 @@ jiff = "0.2"
 # binary installs ring as the process default for reqwest.
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "hostname", "tokio1", "tokio1-rustls", "ring", "rustls-platform-verifier"] }
 notify = "8"
+# Protobuf for the node link; protox compiles link.proto without protoc.
+prost = "0.14"
+protox = "0.10"
 nix = { version = "0.31", features = ["signal", "process"] }
 # QR codes that set up TOTP in an authenticator app (SVG and terminal).
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
@@ -53,6 +60,8 @@ ring = "0.17"
 rpassword = "7"
 rust-embed = { version = "8", features = ["mime-guess"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+# PEM parsing of certificates (the node link's CA).
+rustls-pki-types = "1"
 # The system's trust store, for the built-in tls check (as reqwest uses).
 rustls-platform-verifier = "0.7"
 serde = { version = "1", features = ["derive"] }
@@ -70,6 +79,10 @@ thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "sync", "signal", "net"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 tokio-stream = { version = "0.1", features = ["sync", "time"] }
+# gRPC between nodes and their hub (mutual TLS with the hub's own CA).
+tonic = { version = "0.14", default-features = false, features = ["codegen", "router", "transport", "tls-ring"] }
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
 toml = "1"
 toml_edit = "0.25"
 tower = { version = "0.5", features = ["util"] }

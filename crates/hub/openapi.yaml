@@ -696,6 +696,59 @@ paths:
         "204": { description: Revoked }
         "404": { $ref: "#/components/responses/Error" }
 
+  /nodes:
+    get:
+      summary: Nodes of this hub
+      description: >
+        Nodes that have joined or have a join token, and node names that
+        hosts in the configuration use.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Node" } } } } }
+        "503": { $ref: "#/components/responses/Error" }
+    post:
+      summary: Add a node and get its join command (admins)
+      description: >
+        Also for a node that hosts name but that has not joined yet. A node
+        that has joined already gets a token with `POST /nodes/{name}/token`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, description: "1 to 64 letters, digits, '.', '_' and '-'; not `local` (the hub itself)" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/JoinToken" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /nodes/{name}:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+    delete:
+      summary: Remove a node (admins)
+      description: Its certificate and join token stop working, and its connection ends.
+      responses:
+        "204": { description: Removed }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /nodes/{name}/token:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: A new join token for a node (admins)
+      description: >
+        Also for a node that has joined already, e.g. a reinstalled machine.
+        Its current certificate works until it joins again.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/JoinToken" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
   /users:
     get:
       summary: User accounts (admins)
@@ -1441,6 +1494,31 @@ components:
         created: { $ref: "#/components/schemas/Time" }
         last_login: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
         totp: { type: boolean, description: Two-factor authentication is on }
+    Node:
+      type: object
+      properties:
+        name: { type: string }
+        state:
+          type: string
+          enum: [connected, offline, new]
+          description: "`offline`: joined, not connected; `new`: not joined yet"
+        connected_since: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+        joined: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+        token_expires:
+          oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }]
+          description: When the unused join token expires
+        last_seen: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+        version: { type: [string, "null"], description: Watcher version of the node }
+        hostname: { type: [string, "null"], description: Host name of the node's machine }
+        address: { type: [string, "null"], description: Address of its last connection }
+        hosts: { type: array, items: { type: string }, description: Hosts in the configuration with this node }
+    JoinToken:
+      type: object
+      properties:
+        name: { type: string }
+        token: { type: string, description: "Works once, until `expires`" }
+        expires: { $ref: "#/components/schemas/Time" }
+        command: { type: string, description: Run on the node's machine }
     ApiToken:
       type: object
       properties:

@@ -2,7 +2,7 @@
 #   watcher init /etc/watcher --answers init-answers.toml
 # Every key is optional. Unset keys use the defaults below.
 
-role = "standalone"                 # standalone | hub
+role = "standalone"                 # standalone | hub (needs database_url)
 instance_name = "msp-hub"           # sidebar, page title, mail subject
 listen = "127.0.0.1:8080"           # non-loopback needs database_url
 public_url = "https://watcher.example.com"

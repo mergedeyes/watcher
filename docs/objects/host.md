@@ -32,7 +32,7 @@ entry in a list. Each host needs a unique `name`.
 | `graph` | the host check | The service whose graph is shown on the host page. |
 | `ssh` | from the host groups | Login for [checks over SSH](../guides/ssh.md): `{ user, secret, port }`. See [ssh](#ssh). |
 | `enabled` | `true` | `false`: the host is not monitored. |
-| `node` | | Node label. *Not yet used* (nodes come in a later version). |
+| `node` | `local` | The [node](../guides/nodes.md) at the host's site. The Nodes page lists the host under it. `local` means this Watcher itself, the same as no `node`. *Not yet:* the node doesn't run the host's checks; the hub still does. |
 | `service.<name>` | | A host service: settings of one service on this host only. See [Host services](#host-services). |
 
 ## Examples

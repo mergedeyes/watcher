@@ -1,0 +1,37 @@
+[package]
+name = "watcher-node"
+description = "Node runtime of Project Watcher: joins a hub and keeps the link to it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+hyper-util.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tower.workspace = true
+tracing.workspace = true
+watcher-proto.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+http-body-util.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tower.workspace = true
+watcher-config.workspace = true
+watcher-hub.workspace = true
+watcher-store.workspace = true
+
+[lints]
+workspace = true

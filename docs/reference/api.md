@@ -261,6 +261,25 @@ Each two-factor code works once. Wrong codes count like wrong passwords:
 after five, the username is locked for a minute. See
 [Two-factor authentication](../guides/web-ui.md#two-factor-authentication).
 
+## Nodes
+
+On a hub (`role = "hub"`); otherwise 503. Listing is for everyone,
+changes are for admins. See [Nodes](../guides/nodes.md).
+
+| Method and path | Description |
+|---|---|
+| `GET nodes` | Nodes that have joined or have a join token, and node names that hosts use: `name`, `state` (`connected`, `offline`, `new`), `connected_since`, `joined`, `token_expires`, `last_seen`, `version`, `hostname`, `address`, `hosts`. |
+| `POST nodes` | `{"name"}` → `{"name", "token", "expires", "command"}`: adds the node and makes a join token. 409 if the node has joined already. |
+| `POST nodes/{name}/token` | A new join token, also for a node that has joined already. Its current certificate works until it joins again. |
+| `DELETE nodes/{name}` | Remove a node: its certificate and join token stop working, and its connection ends. |
+
+```sh
+curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
+  -d '{"name": "branch-office"}' .../api/v1/nodes
+# → {"name": "branch-office", "token": "wj_…", "expires": "…",
+#    "command": "watcher node join https://hub.example.com:7443 --token wj_…"}
+```
+
 ## SSH
 
 Admins only. The values of secrets never leave the server.

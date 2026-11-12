@@ -22,6 +22,8 @@ script that prints a result work as checks.
 | [downtime group](objects/downtimegroup.md) | Hosts with recurring downtime windows. |
 | [time period](objects/timeperiod.md) | When notify rules apply, for example business hours. |
 | [sink](objects/sink.md) | A second database that receives a copy of all results. |
+| [hub](guides/nodes.md) | A Watcher that nodes at other sites connect to (`role = "hub"`). |
+| [node](guides/nodes.md) | A Watcher at another site, for example a customer's network, that connects to a hub. |
 
 ## States
 
@@ -63,11 +65,17 @@ Single server:
   tokens, HTTPS (also with certificates from Let's Encrypt or another
   ACME CA); the full API, everything the web UI does.
 
+Nodes, first part:
+
+- **Hub and nodes:** nodes join a hub with a one-time token and stay
+  connected over mutual TLS, dialing out from their site; the Nodes page
+  shows which are connected. Nodes don't run checks yet.
+
 *Not yet:*
 
 | Feature | Phase |
 |---|---|
-| Nodes and hub, UNREACHABLE state | 2 |
+| Checks on nodes, results kept while the link is down, UNREACHABLE state | 2 |
 | Data repair in graphs, rollups, retention | 3 |
 | IBM i, AIX, HMC, MQ checks | 3b |
 | Tenants, roles and permissions | 4 |

@@ -272,10 +272,49 @@ watcher hostkey forget <address>[:<port>]
 
 See [Host keys](../guides/ssh.md#host-keys).
 
+## node
+
+Manages [nodes](../guides/nodes.md). On the hub (`role = "hub"`):
+
+```
+watcher node add <name>
+watcher node token <name>
+watcher node list
+watcher node remove <name>
+```
+
+- `add` adds a node and prints the command that joins it. The join token
+  in it works once, within 24 hours. It also works for a node name that
+  hosts use but that hasn't joined yet.
+- `token` prints a new join command, also for a node that has joined
+  already, for example after reinstalling its machine. Its current
+  certificate works until it joins again.
+- `list` shows when each node joined and was last seen, its version and
+  machine, or until when its join token works.
+- `remove` stops the node's certificate and join token from working. A
+  running hub ends the node's connection within a minute.
+
+On the node's machine:
+
+```
+watcher node join <hub> --token <token> [-c FILE]
+```
+
+`join` uses the token, keeps the node's key and certificates in
+`data_dir/node/`, and sets `role = "node"` and `[node] hub` in
+`watcher.toml`: the one given with `-c`, else `./watcher.toml` or
+`/etc/watcher/watcher.toml`. If none exists, it creates
+`./watcher.toml`. It refuses a `watcher.toml` with another role. After
+`join`, `watcher run` starts the node.
+
+```sh
+watcher node join https://hub.example.com:7443 --token wj_… -c /etc/watcher/watcher.toml
+```
+
 ## Database options
 
-`user`, `token`, `db`, `secret` and `hostkey` need the database. They find
-it with these options:
+`user`, `token`, `db`, `secret`, `hostkey` and `node` (except
+`node join`) need the database. They find it with these options:
 
 | Option | Description |
 |---|---|

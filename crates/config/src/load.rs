@@ -14,9 +14,9 @@
 
 use crate::select::{Glob, HostSelector, Ref, ServiceSelector};
 use crate::{
-    Assigned, Check, Config, Contact, Diagnostic, Group, Host, Layer, Loaded, NotifyOn, NotifyRule,
-    Origin, Reason, RunOn, Service, ServiceObject, Settings, Severity, Source, Ssh, Var, Vars,
-    macros, var_at,
+    Assigned, Check, Config, Contact, Diagnostic, Group, Host, LOCAL_NODE, Layer, Loaded, NotifyOn,
+    NotifyRule, Origin, Reason, RunOn, Service, ServiceObject, Settings, Severity, Source, Ssh,
+    Var, Vars, macros, var_at,
 };
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
@@ -1089,7 +1089,7 @@ impl<'a> Compiler<'a> {
             config.hosts.push(Host {
                 name: def.name.clone(),
                 address: def.address.clone().unwrap_or_else(|| def.name.clone()),
-                node: text("node"),
+                node: text("node").filter(|n| n != LOCAL_NODE),
                 groups,
                 vars,
                 host_check: match default {
@@ -1485,7 +1485,7 @@ impl<'a> Compiler<'a> {
             let value = match macros::parse(m) {
                 Some(Ok(macros::Fixed::HostName)) => Some(host.name.clone()),
                 Some(Ok(macros::Fixed::HostAddress)) => Some(host.address.clone()),
-                Some(Ok(macros::Fixed::HostNode)) => host.node.clone(),
+                Some(Ok(macros::Fixed::HostNode)) => Some(host.node_name().to_string()),
                 Some(Ok(macros::Fixed::HostVar(v))) => var_at(&host.vars, v)
                     .and_then(Var::as_text)
                     .map(String::from),
@@ -1898,7 +1898,7 @@ impl<'a> Compiler<'a> {
                 Ref::Host => ("host", config.hosts.iter().any(|h| h.name == name)),
                 Ref::Node => (
                     "node",
-                    config.hosts.iter().any(|h| h.node.as_deref() == Some(name)),
+                    name == LOCAL_NODE || config.hosts.iter().any(|h| h.node_name() == name),
                 ),
                 Ref::HostGroup => (
                     "hostgroup",

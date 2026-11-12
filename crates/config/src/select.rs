@@ -139,7 +139,7 @@ impl HostSelector {
             why.push(format!("address {}", g.text));
         }
         if !self.nodes.is_empty() {
-            let n = self.nodes.iter().find(|n| host.node.as_ref() == Some(n))?;
+            let n = self.nodes.iter().find(|n| host.node_name() == n.as_str())?;
             why.push(format!("node {n}"));
         }
         if !self.groups.is_empty() {

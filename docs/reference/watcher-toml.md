@@ -39,13 +39,13 @@ from = "Watcher <watcher@example.com>"
 
 | Key | Default | Description |
 |---|---|---|
-| `role` | `standalone` | `standalone`, `hub` or `node`. *Not yet:* `hub` and `node` behave like `standalone`. |
+| `role` | `standalone` | `standalone`: one server. `hub`: also lets [nodes](../guides/nodes.md) at other sites connect, see [`[hub]`](#hub); needs `[database]`. `node`: only keeps the connection to its hub, see [`[node]`](#node); `watcher node join` sets it. |
 | `instance_name` | | Name of this installation, shown in the sidebar, the page title and the mail subject. |
 | `timezone` | the system's | IANA time zone name, like `Europe/Berlin`. Used for downtime group windows and time periods. `watcher init` and the setup in the browser write it, with this server's zone as the suggestion. |
 | `listen` | `127.0.0.1:8080` | Address and port of the web UI and API. Any address other than loopback needs a database, because logins need one. |
 | `public_url` | | The URL users open Watcher with. Used for links in notifications. With `https://`, session cookies are marked Secure. |
 | `conf_dir` | `conf.d` | Directory with the object files. Every `*.toml` below it is read. |
-| `data_dir` | `data` | Directory for sink buffers, the instance ID, the self-signed certificate, the ACME account and certificate (`acme/`) and `secret.key`, which encrypts [SSH secrets](../guides/ssh.md#secrets) and the secrets of [two-factor authentication](../guides/web-ui.md#two-factor-authentication). |
+| `data_dir` | `data` | Directory for sink buffers, the instance ID, the self-signed certificate, the ACME account and certificate (`acme/`), a hub's certificate authority (`ca/`), a node's certificates (`node/`) and `secret.key`, which encrypts [SSH secrets](../guides/ssh.md#secrets) and the secrets of [two-factor authentication](../guides/web-ui.md#two-factor-authentication). |
 | `config_mode` | `hybrid` | `hybrid`: web UI and files can both change the config. `files`: the web UI is read-only. `ui`: files are not watched. See [Config mode](../guides/web-ui.md#config-mode). |
 | `check_dirs` | `checks`, then the plugin directories | Where commands without a path are looked up, before `PATH`. |
 
@@ -65,6 +65,32 @@ The default plugin directories, as far as they exist:
 
 Without `[database]`, Watcher runs without a database: current states only,
 in memory, no history and no logins. See [Data](../guides/data.md).
+
+## [hub]
+
+With `role = "hub"`: where [nodes](../guides/nodes.md) connect. The whole
+section is optional.
+
+| Key | Default | Description |
+|---|---|---|
+| `listen` | `0.0.0.0:7443` | Address and port nodes connect to. Nodes log in with their certificate (mutual TLS); only joining works without one, with a one-time token. |
+| `url` | the host of `public_url`, else the `listen` address unless it is `0.0.0.0`, else this machine's name; with the port of `listen` | How nodes reach the hub, for example `https://hub.example.com:7443`. It goes into join commands. |
+
+The hub keeps its certificate authority in `data_dir/ca/`. Keep
+`ca.key` secret, and back it up: without it, every node has to join
+again.
+
+## [node]
+
+With `role = "node"`: the hub this node connects to. `watcher node join`
+writes it.
+
+| Key | Default | Description |
+|---|---|---|
+| `hub` | | Required. The hub's address for nodes, for example `https://hub.example.com:7443`. Without a port, 7443. |
+
+The node keeps its key and certificates in `data_dir/node/`. A node
+ignores the other settings except `data_dir`.
 
 ## [tls]
 
