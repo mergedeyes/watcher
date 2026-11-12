@@ -35,7 +35,8 @@ six digits and changes every 30 seconds; this kind of code is called TOTP
 (time-based one-time password). Someone who learns your password still
 can't log in without your phone.
 
-Each user turns it on for their own account:
+Each user turns it on for their own account. The setup wizard (in the
+browser, or `watcher init`) offers it for the first admin as well.
 
 1. Open Settings → Account and click **Set Up** under Two-Factor
    Authentication.

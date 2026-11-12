@@ -19,6 +19,8 @@ self_signed = true                  # or: cert = "/etc/ssl/w.pem" and key = "/et
 [admin]                             # needs database_url
 username = "admin"
 password_file = "/run/secrets/watcher-admin"   # or: password = "..."
+# totp_secret = "..."               # two-factor login with this key (base32,
+                                    # at least 26 characters, as in your app)
 
 [smtp]
 host = "mail.example.com"

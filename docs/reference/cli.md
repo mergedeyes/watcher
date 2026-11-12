@@ -84,6 +84,13 @@ watcher init [DIR] [--answers FILE] [--force]
 
 Answers can also be piped to stdin.
 
+With a database, `init` creates an admin account and offers
+[two-factor authentication](../guides/web-ui.md#two-factor-authentication)
+for it: it prints a QR code and the key for an authenticator app, asks
+for a code from the app, and prints the ten recovery codes at the end.
+In an answers file, `totp_secret` under `[admin]` turns it on with a key
+you already have (base32).
+
 ## setup
 
 Runs the setup wizard in the browser, then starts Watcher.

@@ -62,6 +62,13 @@ the instance name, the database, web access (listen address, public URL,
 TLS), the admin account, notifications and checks for this machine, and
 shows a summary. **Write & Start** writes the files and starts Watcher.
 
+For the admin account you can turn on
+[two-factor authentication](guides/web-ui.md#two-factor-authentication)
+right away: tick **Two-Factor**, scan the QR code with an authenticator
+app, and confirm with a code from the app. After **Write & Start**, the
+page shows the ten recovery codes once. Save them before you continue to
+the login.
+
 **In the terminal:**
 
 ```sh
