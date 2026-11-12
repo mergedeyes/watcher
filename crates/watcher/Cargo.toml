@@ -13,9 +13,11 @@ publish.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 axum-server.workspace = true
+base64.workspace = true
 clap.workspace = true
 getrandom.workspace = true
 humantime.workspace = true
+instant-acme.workspace = true
 jiff.workspace = true
 notify.workspace = true
 rcgen.workspace = true
@@ -34,6 +36,7 @@ watcher-exec.workspace = true
 watcher-hub.workspace = true
 watcher-notify.workspace = true
 watcher-store.workspace = true
+x509-parser.workspace = true
 
 [lints]
 workspace = true

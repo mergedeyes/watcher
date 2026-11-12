@@ -13,6 +13,9 @@
 		plugins: string | null;
 		existing: string[];
 		min_password: number;
+		/** The server's time zone, and all IANA names for suggestions. */
+		timezone: string;
+		timezones: string[];
 	}
 
 	interface PlannedFile {
@@ -32,16 +35,25 @@
 	// Answers
 	let role = $state<'standalone' | 'hub'>('standalone');
 	let instanceName = $state('');
+	let timezone = $state('');
 	let databaseUrl = $state('');
 	let dbResult = $state<string | null>(null);
 	let listen = $state('127.0.0.1:8080');
 	let publicUrl = $state('');
-	let tlsMode = $state<'none' | 'self' | 'files'>('none');
+	let tlsMode = $state<'none' | 'self' | 'files' | 'acme'>('none');
 	let cert = $state('');
 	let key = $state('');
+	let acmeDomains = $state('');
+	let acmeEmail = $state('');
+	let acmeDirectory = $state('');
 	let adminName = $state('admin');
 	let adminPassword = $state('');
 	let adminConfirm = $state('');
+	/** Two-factor authentication for the admin: a secret, confirmed with a code from the app. */
+	let totpOn = $state(false);
+	let totpSetup = $state<{ secret: string; qr: string } | null>(null);
+	let totpCode = $state('');
+	let totpVerified = $state(false);
 	let alertEmail = $state('');
 	let alertWebhook = $state('');
 	let smtpOn = $state(false);
@@ -49,7 +61,8 @@
 	let testResult = $state<string | null>(null);
 	let monitorLocalhost = $state(true);
 	let files = $state<PlannedFile[]>([]);
-	let done = $state<{ url: string } | null>(null);
+	let done = $state<{ url: string; recovery: string[] } | null>(null);
+	let copied = $state(false);
 
 	onMount(() => {
 		try {
@@ -100,6 +113,7 @@
 			defaults = await call<Defaults>('GET', '');
 			listen = defaults.listen;
 			instanceName ||= defaults.hostname;
+			timezone ||= defaults.timezone;
 			step = 1;
 		});
 	}
@@ -110,6 +124,46 @@
 			const r = await call<{ backend: string; users: number }>('POST', '/database', { url: databaseUrl.trim() });
 			dbResult = `${r.backend}; schema ready${r.users ? `; ${r.users} user(s) exist` : ''}`;
 		});
+	}
+
+	function toggleTotp() {
+		if (!totpOn || totpSetup) return;
+		run(async () => {
+			totpSetup = await call<{ secret: string; qr: string }>('POST', '/totp', {
+				username: adminName.trim(),
+				issuer: instanceName.trim() || null
+			});
+		});
+	}
+
+	function verifyTotp() {
+		if (!totpSetup) return;
+		const secret = totpSetup.secret;
+		run(async () => {
+			await call('POST', '/totp/check', { secret, code: totpCode.trim() });
+			totpVerified = true;
+		});
+	}
+
+	/** The key in groups of four, as apps show it. */
+	const grouped = (secret: string) => secret.replace(/(.{4})(?=.)/g, '$1 ');
+
+	async function copyCodes() {
+		if (!done) return;
+		await navigator.clipboard.writeText(done.recovery.join('\n') + '\n');
+		copied = true;
+	}
+
+	/** The first name the ACME certificate is for: the domains, else the public URL's host. */
+	function acmeHost(): string {
+		const first = list(acmeDomains)[0];
+		if (first) return first;
+		try {
+			const host = new URL(publicUrl.trim()).hostname;
+			return /^[\d.]+$|^\[/.test(host) ? '' : host;
+		} catch {
+			return '';
+		}
 	}
 
 	function list(text: string) {
@@ -153,14 +207,30 @@
 			instance_name: instanceName.trim() || null,
 			listen: listen.trim(),
 			public_url: publicUrl.trim() || null,
+			timezone: timezone.trim() || null,
 			tls:
 				tlsMode === 'self'
 					? { self_signed: true }
 					: tlsMode === 'files'
 						? { cert: cert.trim(), key: key.trim() }
-						: null,
+						: tlsMode === 'acme'
+							? {
+									acme: {
+										domains: list(acmeDomains),
+										email: acmeEmail.trim() || null,
+										// Left out, the server uses Let's Encrypt.
+										...(acmeDirectory.trim() ? { directory: acmeDirectory.trim() } : {})
+									}
+								}
+							: null,
 			database_url: database ? databaseUrl.trim() : null,
-			admin: database ? { username: adminName.trim(), password: adminPassword } : null,
+			admin: database
+				? {
+						username: adminName.trim(),
+						password: adminPassword,
+						totp_secret: totpOn && totpVerified && totpSetup ? totpSetup.secret : null
+					}
+				: null,
 			smtp: smtpAnswer(),
 			alert_email: list(alertEmail),
 			alert_webhook: alertWebhook.trim() || null,
@@ -178,9 +248,16 @@
 				if (adminPassword.length < (defaults?.min_password ?? 10))
 					return `Password: min. ${defaults?.min_password ?? 10} characters.`;
 				if (adminPassword !== adminConfirm) return 'Passwords differ.';
+				if (totpOn && !totpVerified) return 'Two-factor: enter the code from the app and click Verify, or turn it off.';
+				return null;
+			case 'Instance':
+				// The server checks too; without a list (no time zone data) leave it to it.
+				if (timezone.trim() && defaults?.timezones.length && !defaults.timezones.includes(timezone.trim()))
+					return `Timezone: unknown "${timezone.trim()}" (an IANA name like Europe/Berlin).`;
 				return null;
 			case 'Web Access':
 				if (tlsMode === 'files' && (!cert.trim() || !key.trim())) return 'Certificate and key paths required.';
+				if (tlsMode === 'acme' && !acmeHost()) return 'ACME: domains, or a public URL with a host name, required.';
 				return null;
 			default:
 				return null;
@@ -206,7 +283,7 @@
 
 	function apply() {
 		return run(async () => {
-			const r = await call<{ listen: string; scheme: string }>('POST', '/apply', answers());
+			const r = await call<{ listen: string; scheme: string; recovery_codes: string[] }>('POST', '/apply', answers());
 			try {
 				sessionStorage.removeItem('watcher-setup-token');
 			} catch {
@@ -214,10 +291,15 @@
 			}
 			const [host, port] = splitAddr(r.listen);
 			const sameHost = ['0.0.0.0', '[::]', '::'].includes(host) ? location.hostname : host;
-			const url = `${r.scheme}://${sameHost.includes(':') && !sameHost.startsWith('[') ? `[${sameHost}]` : sameHost}:${port}/`;
-			done = { url };
-			// The server restarts with the new config; continue there.
-			if (url.startsWith(location.origin)) waitFor(url);
+			// The ACME certificate is for its domain, not for the listen address.
+			const url =
+				tlsMode === 'acme'
+					? `https://${acmeHost()}${port === '443' ? '' : `:${port}`}/`
+					: `${r.scheme}://${sameHost.includes(':') && !sameHost.startsWith('[') ? `[${sameHost}]` : sameHost}:${port}/`;
+			done = { url, recovery: r.recovery_codes ?? [] };
+			// The server restarts with the new config; continue there, unless
+			// there are recovery codes to save first.
+			if (url.startsWith(location.origin) && done.recovery.length === 0) waitFor(url);
 		});
 	}
 
@@ -261,7 +343,16 @@
 			<div class="panel-title">Done</div>
 			<div class="body">
 				<p>Configuration written; Watcher is starting.</p>
-				<p>Continue at <a href={done.url}>{done.url}</a>{database ? ' and log in as ' + adminName : ''}.</p>
+				{#if done.recovery.length > 0}
+					<p>Recovery codes for {adminName} (shown once; each works once, in place of a code from the app):</p>
+					<div class="codes mono">
+						{#each done.recovery as c (c)}<code>{c}</code>{/each}
+					</div>
+					<p><button type="button" class="btn" onclick={copyCodes}>{copied ? 'Copied' : 'Copy'}</button></p>
+					<p>Save them, then continue at <a href={done.url}>{done.url}</a> and log in as {adminName}.</p>
+				{:else}
+					<p>Continue at <a href={done.url}>{done.url}</a>{database ? ' and log in as ' + adminName : ''}.</p>
+				{/if}
 			</div>
 		</section>
 	{:else}
@@ -297,6 +388,14 @@
 							<input id="name" bind:value={instanceName} />
 							<div class="help">sidebar, page title, mail subject</div>
 						</div>
+						<label for="tz">Timezone</label>
+						<div>
+							<input id="tz" list="timezones" autocomplete="off" bind:value={timezone} />
+							<datalist id="timezones">
+								{#each defaults?.timezones ?? [] as name (name)}<option value={name}></option>{/each}
+							</datalist>
+							<div class="help">downtime windows and time periods; default: this server's</div>
+						</div>
 					</div>
 				{:else if STEPS[step] === 'Database'}
 					<div class="fields">
@@ -328,12 +427,30 @@
 							<option value="none">none (HTTP, or a TLS reverse proxy)</option>
 							<option value="self">self-signed certificate</option>
 							<option value="files">certificate files</option>
+							<option value="acme">ACME (Let's Encrypt)</option>
 						</select>
 						{#if tlsMode === 'files'}
 							<label for="cert">Certificate</label>
 							<input id="cert" class="mono" placeholder="/etc/ssl/watcher/fullchain.pem" bind:value={cert} />
 							<label for="key">Key</label>
 							<input id="key" class="mono" placeholder="/etc/ssl/watcher/privkey.pem" bind:value={key} />
+						{/if}
+						{#if tlsMode === 'acme'}
+							<label for="acme-domains">Domains</label>
+							<div>
+								<input id="acme-domains" placeholder={acmeHost() || 'watcher.example.com'} bind:value={acmeDomains} />
+								<div class="help">comma-separated; default: the public URL's host. The CA connects to port 443 of each.</div>
+							</div>
+							<label for="acme-email">Email</label>
+							<div>
+								<input id="acme-email" placeholder="ops@example.com" bind:value={acmeEmail} />
+								<div class="help">the CA writes here about expiring certificates</div>
+							</div>
+							<label for="acme-dir">Directory</label>
+							<div>
+								<input id="acme-dir" class="mono" placeholder="Let's Encrypt" bind:value={acmeDirectory} />
+								<div class="help">ACME directory URL of another CA, e.g. an internal step-ca</div>
+							</div>
 						{/if}
 					</div>
 				{:else if STEPS[step] === 'Admin'}
@@ -350,6 +467,35 @@
 							</div>
 							<label for="pw2">Confirm</label>
 							<input id="pw2" type="password" autocomplete="new-password" bind:value={adminConfirm} />
+							<label for="totp">Two-Factor</label>
+							<div>
+								<input id="totp" type="checkbox" bind:checked={totpOn} onchange={toggleTotp} />
+								<span class="help">TOTP: a code from an authenticator app at each login</span>
+							</div>
+							{#if totpOn && totpSetup}
+								<span></span>
+								<div class="totp">
+									<img class="qr" src={`data:image/svg+xml;utf8,${encodeURIComponent(totpSetup.qr)}`} alt="QR code for the authenticator app" />
+									<div>
+										<p>Scan with an authenticator app, or enter the key:</p>
+										<code class="key">{grouped(totpSetup.secret)}</code>
+										{#if totpVerified}
+											<p class="ok">Verified.</p>
+										{:else}
+											<div class="verify">
+												<input
+													placeholder="Code from the app"
+													aria-label="Code from the app"
+													autocomplete="one-time-code"
+													inputmode="numeric"
+													bind:value={totpCode}
+												/>
+												<button type="button" class="btn" onclick={verifyTotp} disabled={busy || !totpCode.trim()}>Verify</button>
+											</div>
+										{/if}
+									</div>
+								</div>
+							{/if}
 						</div>
 					{/if}
 				{:else if STEPS[step] === 'Notifications'}
@@ -406,7 +552,7 @@
 							<pre class="mono">{f.contents}</pre>
 						</div>
 					{/each}
-					{#if database}<p>Create user: <strong>{adminName}</strong> (admin)</p>{/if}
+					{#if database}<p>Create user: <strong>{adminName}</strong> (admin{totpOn && totpVerified ? ', two-factor' : ''})</p>{/if}
 				{/if}
 				{#if error}<p class="error" role="alert">{error}</p>{/if}
 			</div>
@@ -537,6 +683,50 @@
 		border-radius: var(--radius);
 		max-height: 240px;
 		overflow: auto;
+	}
+
+	.totp {
+		display: flex;
+		gap: 14px;
+		flex-wrap: wrap;
+		align-items: flex-start;
+	}
+
+	.totp p {
+		margin: 0 0 6px;
+	}
+
+	.totp .ok {
+		margin: 0;
+	}
+
+	.qr {
+		width: 180px;
+		height: 180px;
+		image-rendering: pixelated;
+		border-radius: var(--radius);
+	}
+
+	.key {
+		display: inline-block;
+		margin-bottom: 8px;
+		padding: 4px 8px;
+		background: var(--panel-alt);
+		border: 1px solid var(--line);
+		border-radius: var(--radius);
+		overflow-wrap: anywhere;
+	}
+
+	.verify {
+		display: flex;
+		gap: 8px;
+	}
+
+	.codes {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+		gap: 4px 12px;
+		margin: 0 0 10px;
 	}
 
 	.foot {

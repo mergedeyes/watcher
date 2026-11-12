@@ -84,6 +84,13 @@ watcher init [DIR] [--answers FILE] [--force]
 
 Answers can also be piped to stdin.
 
+With a database, `init` creates an admin account and offers
+[two-factor authentication](../guides/web-ui.md#two-factor-authentication)
+for it: it prints a QR code and the key for an authenticator app, asks
+for a code from the app, and prints the ten recovery codes at the end.
+In an answers file, `totp_secret` under `[admin]` turns it on with a key
+you already have (base32).
+
 ## setup
 
 Runs the setup wizard in the browser, then starts Watcher.
@@ -192,6 +199,7 @@ watcher user add <name> [--admin] [--password-stdin]
 watcher user passwd <name> [--password-stdin]
 watcher user list
 watcher user remove <name>
+watcher user totp-off <name>
 ```
 
 - `--admin`: the user may edit the configuration.
@@ -199,6 +207,11 @@ watcher user remove <name>
   from the first line of stdin with `--password-stdin`.
 - `passwd` logs the user out everywhere. `remove` also deletes the user's
   sessions and API tokens.
+- `list` shows `totp` for users with
+  [two-factor authentication](../guides/web-ui.md#two-factor-authentication).
+- `totp-off` turns two-factor authentication off, for a user who lost
+  their phone and their recovery codes. The password alone logs them in
+  until they set it up again under Account.
 
 ## token
 

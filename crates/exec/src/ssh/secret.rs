@@ -199,13 +199,25 @@ impl Sealer {
 
     /// The credential `name`, encrypted.
     pub fn seal(&self, name: &str, credential: &Credential) -> Result<Vec<u8>, String> {
+        self.seal_bytes(name, &credential.to_bytes()?)
+    }
+
+    /// Decrypts what [`Sealer::seal`] made for `name`.
+    pub fn unseal(&self, name: &str, kind: Kind, sealed: &[u8]) -> Result<Credential, String> {
+        Credential::from_bytes(kind, &self.open_bytes(name, sealed)?)
+    }
+
+    /// `data`, encrypted and bound to `label`: it opens only with the same
+    /// label. Secret names can't contain `/`, so labels with one (like
+    /// `users/1/totp`) never match a secret.
+    pub fn seal_bytes(&self, label: &str, data: &[u8]) -> Result<Vec<u8>, String> {
         let mut nonce = [0u8; NONCE_LEN];
         getrandom::fill(&mut nonce).map_err(|e| format!("random: {e}"))?;
-        let mut data = credential.to_bytes()?;
+        let mut data = data.to_vec();
         self.key
             .seal_in_place_append_tag(
                 Nonce::assume_unique_for_key(nonce),
-                Aad::from(name.as_bytes()),
+                Aad::from(label.as_bytes()),
                 &mut data,
             )
             .map_err(|_| "encryption failed")?;
@@ -216,8 +228,8 @@ impl Sealer {
         Ok(out)
     }
 
-    /// Decrypts what [`Sealer::seal`] made for `name`.
-    pub fn unseal(&self, name: &str, kind: Kind, sealed: &[u8]) -> Result<Credential, String> {
+    /// Decrypts what [`Sealer::seal_bytes`] made for `label`.
+    pub fn open_bytes(&self, label: &str, sealed: &[u8]) -> Result<Vec<u8>, String> {
         let wrong = || "cannot decrypt: sealed with another secret.key, or damaged".to_string();
         let (&version, rest) = sealed.split_first().ok_or_else(wrong)?;
         if version != VERSION || rest.len() < NONCE_LEN {
@@ -228,9 +240,9 @@ impl Sealer {
         let mut data = data.to_vec();
         let plain = self
             .key
-            .open_in_place(nonce, Aad::from(name.as_bytes()), &mut data)
+            .open_in_place(nonce, Aad::from(label.as_bytes()), &mut data)
             .map_err(|_| wrong())?;
-        Credential::from_bytes(kind, plain)
+        Ok(plain.to_vec())
     }
 }
 

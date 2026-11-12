@@ -6,6 +6,7 @@ role = "standalone"                 # standalone | hub
 instance_name = "msp-hub"           # sidebar, page title, mail subject
 listen = "127.0.0.1:8080"           # non-loopback needs database_url
 public_url = "https://watcher.example.com"
+timezone = "Europe/Berlin"          # downtime windows, time periods; default: the system's
 database_url = "postgres://watcher:secret@db.example.com/watcher"
 
 alert_email = ["ops@example.com"]   # contact "admins"
@@ -15,10 +16,14 @@ test_notification = false           # send a test to the contact after setup
 
 [tls]                               # serve HTTPS; omit for HTTP or a TLS proxy
 self_signed = true                  # or: cert = "/etc/ssl/w.pem" and key = "/etc/ssl/w.key"
+                                    # or, in place of both, Let's Encrypt:
+                                    # [tls.acme] with email = "ops@example.com"
 
 [admin]                             # needs database_url
 username = "admin"
 password_file = "/run/secrets/watcher-admin"   # or: password = "..."
+# totp_secret = "..."               # two-factor login with this key (base32,
+                                    # at least 26 characters, as in your app)
 
 [smtp]
 host = "mail.example.com"

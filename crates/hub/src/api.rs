@@ -75,6 +75,14 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/api/v1/auth/status", get(auth::status))
         .route("/api/v1/auth/login", post(auth::login))
         .route("/api/v1/auth/logout", post(auth::logout))
+        .route(
+            "/api/v1/auth/totp",
+            get(auth::totp_status)
+                .put(auth::totp_enable)
+                .delete(auth::totp_disable),
+        )
+        .route("/api/v1/auth/totp/setup", post(auth::totp_setup))
+        .route("/api/v1/auth/totp/recovery", post(auth::totp_recovery))
         .route("/api/v1/tokens", get(auth::tokens).post(auth::create_token))
         .route("/api/v1/tokens/{id}", delete(auth::delete_token))
         .route("/api/v1/config", get(config::overview))

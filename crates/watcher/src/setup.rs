@@ -19,6 +19,7 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 use watcher_config::{Contact, Smtp};
+use watcher_hub::totp;
 use watcher_notify::{Notification, Notifier};
 use watcher_store::Store;
 
@@ -68,6 +69,8 @@ pub async fn run(dir: &Path, listen: SocketAddr) -> Result<PathBuf> {
         .route("/api/v1/setup", get(defaults))
         .route("/api/v1/setup/database", post(database))
         .route("/api/v1/setup/notify-test", post(notify_test))
+        .route("/api/v1/setup/totp", post(totp_secret))
+        .route("/api/v1/setup/totp/check", post(totp_check))
         .route("/api/v1/setup/plan", post(plan))
         .route("/api/v1/setup/apply", post(apply))
         .fallback(watcher_hub::serve_ui)
@@ -164,8 +167,22 @@ async fn defaults(State(setup): Shared, headers: HeaderMap) -> Response {
         "plugins": init_cmd::plugin_dir(),
         "existing": existing,
         "min_password": init_cmd::MIN_PASSWORD,
+        "timezone": init_cmd::system_timezone(),
+        "timezones": timezones(),
     }))
     .into_response()
+}
+
+/// IANA time zone names for suggestions, without the `posix/` and
+/// `right/` copies some systems have.
+fn timezones() -> Vec<String> {
+    let mut names: Vec<String> = jiff::tz::db()
+        .available()
+        .map(|name| name.to_string())
+        .filter(|name| !name.starts_with("posix") && !name.starts_with("right/"))
+        .collect();
+    names.sort();
+    names
 }
 
 #[derive(Deserialize)]
@@ -233,6 +250,66 @@ async fn notify_test(
     Json(json!({ "results": results })).into_response()
 }
 
+#[derive(Deserialize)]
+struct TotpBody {
+    username: String,
+    /// The instance name, which the app shows with the account.
+    issuer: Option<String>,
+}
+
+/// A new secret for the admin's authenticator app, with its QR code.
+/// Nothing is stored: the secret comes back with the answers.
+async fn totp_secret(
+    State(setup): Shared,
+    headers: HeaderMap,
+    Json(body): Json<TotpBody>,
+) -> Response {
+    if !unlocked(&setup, &headers) {
+        return locked();
+    }
+    let secret = totp::new_secret();
+    let issuer = body
+        .issuer
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Watcher");
+    let uri = totp::uri(issuer, body.username.trim(), &secret);
+    match totp::qr_svg(&uri) {
+        Ok(qr) => {
+            Json(json!({ "secret": totp::encode(&secret), "uri": uri, "qr": qr })).into_response()
+        }
+        Err(err) => error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+#[derive(Deserialize)]
+struct TotpCheckBody {
+    secret: String,
+    code: String,
+}
+
+/// Whether a code from the app fits the secret: the app is set up right.
+async fn totp_check(
+    State(setup): Shared,
+    headers: HeaderMap,
+    Json(body): Json<TotpCheckBody>,
+) -> Response {
+    if !unlocked(&setup, &headers) {
+        return locked();
+    }
+    let Some(secret) = totp::decode(&body.secret) else {
+        return error(StatusCode::UNPROCESSABLE_ENTITY, "not a TOTP key");
+    };
+    match totp::verify(&secret, &body.code, totp::now()) {
+        Some(_) => StatusCode::NO_CONTENT.into_response(),
+        None => error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid code; is the clock of the device right?",
+        ),
+    }
+}
+
 /// The files the answers would write.
 async fn plan(State(setup): Shared, headers: HeaderMap, Json(answers): Json<Answers>) -> Response {
     if !unlocked(&setup, &headers) {
@@ -268,9 +345,10 @@ async fn apply(State(setup): Shared, headers: HeaderMap, Json(answers): Json<Ans
         Ok(plan) => plan,
         Err(err) => return error(StatusCode::UNPROCESSABLE_ENTITY, format!("{err:#}")),
     };
-    if let Err(err) = init_cmd::apply(&answers, &plan).await {
-        return error(StatusCode::UNPROCESSABLE_ENTITY, format!("{err:#}"));
-    }
+    let recovery = match init_cmd::apply(&answers, &plan).await {
+        Ok(recovery) => recovery,
+        Err(err) => return error(StatusCode::UNPROCESSABLE_ENTITY, format!("{err:#}")),
+    };
     let config = setup.dir.join("watcher.toml");
     let listen = answers
         .listen
@@ -284,7 +362,15 @@ async fn apply(State(setup): Shared, headers: HeaderMap, Json(answers): Json<Ans
     if let Some(done) = setup.done.lock().unwrap_or_else(|e| e.into_inner()).take() {
         let _ = done.send(config.clone());
     }
-    Json(json!({ "config": config, "listen": listen, "scheme": scheme })).into_response()
+    // The admin's recovery codes, if two-factor authentication was turned
+    // on: the page shows them before it moves on to the login.
+    Json(json!({
+        "config": config,
+        "listen": listen,
+        "scheme": scheme,
+        "recovery_codes": recovery,
+    }))
+    .into_response()
 }
 
 #[cfg(test)]

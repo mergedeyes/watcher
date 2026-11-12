@@ -396,6 +396,16 @@ export interface User {
 	disabled: boolean;
 	created: string;
 	last_login: string | null;
+	/** Two-factor authentication (TOTP) is on. */
+	totp: boolean;
+}
+
+export interface TotpSetup {
+	/** Base32, for typing into the app. */
+	secret: string;
+	uri: string;
+	/** The URI as a QR code, an SVG image. */
+	qr: string;
 }
 
 export interface AuthStatus {
@@ -624,8 +634,15 @@ export const api = {
 	scheduler: (limit = 500) => get<Scheduled[]>(`/scheduler?limit=${limit}`),
 
 	authStatus: () => get<AuthStatus>('/auth/status'),
-	login: (username: string, password: string) =>
-		send<{ user: User }>('POST', '/auth/login', { username, password }),
+	/** `code`: from the app, or a recovery code; for users with two-factor on. */
+	login: (username: string, password: string, code?: string) =>
+		send<{ user: User }>('POST', '/auth/login', { username, password, code }),
+	totp: () => get<{ enabled: boolean; recovery_codes: number }>('/auth/totp'),
+	totpSetup: () => send<TotpSetup>('POST', '/auth/totp/setup'),
+	totpEnable: (secret: string, code: string) =>
+		send<{ recovery_codes: string[] }>('PUT', '/auth/totp', { secret, code }),
+	totpDisable: (code: string) => send<void>('DELETE', '/auth/totp', { code }),
+	totpRecovery: (code: string) => send<{ recovery_codes: string[] }>('POST', '/auth/totp/recovery', { code }),
 	logout: () => send<void>('POST', '/auth/logout'),
 	tokens: () => get<ApiToken[]>('/tokens'),
 	createToken: (name: string) => send<{ token: string; info: ApiToken }>('POST', '/tokens', { name }),
@@ -634,7 +651,8 @@ export const api = {
 	createUser: (username: string, password: string, admin: boolean) =>
 		send<User>('POST', '/users', { username, password, admin }),
 	/** Admins: anything; everyone: their own password. */
-	updateUser: (name: string, change: { password?: string; admin?: boolean; disabled?: boolean }) =>
+	/** `totp: false` turns two-factor off (admins). */
+	updateUser: (name: string, change: { password?: string; admin?: boolean; disabled?: boolean; totp?: false }) =>
 		send<User>('PUT', `/users/${seg(name)}`, change),
 	deleteUser: (name: string) => send<void>('DELETE', `/users/${seg(name)}`),
 

@@ -7,8 +7,12 @@ use std::io::{BufRead, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use watcher_config::{Bootstrap, Contact, InstanceRole, Smtp, SmtpTls, Tls, load_dir};
-use watcher_hub::auth::hash_password;
+use watcher_config::{
+    Acme, Bootstrap, Contact, InstanceRole, LETS_ENCRYPT, Smtp, SmtpTls, Tls, load_dir,
+};
+use watcher_exec::ssh::Sealer;
+use watcher_hub::auth::{self, hash_password};
+use watcher_hub::totp;
 use watcher_notify::{Mailer, Notification, Notifier};
 use watcher_store::Store;
 
@@ -38,6 +42,9 @@ pub struct Answers {
     pub instance_name: Option<String>,
     pub listen: Option<String>,
     pub public_url: Option<String>,
+    /// IANA time zone of downtime windows and time periods, like
+    /// `Europe/Berlin`.
+    pub timezone: Option<String>,
     /// HTTPS: certificate files or self-signed.
     pub tls: Option<Tls>,
     pub database_url: Option<String>,
@@ -58,6 +65,9 @@ pub struct Admin {
     pub username: String,
     pub password: Option<String>,
     pub password_file: Option<PathBuf>,
+    /// Turns on two-factor authentication with this key (base32), the one
+    /// the authenticator app has.
+    pub totp_secret: Option<String>,
 }
 
 fn yes() -> bool {
@@ -110,7 +120,12 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         println!("  {}", file.path.display());
     }
     if let Some(admin) = &answers.admin {
-        println!("Create user: {} (admin)", admin.username);
+        let totp = if admin.totp_secret.is_some() {
+            ", two-factor"
+        } else {
+            ""
+        };
+        println!("Create user: {} (admin{totp})", admin.username);
     }
     if interactive {
         let stdin = std::io::stdin();
@@ -128,7 +143,16 @@ pub async fn run(args: Args) -> Result<ExitCode> {
         }
     }
 
-    apply(&answers, &plan).await?;
+    let recovery = apply(&answers, &plan).await?;
+    if let Some(admin) = answers.admin.as_ref().filter(|_| !recovery.is_empty()) {
+        println!(
+            "\nRecovery codes for {} (shown only now; each works once, in place of a code from the app):",
+            admin.username
+        );
+        for code in &recovery {
+            println!("  {code}");
+        }
+    }
     let config = args.dir.join("watcher.toml");
     println!("\nDone. Start: watcher run {}", config.display());
     Ok(ExitCode::SUCCESS)
@@ -181,6 +205,15 @@ async fn ask(p: &mut Prompter<'_>) -> Result<Answers> {
         listen.ip().to_string()
     };
     a.public_url = Some(p.ask("Public URL", &format!("http://{host}:{}", listen.port()))?);
+    a.timezone = loop {
+        let value = p.ask("Timezone", &system_timezone())?;
+        match jiff::tz::TimeZone::get(&value) {
+            Ok(_) => break Some(value),
+            Err(_) => p.note(&format!(
+                "error: unknown time zone {value:?} (an IANA name like Europe/Berlin)"
+            ))?,
+        }
+    };
 
     if a.database_url.is_some() {
         let username = p.ask("Admin user", "admin")?;
@@ -196,10 +229,12 @@ async fn ask(p: &mut Prompter<'_>) -> Result<Answers> {
             }
             break first;
         };
+        let totp_secret = ask_totp(p, &username, &totp::new_secret())?;
         a.admin = Some(Admin {
             username,
             password: Some(password),
             password_file: None,
+            totp_secret,
         });
     }
 
@@ -271,6 +306,35 @@ async fn ask(p: &mut Prompter<'_>) -> Result<Answers> {
         }
     }
     Ok(a)
+}
+
+/// Offers two-factor authentication for the admin with `secret`: shows the
+/// QR code and the key, then takes a code from the app, which shows the app
+/// is set up right. Returns the key (base32), or `None` if declined.
+fn ask_totp(p: &mut Prompter<'_>, username: &str, secret: &[u8]) -> Result<Option<String>> {
+    if !p.yes("Two-factor authentication (TOTP)?", false)? {
+        return Ok(None);
+    }
+    let key = totp::encode(secret);
+    let qr = totp::qr_text(&totp::uri("Watcher", username, secret)).map_err(anyhow::Error::msg)?;
+    writeln!(p.output, "\n{qr}")?;
+    p.note("Scan with an authenticator app, or enter the key:")?;
+    let groups: Vec<&str> = key
+        .as_bytes()
+        .chunks(4)
+        .map(|c| std::str::from_utf8(c).unwrap_or_default())
+        .collect();
+    p.note(&groups.join(" "))?;
+    loop {
+        let Some(code) = p.ask_opt("Code from the app", "")? else {
+            p.note("two-factor authentication: skipped")?;
+            return Ok(None);
+        };
+        match totp::verify(secret, &code, totp::now()) {
+            Some(_) => return Ok(Some(key)),
+            None => p.note("error: invalid code; is the clock of the device right?")?,
+        }
+    }
 }
 
 /// Terminal prompts. Without a terminal, passwords are read as plain lines,
@@ -362,6 +426,8 @@ pub(crate) struct PlannedFile {
 pub(crate) struct Plan {
     pub files: Vec<PlannedFile>,
     conf_dir: PathBuf,
+    /// Where `secret.key` goes (watcher.toml keeps the default `data`).
+    data_dir: PathBuf,
 }
 
 impl Plan {
@@ -383,23 +449,38 @@ impl Plan {
         {
             bail!("public_url: must start with http:// or https://");
         }
+        // ACME with its domains filled in from public_url, as watcher run
+        // would; written out so watcher.toml says which names it covers.
+        let mut acme = None;
         if let Some(tls) = &a.tls {
-            match (&tls.cert, &tls.key, tls.self_signed) {
-                (Some(cert), Some(key), false) => {
+            match (&tls.cert, &tls.key, tls.self_signed, &tls.acme) {
+                (Some(cert), Some(key), false, None) => {
                     for (what, file) in [("cert", cert), ("key", key)] {
                         if !file.is_file() {
                             bail!("tls {what}: no file {}", file.display());
                         }
                     }
                 }
-                (None, None, true) => {}
-                _ => bail!("tls: set cert and key, or self_signed = true"),
+                (None, None, true, None) => {}
+                (None, None, false, Some(settings)) => {
+                    let mut settings = settings.clone();
+                    settings
+                        .resolve(a.public_url.as_deref())
+                        .map_err(anyhow::Error::msg)?;
+                    acme = Some(settings);
+                }
+                _ => bail!("tls: set cert and key, self_signed = true, or acme"),
             }
         }
         if let Some(name) = &a.instance_name
             && name.trim().is_empty()
         {
             bail!("instance_name: empty");
+        }
+        if let Some(tz) = &a.timezone
+            && jiff::tz::TimeZone::get(tz).is_err()
+        {
+            bail!("timezone {tz:?}: unknown (an IANA name like Europe/Berlin)");
         }
         if a.admin.is_some() && a.database_url.is_none() {
             bail!("admin: needs database_url");
@@ -408,6 +489,11 @@ impl Plan {
             let password = admin_password(admin)?;
             if password.chars().count() < MIN_PASSWORD {
                 bail!("admin password: min. {MIN_PASSWORD} characters");
+            }
+            if let Some(key) = &admin.totp_secret
+                && totp::decode(key).is_none()
+            {
+                bail!("admin totp_secret: not a TOTP key (base32, at least 26 characters)");
             }
         }
         if let Some(smtp) = &a.smtp {
@@ -440,7 +526,15 @@ impl Plan {
         if let Some(name) = &a.instance_name {
             toml += &format!("instance_name = {}\n", q(name.trim()));
         }
-        if let Some(tls) = &a.tls {
+        if let Some(tz) = &a.timezone {
+            toml += &format!(
+                "# Time zone of downtime windows and time periods.\ntimezone = {}\n",
+                q(tz)
+            );
+        }
+        if let Some(acme) = &acme {
+            toml += &acme_section(acme);
+        } else if let Some(tls) = &a.tls {
             toml += "\n[tls]\n";
             match (&tls.cert, &tls.key) {
                 (Some(cert), Some(key)) => {
@@ -529,8 +623,37 @@ impl Plan {
                 });
             }
         }
-        Ok(Plan { files, conf_dir })
+        Ok(Plan {
+            files,
+            conf_dir,
+            data_dir: dir.join("data"),
+        })
     }
+}
+
+/// `[tls.acme]` for watcher.toml; the directory only if it isn't the
+/// default.
+fn acme_section(acme: &Acme) -> String {
+    let domains: Vec<String> = acme.domains.iter().map(|d| q(d)).collect();
+    let mut out = format!(
+        "\n# HTTPS certificates from an ACME CA. It connects to port 443 of each\n\
+         # domain to check it, which has to reach this server.\n\
+         [tls.acme]\ndomains = [{}]\n",
+        domains.join(", ")
+    );
+    if let Some(email) = &acme.email {
+        out += &format!("email = {}\n", q(email));
+    }
+    if acme.directory != LETS_ENCRYPT {
+        out += &format!("directory = {}\n", q(&acme.directory));
+    }
+    if let Some(ca) = &acme.ca {
+        out += &format!("ca = {}\n", q(&ca.display().to_string()));
+    }
+    if let (Some(kid), Some(key)) = (&acme.eab_kid, &acme.eab_hmac_key) {
+        out += &format!("eab_kid = {}\neab_hmac_key = {}\n", q(kid), q(key));
+    }
+    out
 }
 
 pub(crate) fn admin_password(admin: &Admin) -> Result<String> {
@@ -545,14 +668,23 @@ pub(crate) fn admin_password(admin: &Admin) -> Result<String> {
 }
 
 /// Creates the admin, writes the files, checks they load, sends the test.
-pub(crate) async fn apply(a: &Answers, plan: &Plan) -> Result<()> {
+/// Returns the admin's recovery codes if two-factor authentication was
+/// turned on.
+pub(crate) async fn apply(a: &Answers, plan: &Plan) -> Result<Vec<String>> {
+    let mut recovery = Vec::new();
     if let Some(url) = &a.database_url {
         let store = Store::connect(url).await.context("database")?;
         println!("Database: {}", store.backend());
         if let Some(admin) = &a.admin {
             let hash = hash_password(&admin_password(admin)?).map_err(anyhow::Error::msg)?;
             match store.create_user(&admin.username, &hash, true).await {
-                Ok(_) => println!("User: {} created", admin.username),
+                Ok(user) => {
+                    println!("User: {} created", admin.username);
+                    if let Some(secret) = admin.totp_secret.as_deref().and_then(totp::decode) {
+                        recovery = enable_totp(&store, &plan.data_dir, user.id, &secret).await?;
+                        println!("Two-factor authentication: on");
+                    }
+                }
                 Err(watcher_store::Error::Conflict(_)) => {
                     println!("User: {} exists, unchanged", admin.username)
                 }
@@ -561,6 +693,10 @@ pub(crate) async fn apply(a: &Answers, plan: &Plan) -> Result<()> {
         }
     }
 
+    // conf.d may get no file (no contact, this machine not monitored), but
+    // it has to exist for the check below and for `watcher run`.
+    std::fs::create_dir_all(&plan.conf_dir)
+        .with_context(|| format!("cannot create {}", plan.conf_dir.display()))?;
     for file in &plan.files {
         if let Some(parent) = file.path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -607,7 +743,23 @@ pub(crate) async fn apply(a: &Answers, plan: &Plan) -> Result<()> {
             }
         }
     }
-    Ok(())
+    Ok(recovery)
+}
+
+/// Turns on two-factor authentication for a new user: the secret sealed
+/// with `data_dir/secret.key` (created if missing), and recovery codes.
+async fn enable_totp(
+    store: &Store,
+    data_dir: &Path,
+    user_id: i32,
+    secret: &[u8],
+) -> Result<Vec<String>> {
+    let sealer = Sealer::open_or_create(data_dir).map_err(anyhow::Error::msg)?;
+    let sealed = auth::seal_totp_secret(&sealer, user_id, secret).map_err(anyhow::Error::msg)?;
+    let (codes, hashes) = auth::recovery_codes();
+    // The user hasn't logged in yet, so every current code may be used.
+    store.enable_totp(user_id, &sealed, 0, &hashes).await?;
+    Ok(codes)
 }
 
 pub(crate) fn write_file(path: &Path, contents: &str, private: bool) -> std::io::Result<()> {
@@ -685,6 +837,14 @@ pub(crate) fn plugin_dir() -> Option<PathBuf> {
         .find(|d| d.join("check_disk").exists())
 }
 
+/// The system's time zone as an IANA name; UTC if it has none.
+pub(crate) fn system_timezone() -> String {
+    jiff::tz::TimeZone::system()
+        .iana_name()
+        .unwrap_or("UTC")
+        .to_string()
+}
+
 pub(crate) fn hostname() -> String {
     std::fs::read_to_string("/proc/sys/kernel/hostname")
         .map(|h| h.trim().to_string())
@@ -719,8 +879,9 @@ mod tests {
 
     #[tokio::test]
     async fn prompts_take_defaults_and_skip() {
-        // Role, database, listen, public URL, SMTP host, alert email, webhook, monitor.
-        let input = "\nnone\n\n\nnone\nnone\nnone\nn\n";
+        // Role, database, listen, public URL, timezone, SMTP host, alert
+        // email, webhook, monitor.
+        let input = "\nnone\n\n\n\nnone\nnone\nnone\nn\n";
         let mut reader = input.as_bytes();
         let mut out = Vec::new();
         let mut p = Prompter {
@@ -733,6 +894,7 @@ mod tests {
         assert_eq!(a.database_url, None);
         assert_eq!(a.listen.as_deref(), Some("127.0.0.1:8080"));
         assert_eq!(a.public_url.as_deref(), Some("http://127.0.0.1:8080"));
+        assert_eq!(a.timezone, Some(system_timezone()));
         assert!(a.smtp.is_none() && a.alert_email.is_empty() && !a.monitor_localhost);
         let transcript = String::from_utf8(out).unwrap();
         assert!(
@@ -743,8 +905,10 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_invalid_answers_and_asks_again() {
-        // Unknown role, then default; non-loopback without database, then loopback.
-        let input = "nope\n\nnone\n0.0.0.0:8080\n127.0.0.1:9000\n\nnone\nnone\nnone\nn\n";
+        // Unknown role, then default; non-loopback without database, then
+        // loopback; unknown time zone, then one that exists.
+        let input = "nope\n\nnone\n0.0.0.0:8080\n127.0.0.1:9000\n\nMars/Olympus\nEurope/Berlin\n\
+                     none\nnone\nnone\nn\n";
         let mut reader = input.as_bytes();
         let mut out = Vec::new();
         let mut p = Prompter {
@@ -754,9 +918,58 @@ mod tests {
         };
         let a = ask(&mut p).await.unwrap();
         assert_eq!(a.listen.as_deref(), Some("127.0.0.1:9000"));
+        assert_eq!(a.timezone.as_deref(), Some("Europe/Berlin"));
         let transcript = String::from_utf8(out).unwrap();
         assert!(transcript.contains("unknown role: nope"));
+        assert!(transcript.contains("unknown time zone \"Mars/Olympus\""));
         assert!(transcript.contains("non-loopback addresses need a database"));
+    }
+
+    #[test]
+    fn writes_acme_settings() {
+        let dir = temp_dir("acme");
+        let answers: Answers = toml::from_str(
+            r#"
+listen = "0.0.0.0:443"
+database_url = "postgres://x"
+public_url = "https://watcher.example.com"
+monitor_localhost = false
+
+[tls.acme]
+email = "ops@example.com"
+"#,
+        )
+        .unwrap();
+        let plan = Plan::new(&answers, &dir).unwrap();
+        let toml = &plan.files[0].contents;
+        assert!(
+            toml.contains("[tls.acme]\ndomains = [\"watcher.example.com\"]\n"),
+            "{toml}"
+        );
+        assert!(!toml.contains("directory"), "the default CA: {toml}");
+        write_file(&plan.files[0].path, toml, true).unwrap();
+        let tls = Bootstrap::load(&plan.files[0].path).unwrap().tls.unwrap();
+        assert_eq!(tls.acme.unwrap().email.as_deref(), Some("ops@example.com"));
+
+        let err = |text: &str| {
+            Plan::new(&toml::from_str(text).unwrap(), &dir)
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(err("[tls.acme]\n").contains("set domains"));
+        assert!(err("[tls]\nself_signed = true\n[tls.acme]\n").contains("or acme"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn creates_conf_d_without_files_for_it() {
+        let dir = temp_dir("empty");
+        let answers: Answers = toml::from_str("monitor_localhost = false").unwrap();
+        let plan = Plan::new(&answers, &dir).unwrap();
+        assert_eq!(plan.files.len(), 1, "only watcher.toml");
+        apply(&answers, &plan).await.unwrap();
+        assert!(dir.join("conf.d").is_dir());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -767,6 +980,7 @@ mod tests {
 listen = "127.0.0.1:8080"
 public_url = "https://watcher.example.com"
 instance_name = "msp-hub"
+timezone = "Europe/Berlin"
 alert_email = ["ops@example.com"]
 alert_webhook = "https://hooks.example.com/w"
 
@@ -806,6 +1020,7 @@ from = "Watcher <watcher@example.com>"
 
         let bootstrap = Bootstrap::load(&dir.join("watcher.toml")).unwrap();
         assert_eq!(bootstrap.instance_name.as_deref(), Some("msp-hub"));
+        assert_eq!(bootstrap.timezone.as_deref(), Some("Europe/Berlin"));
         assert!(bootstrap.tls.unwrap().self_signed);
         let smtp = bootstrap.smtp.unwrap();
         assert_eq!(smtp.password_file.unwrap(), dir.join("smtp.pass"));
@@ -840,6 +1055,7 @@ from = "Watcher <watcher@example.com>"
         let text = include_str!("../../../examples/init-answers.toml");
         let a: Answers = toml::from_str(text).unwrap();
         assert_eq!(a.admin.unwrap().username, "admin");
+        assert_eq!(a.timezone.as_deref(), Some("Europe/Berlin"));
         assert_eq!(a.smtp.unwrap().port(), 587);
     }
 
@@ -866,7 +1082,44 @@ from = "Watcher <watcher@example.com>"
         assert!(err("[tls]\ncert = \"/nonexistent.pem\"\nkey = \"/k.pem\"").contains("no file"));
         assert!(err("[tls]\ncert = \"/c.pem\"").contains("cert and key"));
         assert!(err("instance_name = \" \"").contains("empty"));
+        assert!(err(r#"timezone = "Mars/Olympus""#).contains("timezone"));
+        assert!(
+            err(
+                "database_url = \"postgres://x\"\n[admin]\nusername = \"a\"\n\
+                 password = \"long enough pw\"\ntotp_secret = \"JBSWY3DP\""
+            )
+            .contains("totp_secret")
+        );
         assert!(toml::from_str::<Answers>("typo = 1").is_err());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn asks_for_two_factor() {
+        let secret = totp::new_secret();
+        let ask = |input: String| {
+            let mut reader = input.as_bytes();
+            let mut out = Vec::new();
+            let mut p = Prompter {
+                input: &mut reader,
+                output: &mut out,
+                tty: false,
+            };
+            let key = ask_totp(&mut p, "admin", &secret).unwrap();
+            (key, String::from_utf8(out).unwrap())
+        };
+        assert_eq!(ask("\n".into()).0, None, "off unless asked for");
+        let (key, transcript) = ask("y\nnone\n".into());
+        assert_eq!(key, None);
+        assert!(transcript.contains("skipped"), "{transcript}");
+
+        // A wrong code, then the one the app shows.
+        let code = totp::code(&secret, totp::now());
+        let wrong = format!("{:06}", (code.parse::<u32>().unwrap() + 1) % 1_000_000);
+        let (key, transcript) = ask(format!("y\n{wrong}\n{code}\n"));
+        assert_eq!(key, Some(totp::encode(&secret)));
+        assert!(transcript.contains('█'), "the QR code: {transcript}");
+        assert!(transcript.contains(&totp::encode(&secret)[..4]));
+        assert!(transcript.contains("invalid code"));
     }
 }

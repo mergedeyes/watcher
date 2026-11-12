@@ -15,6 +15,18 @@ pub struct User {
     pub created: SystemTime,
     #[serde(serialize_with = "crate::query::rfc3339_opt")]
     pub last_login: Option<SystemTime>,
+    /// Two-factor authentication (TOTP) is on.
+    pub totp: bool,
+}
+
+/// What a login is checked against.
+#[derive(Debug, Clone)]
+pub struct Login {
+    pub user: User,
+    /// Argon2id PHC string.
+    pub password_hash: String,
+    /// The sealed TOTP secret, if two-factor is on.
+    pub totp_sealed: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -27,14 +39,25 @@ pub struct ApiToken {
     pub last_used: Option<SystemTime>,
 }
 
-type UserRow = (i32, String, bool, bool, f64, Option<f64>);
-/// A user row plus the password hash.
-type LoginRow = (i32, String, bool, bool, f64, Option<f64>, String);
+type UserRow = (i32, String, bool, bool, f64, Option<f64>, bool);
+/// A user row plus the password hash and the sealed TOTP secret.
+type LoginRow = (
+    i32,
+    String,
+    bool,
+    bool,
+    f64,
+    Option<f64>,
+    bool,
+    String,
+    Option<Vec<u8>>,
+);
 
 const USER_COLUMNS: &str = "u.id, u.username, u.admin, u.disabled,
-    extract(epoch FROM u.created)::float8, extract(epoch FROM u.last_login)::float8";
+    extract(epoch FROM u.created)::float8, extract(epoch FROM u.last_login)::float8,
+    u.totp_sealed IS NOT NULL";
 
-fn user((id, username, admin, disabled, created, last_login): UserRow) -> User {
+fn user((id, username, admin, disabled, created, last_login, totp): UserRow) -> User {
     User {
         id,
         username,
@@ -42,6 +65,7 @@ fn user((id, username, admin, disabled, created, last_login): UserRow) -> User {
         disabled,
         created: from_epoch(created),
         last_login: last_login.map(from_epoch),
+        totp,
     }
 }
 
@@ -154,16 +178,130 @@ impl Store {
         Ok(n > 0)
     }
 
-    /// The user and their password hash, for checking a login.
-    pub async fn login_user(&self, username: &str) -> Result<Option<(User, String)>> {
+    /// The user and what their login is checked against.
+    pub async fn login_user(&self, username: &str) -> Result<Option<Login>> {
         let sql = format!(
-            "SELECT {USER_COLUMNS}, u.password_hash FROM users u WHERE lower(u.username) = lower($1)"
+            "SELECT {USER_COLUMNS}, u.password_hash, u.totp_sealed
+             FROM users u WHERE lower(u.username) = lower($1)"
         );
         let row: Option<LoginRow> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
             .bind(username)
             .fetch_optional(&self.pool)
             .await?;
-        Ok(row.map(|(a, b, c, d, e, f, hash)| (user((a, b, c, d, e, f)), hash)))
+        Ok(
+            row.map(|(a, b, c, d, e, f, g, password_hash, totp_sealed)| Login {
+                user: user((a, b, c, d, e, f, g)),
+                password_hash,
+                totp_sealed,
+            }),
+        )
+    }
+
+    /// Turns two-factor on: stores the sealed secret, the time step of the
+    /// code that confirmed it (so that code can't be used again) and the
+    /// hashes of new recovery codes. A conflict if it is on already.
+    pub async fn enable_totp(
+        &self,
+        user_id: i32,
+        sealed: &[u8],
+        step: i64,
+        recovery: &[Vec<u8>],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        let updated = sqlx::query(
+            "UPDATE users SET totp_sealed = $2, totp_step = $3
+             WHERE id = $1 AND totp_sealed IS NULL",
+        )
+        .bind(user_id)
+        .bind(sealed)
+        .bind(step)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if updated == 0 {
+            return Err(Error::Conflict(
+                "two-factor authentication is on already".into(),
+            ));
+        }
+        replace_recovery_codes(&mut tx, user_id, recovery).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Turns two-factor off and drops the recovery codes. `false` if there
+    /// is no such user.
+    pub async fn disable_totp(&self, username: &str) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let id: Option<i32> = sqlx::query_scalar(
+            "UPDATE users SET totp_sealed = NULL, totp_step = NULL
+             WHERE lower(username) = lower($1) RETURNING id",
+        )
+        .bind(username)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(id) = id {
+            sqlx::query("DELETE FROM recovery_codes WHERE user_id = $1")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(id.is_some())
+    }
+
+    /// The user's sealed TOTP secret; `None` while two-factor is off.
+    pub async fn totp_sealed(&self, user_id: i32) -> Result<Option<Vec<u8>>> {
+        Ok(
+            sqlx::query_scalar("SELECT totp_sealed FROM users WHERE id = $1")
+                .bind(user_id)
+                .fetch_optional(&self.pool)
+                .await?
+                .flatten(),
+        )
+    }
+
+    /// Records that a code of time step `step` was used. `false` if a code
+    /// of this or a later step was used before: a replayed code.
+    pub async fn use_totp_step(&self, user_id: i32, step: i64) -> Result<bool> {
+        let n = sqlx::query(
+            "UPDATE users SET totp_step = $2
+             WHERE id = $1 AND totp_sealed IS NOT NULL AND (totp_step IS NULL OR totp_step < $2)",
+        )
+        .bind(user_id)
+        .bind(step)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok(n > 0)
+    }
+
+    /// Uses up one of the user's recovery codes; `false` if there is no
+    /// such code.
+    pub async fn use_recovery_code(&self, user_id: i32, code_hash: &[u8]) -> Result<bool> {
+        let n = sqlx::query("DELETE FROM recovery_codes WHERE user_id = $1 AND code_hash = $2")
+            .bind(user_id)
+            .bind(code_hash)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        Ok(n > 0)
+    }
+
+    /// Replaces the user's recovery codes with new ones.
+    pub async fn replace_recovery_codes(&self, user_id: i32, hashes: &[Vec<u8>]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        replace_recovery_codes(&mut tx, user_id, hashes).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn recovery_codes_left(&self, user_id: i32) -> Result<i64> {
+        Ok(
+            sqlx::query_scalar("SELECT count(*) FROM recovery_codes WHERE user_id = $1")
+                .bind(user_id)
+                .fetch_one(&self.pool)
+                .await?,
+        )
     }
 
     /// Starts a session. Expired sessions are cleaned up on the way.
@@ -288,6 +426,26 @@ impl Store {
         };
         Ok(query.execute(&self.pool).await?.rows_affected() > 0)
     }
+}
+
+async fn replace_recovery_codes(
+    tx: &mut sqlx::PgConnection,
+    user_id: i32,
+    hashes: &[Vec<u8>],
+) -> Result<()> {
+    sqlx::query("DELETE FROM recovery_codes WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO recovery_codes (user_id, code_hash)
+         SELECT $1, unnest($2::bytea[]) ON CONFLICT DO NOTHING",
+    )
+    .bind(user_id)
+    .bind(hashes)
+    .execute(&mut *tx)
+    .await?;
+    Ok(())
 }
 
 /// Identifies a token of a user.

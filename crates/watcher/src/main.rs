@@ -1,3 +1,4 @@
+mod acme;
 mod config_cmd;
 mod init_cmd;
 mod notify_cmd;

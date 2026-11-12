@@ -87,8 +87,8 @@ set it, and every alert to the rule that sent it.
   automatic script copies.
 - **Alerting:** SOFT and HARD states with retries, host UP/DOWN, flap
   detection; email, webhooks, Slack, Microsoft Teams, Telegram, ntfy,
-  Gotify, PagerDuty, Jira and scripts; reminders, escalations and time periods
-  (business hours, on-call at night).
+  Gotify, PagerDuty, Jira and scripts; reminders, escalations,
+  dependencies and time periods (business hours, on-call at night).
 - **Operations:** acknowledgements, one-off and recurring downtimes,
   muting, re-checks from a right-click menu.
 - **Web UI:** tactical overview, problems, host and service groups, alert
@@ -96,6 +96,8 @@ set it, and every alert to the rule that sent it.
   you type.
 - **Data:** PostgreSQL or TimescaleDB, SQL views, read-only database
   logins, copies to a central database.
+- **Access:** user accounts with admin rights, two-factor
+  authentication (TOTP), HTTPS with certificates from Let's Encrypt.
 - **API:** everything the web UI does, with tokens for your scripts.
 
 <p align="center">

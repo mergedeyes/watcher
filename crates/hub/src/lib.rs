@@ -11,6 +11,7 @@ mod locks;
 mod ops;
 pub mod ssh;
 mod stream;
+pub mod totp;
 mod ui;
 mod view;
 
