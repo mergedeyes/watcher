@@ -43,9 +43,10 @@ Single server:
 - **Checks:** Nagios plugins; scripts with Nagios, `key=value` or JSON
   output; passive results over the API; thresholds with units; built-in
   ping, TCP, HTTP, DNS and TLS certificate checks.
-- **Proxmox VE:** a built-in check for the cluster, nodes, storages, VMs
+- **Proxmox VE:** built-in checks for the cluster, nodes, storages, VMs
   and containers, backups and updates, through the API with a token
-  stored encrypted. Finding VMs and containers as hosts on its own: *not yet*.
+  stored encrypted; VMs and containers found on their own and added as
+  hosts with one click.
 - **Checks over SSH:** run on the hosts without an agent; keys or passwords
   stored encrypted; pinned host keys; scripts copied to the hosts.
 - **State handling:** SOFT/HARD, retries, host UP/DOWN, flap detection,
@@ -82,4 +83,4 @@ Nodes, first part:
 | Data repair in graphs, rollups, retention | 3 |
 | IBM i, AIX, HMC, MQ checks | 3b |
 | Tenants, roles and permissions | 4 |
-| SNMP, Prometheus, WinRM, discovery, Nagios config import | 5 |
+| SNMP, Prometheus, WinRM, network discovery, Nagios config import | 5 |

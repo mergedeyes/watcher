@@ -31,7 +31,7 @@ A service that is on no host gives a warning.
 | `enabled` | `true` | `false`: the service is not created on any host. |
 | `title` | the check's `title` | Name shown in the web UI. Can contain [macros](check.md#macros). |
 | `command` | the check's | The command to run. Can contain [macros](check.md#macros). |
-| `builtin` | the check's | Use a check built into Watcher instead of a command: `ping`, `tcp`, `http`, `dns`, `tls` or `proxmox`. See [Built-in checks](check.md#built-in-checks). |
+| `builtin` | the check's | Use a check built into Watcher instead of a command: `ping`, `tcp`, `http`, `dns`, `tls`, or one of the [Proxmox VE checks](check.md#proxmox-ve-checks). See [Built-in checks](check.md#built-in-checks). |
 | `shell` | `false` | `true` runs the command with `/bin/sh -c`, needed for pipes, `$(...)` or `&&`. |
 | `run_on` | `local` | Where the command runs. `local`: on the Watcher machine. `host`: on the monitored host over SSH, see [Checks over SSH](../guides/ssh.md). |
 | `copy` | `false` | With `run_on = "host"`: upload the script to the host before running it. |

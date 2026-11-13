@@ -243,7 +243,7 @@ Without `--password-stdin`, a password is generated and printed. See
 ## secret
 
 Manages keys and passwords for [checks over SSH](../guides/ssh.md#secrets),
-and API tokens for the [proxmox check](../guides/proxmox.md). They are
+and API tokens for the [Proxmox VE checks](../guides/proxmox.md). They are
 stored in the database, encrypted with `data_dir/secret.key`.
 
 ```

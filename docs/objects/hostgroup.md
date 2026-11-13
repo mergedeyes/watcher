@@ -26,9 +26,10 @@ services `http` and `https_cert`.
 | `host_check` | | The service that decides whether its hosts are UP or DOWN. `false`: no host check. See [Host state](host.md#host-state). |
 | `graph` | | The service whose graph is shown on the host pages. |
 | `ssh` | | Login for [checks over SSH](../guides/ssh.md): `{ user, secret, port }`. See [ssh](#ssh). |
+| `proxmox` | | The Proxmox VE API login for its hosts: `{ secret, fingerprint, port, verify, discover }`. See [proxmox](#proxmox). |
 | `vars` | | Default vars for its hosts, used by `$name$` macros and `for_each`. [Built-in checks](check.md#built-in-checks) don't read them, except through macros like `$host.vars.port$`. |
 
-A host's own `host_check`, `graph`, `ssh` and `vars` win over its host
+A host's own `host_check`, `graph`, `ssh`, `proxmox` and `vars` win over its host
 groups'. If two host groups of the same host set one of them to different
 values, that is an error; see
 [Host groups that disagree](../guides/configuration.md#host-groups-that-disagree).
@@ -119,6 +120,23 @@ ssh = { user = "monitor", secret = "monitor" }
 
 A host can set some of these itself, for example only `port`, and take the
 others from the group.
+
+## proxmox
+
+The login of the [Proxmox VE checks](check.md#proxmox-ve-checks), for
+hosts that are Proxmox VE servers.
+
+| Field | Default | Description |
+|---|---|---|
+| `secret` | | Name of the API token stored in Watcher. A Proxmox VE server needs it from itself or a host group. See [Store the token](../guides/proxmox.md#3-store-the-token-in-watcher). |
+| `fingerprint` | | The SHA-256 fingerprint of the API's certificate. Each node has its own certificate, so it usually goes on the host. |
+| `port` | `8006` | The API's port. |
+| `verify` | `true` | Without `fingerprint`: the certificate must be trusted by the system. `false` accepts any certificate. |
+| `discover` | `false` | Offer the VMs and containers as hosts. In a cluster, set it on one node only: every node lists all guests. |
+
+A host can set some of these itself, for example only `fingerprint`, and
+take the others from the group. VMs and containers (`host`, `vmid`) are
+set on the host, see [proxmox on hosts](host.md#proxmox).
 
 ## Checking members
 

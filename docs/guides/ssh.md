@@ -66,7 +66,7 @@ ssh = { port = 2222 }          # user and secret from linux
 ## Secrets
 
 Keys and passwords are called secrets. Each has a name, which `ssh.secret`
-refers to. API tokens for the [proxmox check](proxmox.md) are secrets too;
+refers to. API tokens for the [Proxmox VE checks](proxmox.md) are secrets too;
 they are stored the same way, but aren't used for SSH.
 
 | Command | What it does |

@@ -84,7 +84,8 @@ set it, and every alert to the rule that sent it.
   `key=value` or JSON), results pushed over the API, thresholds with
   units, built-in ping, TCP, HTTP, DNS and TLS certificate checks.
 - **Proxmox VE** through its API: cluster quorum, nodes, storages, VMs and
-  containers, backups and pending updates, with an encrypted API token.
+  containers, backups and pending updates. Watcher finds your VMs and
+  containers and adds them as hosts with one click.
 - **Remote checks over SSH** with encrypted secrets, pinned host keys and
   automatic script copies.
 - **Alerting:** SOFT and HARD states with retries, host UP/DOWN, flap

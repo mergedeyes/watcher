@@ -106,7 +106,7 @@ Good to know:
 | Nodes | On a hub: which [nodes](nodes.md) are connected; add, join again and remove nodes (admins). |
 | Process Info | Running time and results per minute; switches for notifications and active checks. |
 | Scheduling Queue | When each service is checked next. |
-| Configuration | Forms and a file editor for the configuration (admins). |
+| Configuration | Forms and a file editor for the configuration, secrets, and the VMs and containers that [discovery](proxmox.md#5-accept-vms-and-containers) found (admins). |
 | Account | Your user, password, two-factor authentication and API tokens. |
 | Users | Add, disable and delete accounts, set passwords and admin rights, reset two-factor authentication (admins). |
 
