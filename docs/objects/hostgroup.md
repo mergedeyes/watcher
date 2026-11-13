@@ -23,7 +23,7 @@ services `http` and `https_cert`.
 | `members` | | Host names. `*` matches any text, `?` one character. |
 | `services` | | Services every member gets. A [built-in check](check.md#built-in-checks) like `http` or `tls` can be listed as it is, without a `[service.<name>]`. |
 | `servicegroups` | | Service groups every member gets, with all their services. |
-| `host_check` | | The service that decides whether its hosts are UP or DOWN. `false`: no host check. See [Host state](host.md#host-state). |
+| `host_check` | | The service that decides whether its hosts are UP or DOWN. Its hosts get this service if they don't have it already. `false`: no host check. See [Host state](host.md#host-state). |
 | `graph` | | The service whose graph is shown on the host pages. |
 | `ssh` | | Login for [checks over SSH](../guides/ssh.md): `{ user, secret, port }`. See [ssh](#ssh). |
 | `proxmox` | | The Proxmox VE API login for its hosts: `{ secret, fingerprint, port, verify, discover }`. See [proxmox](#proxmox). |

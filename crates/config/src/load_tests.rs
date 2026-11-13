@@ -1798,3 +1798,79 @@ proxmox = { secret = "s", fingerprint = "12:34" }
         ]
     );
 }
+
+#[test]
+fn host_check_brings_its_service() {
+    // As in the web UI: check_ping is assigned through a service group the
+    // host isn't in, and named as its host check.
+    let config = ok(&[(
+        "a.toml",
+        r#"
+[check.check_ping]
+command = "check_ping -H $host.address$ -w 100,20% -c 500,60%"
+
+[service.check_ping]
+groups = ["linux"]
+
+[servicegroup.linux]
+
+[hostgroup.pve]
+members = ["pve*"]
+host_check = "check_ping"
+
+[[host]]
+name = "PROXMOX"
+address = "10.0.0.1"
+host_check = "check_ping"
+
+[[host]]
+name = "pve2"
+address = "10.0.0.2"
+"#,
+    )]);
+    for name in ["PROXMOX", "pve2"] {
+        let id = format!("{name}/check_ping");
+        let s = config.service(&id).unwrap_or_else(|| panic!("no {id}"));
+        assert!(matches!(&s.assigned[0].reason, Reason::Listed { by, .. } if by == "host_check"));
+        let host = config.hosts.iter().find(|h| h.name == name).unwrap();
+        assert_eq!(host.host_check.as_deref(), Some("check_ping"));
+    }
+    // No ping besides it.
+    assert!(config.service("PROXMOX/ping").is_none());
+}
+
+#[test]
+fn hints_for_names() {
+    let (_, diags) = compile(&[(
+        "a.toml",
+        r#"
+[[host]]
+name = "PROXMOX"
+address = "10.0.0.1"
+services = ["tcp*", "tls"]
+host_check = "check_pingg"
+"#,
+    )]);
+    assert_eq!(
+        messages(&diags),
+        [
+            "a.toml:2: error: host \"PROXMOX\": unknown service \"tcp*\": services = [...] takes names, not patterns (matching: tcp)",
+        ]
+    );
+    let (_, diags) = compile(&[(
+        "a.toml",
+        r#"
+[[host]]
+name = "PROXMOX"
+address = "10.0.0.1"
+services = ["tls"]
+host_check = "check_pingg"
+"#,
+    )]);
+    assert_eq!(
+        messages(&diags),
+        [
+            "a.toml:2: error: host \"PROXMOX\": host_check \"check_pingg\" is not a service on it; it names one of its services: tls; without host_check, a host with an address uses ping",
+        ]
+    );
+}
