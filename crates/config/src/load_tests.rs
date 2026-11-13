@@ -1874,3 +1874,39 @@ host_check = "check_pingg"
         ]
     );
 }
+
+#[test]
+fn hints_for_host_check() {
+    // A check without a service, a host check that is turned off, and one
+    // with errors of its own: each says what to do, reported once.
+    let (_, diags) = compile(&[(
+        "a.toml",
+        r#"
+[check.alive]
+command = "true"
+
+[[host]]
+name = "a"
+address = "10.0.0.1"
+host_check = "alive"
+
+[[host]]
+name = "b"
+host_check = "ping"
+service.ping.enabled = false
+
+[[host]]
+name = "c"
+host_check = "tcp"
+"#,
+    )]);
+    assert_eq!(
+        messages(&diags),
+        [
+            "a.toml:2: warning: check \"alive\" is used by no service",
+            "a.toml:5: error: host \"a\": host_check \"alive\" is not a service on it; there is a check \"alive\": add [service.alive]; without host_check, a host with an address uses ping",
+            "a.toml:10: error: host \"b\": host_check \"ping\" is turned off on it (enabled = false)",
+            "a.toml:15: error: host \"c\": service \"tcp\": vars.port is not set: the port",
+        ]
+    );
+}

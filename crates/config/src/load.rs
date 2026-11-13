@@ -121,9 +121,14 @@ impl Sink {
     }
 
     fn has_errors(&self) -> bool {
+        self.error_count() > 0
+    }
+
+    fn error_count(&self) -> usize {
         self.diagnostics
             .iter()
-            .any(|d| d.severity == Severity::Error)
+            .filter(|d| d.severity == Severity::Error)
+            .count()
     }
 
     /// Sorted by file and line; a group problem hit by several hosts is
@@ -1203,6 +1208,10 @@ impl<'a> Compiler<'a> {
                 continue;
             }
             let what = format!("host {:?}", host.name);
+            // Services the host should have but doesn't: with errors
+            // (reported already), or turned off with `enabled = false`.
+            let mut failed = Vec::new();
+            let mut disabled = Vec::new();
             for plan in self.plan(&host, input) {
                 if config
                     .services
@@ -1215,12 +1224,16 @@ impl<'a> Compiler<'a> {
                     );
                     continue;
                 }
-                if let Some(service) = self.service(config, host_idx, input, &plan) {
-                    config.services.push(service);
+                let errors = self.sink.error_count();
+                match self.service(config, host_idx, input, &plan) {
+                    Some(service) => config.services.push(service),
+                    None if self.sink.error_count() > errors => failed.push(plan.name),
+                    None => disabled.push(plan.name),
                 }
             }
 
             if let Some(hc) = &host.host_check
+                && !failed.contains(hc)
                 && !config
                     .services
                     .iter()
@@ -1230,20 +1243,28 @@ impl<'a> Compiler<'a> {
                     .sources
                     .get("host_check")
                     .map_or(&host.origin, |s| &s.origin);
-                // It names a service, which is easily mixed up with the
-                // check or the plugin (check_ping): say what it can be.
-                let services: Vec<&str> = config
-                    .services
-                    .iter()
-                    .filter(|s| s.host == host_idx)
-                    .map(|s| s.name.as_str())
-                    .collect();
-                let mut msg = format!("{what}: host_check {hc:?} is not a service on it");
-                if !services.is_empty() {
-                    msg += &format!("; it names one of its services: {}", services.join(", "));
-                }
-                if host.address != host.name {
-                    msg += "; without host_check, a host with an address uses ping";
+                let mut msg = format!("{what}: host_check {hc:?} ");
+                if disabled.contains(hc) {
+                    msg += "is turned off on it (enabled = false)";
+                } else {
+                    msg += "is not a service on it";
+                    // It names a service, which is easily mixed up with the
+                    // check or the plugin (check_ping): say what it can be.
+                    if self.checks.contains_key(hc) {
+                        msg += &format!("; there is a check {hc:?}: add [service.{hc}]");
+                    }
+                    let services: Vec<&str> = config
+                        .services
+                        .iter()
+                        .filter(|s| s.host == host_idx)
+                        .map(|s| s.name.as_str())
+                        .collect();
+                    if !services.is_empty() {
+                        msg += &format!("; it names one of its services: {}", services.join(", "));
+                    }
+                    if host.address != host.name {
+                        msg += "; without host_check, a host with an address uses ping";
+                    }
                 }
                 self.sink.error(Some(origin), msg);
             }
