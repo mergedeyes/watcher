@@ -721,7 +721,7 @@ host_check = true
     assert_eq!(
         messages(&diags),
         [
-            "a.toml:2: error: check \"x\": unknown builtin \"smtp\" (known: ping, tcp, http, dns, tls)",
+            "a.toml:2: error: check \"x\": unknown builtin \"smtp\" (known: ping, tcp, http, dns, tls, proxmox)",
             "a.toml:5: error: check \"y\": builtin \"ping\" runs without command or passive",
             "a.toml:9: error: host \"h\": host_check: a service name, or false for none",
         ]

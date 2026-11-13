@@ -188,7 +188,7 @@ impl fmt::Display for Tls {
     }
 }
 
-fn provider() -> Arc<CryptoProvider> {
+pub(super) fn provider() -> Arc<CryptoProvider> {
     static PROVIDER: OnceLock<Arc<CryptoProvider>> = OnceLock::new();
     PROVIDER
         .get_or_init(|| Arc::new(rustls::crypto::ring::default_provider()))
@@ -196,7 +196,7 @@ fn provider() -> Arc<CryptoProvider> {
 }
 
 /// The system's trust store (as reqwest uses), shared by all runs.
-fn platform_verifier() -> Result<Arc<dyn ServerCertVerifier>, String> {
+pub(super) fn platform_verifier() -> Result<Arc<dyn ServerCertVerifier>, String> {
     static VERIFIER: OnceLock<Result<Arc<dyn ServerCertVerifier>, String>> = OnceLock::new();
     VERIFIER
         .get_or_init(|| {
@@ -358,7 +358,7 @@ mod tests {
         list.extend_from_slice(extra);
         Builtin::new("tls", "127.0.0.1", &vars(&list))
             .unwrap()
-            .run(Duration::from_secs(3))
+            .run(Duration::from_secs(3), None)
             .await
     }
 

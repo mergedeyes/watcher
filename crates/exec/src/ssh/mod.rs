@@ -128,6 +128,19 @@ impl Pool {
         Self::with(None, reason.into())
     }
 
+    /// The stored secret `name`, for built-in checks that log in to an API.
+    /// They read it on every run, so a replaced secret is used right away.
+    pub async fn credential(&self, name: &str) -> Result<Credential, String> {
+        let vault = self
+            .vault
+            .as_ref()
+            .ok_or_else(|| self.unavailable.clone())?;
+        vault
+            .credential(name)
+            .await
+            .map_err(|e| format!("secret {name:?}: {e}"))
+    }
+
     fn with(vault: Option<Arc<dyn Vault>>, unavailable: String) -> Self {
         let config = client::Config {
             keepalive_interval: Some(Duration::from_secs(30)),
@@ -250,6 +263,12 @@ impl Pool {
             }
             Credential::Password(password) => {
                 handle.authenticate_password(&target.user, password).await
+            }
+            Credential::Token { .. } => {
+                return Err(format!(
+                    "secret {:?} is an API token, not a key or password",
+                    target.secret
+                ));
             }
         }
         .map_err(|e| format!("{target}: {e}"))?;

@@ -13,8 +13,8 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::{mpsc, watch};
 use watcher_core::{Format, RawOutput, ServiceState, State, StateType, Termination, evaluate};
 use watcher_store::{
-    Backend, EventFilter, HostSpec, Record, SeriesCache, ServiceSpec, Store, SyncMode, ingest,
-    ingest_with,
+    Backend, EventFilter, HostSpec, NewSecret, Record, SeriesCache, ServiceSpec, Store, SyncMode,
+    ingest, ingest_with,
 };
 
 /// A database created for one test.
@@ -633,31 +633,42 @@ async fn flags_downtimes_and_settings() {
 #[tokio::test]
 async fn secrets_and_host_keys() {
     each_server(|store, _, _| async move {
-        store
-            .put_secret(
-                "monitor",
-                "key",
-                Some("ssh-ed25519 AAAA x"),
-                b"sealed",
-                false,
-            )
-            .await
-            .unwrap();
-        let err = store
-            .put_secret("monitor", "password", None, b"other", false)
-            .await
-            .unwrap_err();
+        let key = NewSecret {
+            name: "monitor",
+            kind: "key",
+            public_key: Some("ssh-ed25519 AAAA x"),
+            token_id: None,
+            sealed: b"sealed",
+        };
+        store.put_secret(&key, false).await.unwrap();
+        let password = NewSecret {
+            kind: "password",
+            public_key: None,
+            sealed: b"other",
+            ..key
+        };
+        let err = store.put_secret(&password, false).await.unwrap_err();
         assert_eq!(err.to_string(), "secret \"monitor\" already exists");
-        store
-            .put_secret("monitor", "password", None, b"other", true)
-            .await
-            .unwrap();
+        store.put_secret(&password, true).await.unwrap();
         let list = store.secrets().await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(
             (list[0].kind.as_str(), list[0].public_key.as_deref()),
             ("password", None)
         );
+        let token = NewSecret {
+            name: "pve",
+            kind: "token",
+            token_id: Some("watcher@pam!mon"),
+            ..password
+        };
+        store.put_secret(&token, false).await.unwrap();
+        let list = store.secrets().await.unwrap();
+        assert_eq!(
+            (list[1].kind.as_str(), list[1].token_id.as_deref()),
+            ("token", Some("watcher@pam!mon"))
+        );
+        assert!(store.delete_secret("pve").await.unwrap());
         assert_eq!(
             store.secret("monitor").await.unwrap(),
             Some(("password".into(), b"other".to_vec()))

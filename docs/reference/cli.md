@@ -242,13 +242,15 @@ Without `--password-stdin`, a password is generated and printed. See
 
 ## secret
 
-Manages keys and passwords for [checks over SSH](../guides/ssh.md#secrets).
-They are stored in the database, encrypted with `data_dir/secret.key`.
+Manages keys and passwords for [checks over SSH](../guides/ssh.md#secrets),
+and API tokens for the [proxmox check](../guides/proxmox.md). They are
+stored in the database, encrypted with `data_dir/secret.key`.
 
 ```
 watcher secret new <name> [--replace]
 watcher secret import <name> <file> [--passphrase-stdin] [--replace]
 watcher secret password <name> [--password-stdin] [--replace]
+watcher secret token <name> --id <id> [--secret-stdin] [--replace]
 watcher secret show <name>
 watcher secret list
 watcher secret remove <name>
@@ -258,6 +260,11 @@ watcher secret remove <name>
   so you can append it directly: `watcher secret new monitor >> authorized_keys`.
 - `import` reads ed25519 or ECDSA keys in OpenSSH, PEM or PuTTY format, and
   asks for the passphrase if the key is encrypted. RSA is not supported.
+- `token` stores an API token: `--id` is its ID (for Proxmox VE
+  `user@realm!name`, in single quotes because of the `!`), and the secret
+  is asked for. `--secret-stdin` reads it from the first line of stdin
+  instead.
+- `list` shows the fingerprint of keys and the ID of tokens.
 - `--replace` overwrites an existing secret of the same name.
 
 ## hostkey

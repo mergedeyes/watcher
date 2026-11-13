@@ -4642,6 +4642,7 @@ dependencies = [
  "russh",
  "rustls",
  "rustls-platform-verifier",
+ "serde_json",
  "sha2 0.11.1",
  "shell-words",
  "surge-ping",

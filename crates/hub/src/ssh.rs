@@ -15,7 +15,8 @@ use watcher_config::{Config, RunOn, Service};
 use watcher_exec::ssh::{
     self, BoxFuture, Credential, Kind, Pool, PublicKey, Remote, Sealer, Target, Vault,
 };
-use watcher_store::{HostKey, SecretInfo, Store};
+use watcher_exec::{Builtin, CommandLine};
+use watcher_store::{HostKey, NewSecret as StoredSecret, SecretInfo, Store};
 
 type Shared = State<Arc<Hub>>;
 type User = Option<Extension<CurrentUser>>;
@@ -60,7 +61,7 @@ impl Vault for StoreVault {
                 .secret(name)
                 .await
                 .map_err(|e| format!("database: {e}"))?
-                .ok_or("no such secret (watcher secret, or Configuration → SSH)")?;
+                .ok_or("no such secret (watcher secret, or Configuration → Secrets)")?;
             let kind = Kind::parse(&kind).ok_or_else(|| format!("unknown kind {kind:?}"))?;
             self.sealer(false)?.unseal(name, kind, &sealed)
         })
@@ -82,7 +83,7 @@ impl Vault for StoreVault {
             match trusted {
                 true => Ok(()),
                 false => Err(format!(
-                    "host key changed ({}); accept: Configuration → SSH, or watcher hostkey accept {}",
+                    "host key changed ({}); accept: Configuration → Secrets, or watcher hostkey accept {}",
                     ssh::fingerprint(&line).unwrap_or_default(),
                     host_port(address, port),
                 )),
@@ -141,19 +142,30 @@ pub(crate) struct SecretView {
     #[serde(flatten)]
     info: SecretInfo,
     fingerprint: Option<String>,
-    /// Hosts that log in with it.
+    /// Hosts that log in with it: over SSH, or with built-in checks that
+    /// use it as an API token.
     hosts: Vec<String>,
 }
 
 fn secret_view(config: &Config, info: SecretInfo) -> SecretView {
+    let mut hosts: Vec<String> = config
+        .hosts
+        .iter()
+        .filter(|h| h.ssh.as_ref().is_some_and(|s| s.secret == info.name))
+        .map(|h| h.name.clone())
+        .collect();
+    for service in &config.services {
+        if let Some(CommandLine::Builtin(Builtin::Proxmox(p))) = &service.command
+            && p.secret == info.name
+            && let Some(host) = config.hosts.get(service.host)
+            && !hosts.contains(&host.name)
+        {
+            hosts.push(host.name.clone());
+        }
+    }
     SecretView {
         fingerprint: info.public_key.as_deref().and_then(ssh::fingerprint),
-        hosts: config
-            .hosts
-            .iter()
-            .filter(|h| h.ssh.as_ref().is_some_and(|s| s.secret == info.name))
-            .map(|h| h.name.clone())
-            .collect(),
+        hosts,
         info,
     }
 }
@@ -182,6 +194,8 @@ pub(crate) enum NewKind {
     /// An existing private key.
     Key,
     Password,
+    /// An API token: `token_id` and `token`.
+    Token,
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,6 +206,8 @@ pub(crate) struct NewSecret {
     private_key: Option<String>,
     passphrase: Option<String>,
     password: Option<String>,
+    token_id: Option<String>,
+    token: Option<String>,
     /// Replace a secret of the same name.
     #[serde(default)]
     replace: bool,
@@ -222,6 +238,10 @@ pub(crate) async fn create_secret(
             Some(p) if !p.is_empty() => Ok(Credential::Password(p)),
             _ => return Err(bad("password missing")),
         },
+        NewKind::Token => Credential::token(
+            body.token_id.as_deref().unwrap_or_default(),
+            body.token.as_deref().unwrap_or_default(),
+        ),
     }
     .map_err(ApiError::BadRequest)?;
     let sealed = vault
@@ -230,10 +250,15 @@ pub(crate) async fn create_secret(
         .map_err(ApiError::Internal)?;
     let public_key = credential.public_key();
     let kind = credential.kind().as_str();
-    vault
-        .store
-        .put_secret(name, kind, public_key.as_deref(), &sealed, body.replace)
-        .await?;
+    let token_id = credential.token_id();
+    let secret = StoredSecret {
+        name,
+        kind,
+        public_key: public_key.as_deref(),
+        token_id,
+        sealed: &sealed,
+    };
+    vault.store.put_secret(&secret, body.replace).await?;
     access.pool.reset_failed();
     tracing::info!("{by}: stored secret {name} ({kind})");
     let now = SystemTime::now();
@@ -241,6 +266,7 @@ pub(crate) async fn create_secret(
         name: name.to_string(),
         kind: kind.to_string(),
         public_key,
+        token_id: token_id.map(String::from),
         created: now,
         updated: now,
     };

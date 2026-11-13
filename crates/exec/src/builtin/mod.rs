@@ -1,5 +1,5 @@
 //! Checks that run in-process instead of as a plugin: `ping`, `tcp`,
-//! `http`, `dns` and `tls`.
+//! `http`, `dns`, `tls` and `proxmox`.
 //!
 //! They print plugin output (Nagios format with perfdata) and an exit code,
 //! so their results go through the same evaluation as any plugin's. Their
@@ -9,22 +9,25 @@
 mod dns;
 mod http;
 mod ping;
+pub mod proxmox;
 mod tcp;
 mod tls;
 
 pub use dns::Dns;
 pub use http::Http;
 pub use ping::{Limits, Ping};
+pub use proxmox::Proxmox;
 pub use tcp::Tcp;
 pub use tls::Tls;
 
+use crate::ssh::Pool;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::net::IpAddr;
 use std::time::Duration;
 
 /// The built-in checks, by name.
-pub const NAMES: [&str; 5] = ["ping", "tcp", "http", "dns", "tls"];
+pub const NAMES: [&str; 6] = ["ping", "tcp", "http", "dns", "tls", "proxmox"];
 
 /// The vars built-in check `name` reads.
 pub fn vars_of(name: &str) -> &'static [&'static str] {
@@ -39,6 +42,20 @@ pub fn vars_of(name: &str) -> &'static [&'static str] {
             "address", "name", "type", "server", "port", "expect", "warn", "crit",
         ],
         "tls" => &["address", "port", "name", "warn", "crit", "verify"],
+        "proxmox" => &[
+            "address",
+            "port",
+            "mode",
+            "secret",
+            "node",
+            "storage",
+            "vmid",
+            "hours",
+            "warn",
+            "crit",
+            "verify",
+            "fingerprint",
+        ],
         _ => &[],
     }
 }
@@ -50,6 +67,7 @@ pub enum Builtin {
     Http(Box<Http>),
     Dns(Dns),
     Tls(Tls),
+    Proxmox(Box<Proxmox>),
 }
 
 impl Builtin {
@@ -64,6 +82,7 @@ impl Builtin {
             "http" => Builtin::Http(Box::new(Http::new(address, &vars)?)),
             "dns" => Builtin::Dns(Dns::new(address, &vars)?),
             "tls" => Builtin::Tls(Tls::new(address, &vars)?),
+            "proxmox" => Builtin::Proxmox(Box::new(Proxmox::new(address, &vars)?)),
             _ => {
                 return Err(format!(
                     "unknown builtin {name:?} (known: {})",
@@ -81,6 +100,7 @@ impl Builtin {
             Builtin::Http(_) => "http",
             Builtin::Dns(_) => "dns",
             Builtin::Tls(_) => "tls",
+            Builtin::Proxmox(_) => "proxmox",
         }
     }
 
@@ -92,13 +112,15 @@ impl Builtin {
             Builtin::Http(_) => "http (built-in)",
             Builtin::Dns(_) => "dns (built-in)",
             Builtin::Tls(_) => "tls (built-in)",
+            Builtin::Proxmox(_) => "proxmox (built-in)",
         }
     }
 
     /// Runs the check: the exit code and plugin output. Network waits end
     /// shortly before `timeout`, so a slow answer is reported as such
-    /// instead of the run being cut off.
-    pub async fn run(&self, timeout: Duration) -> (i32, String) {
+    /// instead of the run being cut off. Checks that log in to an API
+    /// (`proxmox`) take their secret from `secrets`.
+    pub async fn run(&self, timeout: Duration, secrets: Option<&Pool>) -> (i32, String) {
         let wait = timeout
             .saturating_sub(Duration::from_millis(200))
             .max(Duration::from_millis(100));
@@ -108,6 +130,7 @@ impl Builtin {
             Builtin::Http(c) => c.run(wait).await,
             Builtin::Dns(c) => c.run(wait).await,
             Builtin::Tls(c) => c.run(wait).await,
+            Builtin::Proxmox(c) => c.run(wait, secrets).await,
         }
     }
 }
@@ -120,6 +143,7 @@ impl fmt::Display for Builtin {
             Builtin::Http(c) => c.fmt(f)?,
             Builtin::Dns(c) => c.fmt(f)?,
             Builtin::Tls(c) => c.fmt(f)?,
+            Builtin::Proxmox(c) => c.fmt(f)?,
         }
         f.write_str(" (built-in)")
     }
@@ -409,7 +433,7 @@ mod tests {
         assert!(
             Builtin::new("smtp", "h", &vars(&[]))
                 .unwrap_err()
-                .contains("known: ping, tcp, http, dns, tls")
+                .contains("known: ping, tcp, http, dns, tls, proxmox")
         );
     }
 }

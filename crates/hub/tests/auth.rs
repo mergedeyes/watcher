@@ -471,8 +471,21 @@ async fn ssh_secrets_and_host_keys() {
         .await;
     assert_eq!(status, StatusCode::CREATED);
 
+    let token =
+        json!({ "name": "pve", "kind": "token", "token_id": "watcher@pam!mon", "token": "uuid" });
+    let (status, created) = c
+        .call("POST", "/api/v1/ssh/secrets", Some(token), &[])
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["token_id"], "watcher@pam!mon");
+    let empty = json!({ "name": "pve2", "kind": "token", "token_id": "x@pam!y" });
+    let (status, _) = c
+        .call("POST", "/api/v1/ssh/secrets", Some(empty), &[])
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
     let (_, list) = c.call("GET", "/api/v1/ssh/secrets", None, &[]).await;
-    assert_eq!(list.as_array().unwrap().len(), 2);
+    assert_eq!(list.as_array().unwrap().len(), 3);
     assert_eq!(list[0]["name"], "monitor");
     let fingerprint = list[0]["fingerprint"].as_str().unwrap();
     assert!(list[0].get("sealed").is_none());
@@ -481,11 +494,15 @@ async fn ssh_secrets_and_host_keys() {
     assert!(
         matches!(vault.credential("pw").await.unwrap(), Credential::Password(p) if p == "s3cret")
     );
+    assert!(matches!(
+        vault.credential("pve").await.unwrap(),
+        Credential::Token { id, secret } if id == "watcher@pam!mon" && secret == "uuid"
+    ));
 
     // Host keys: pinned on first use, a changed one waits for acceptance.
     let host_key = |comment: &str| match Credential::generate(comment).unwrap() {
         Credential::Key(k) => k.public_key().clone(),
-        Credential::Password(_) => unreachable!(),
+        _ => unreachable!(),
     };
     let (a, b) = (host_key("a"), host_key("b"));
     vault.check_host_key("db1", 22, &a).await.unwrap();

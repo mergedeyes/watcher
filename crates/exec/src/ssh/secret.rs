@@ -1,4 +1,5 @@
-//! SSH credentials and their encryption at rest.
+//! Credentials (SSH keys and passwords, API tokens) and their encryption
+//! at rest.
 //!
 //! Credentials are stored sealed with ChaCha20-Poly1305 under a key from
 //! `secret.key` in the data directory, created on first use. The secret's
@@ -19,6 +20,8 @@ use std::path::{Path, PathBuf};
 pub enum Kind {
     Key,
     Password,
+    /// An API token: an ID and a secret, e.g. for Proxmox VE.
+    Token,
 }
 
 impl Kind {
@@ -26,6 +29,7 @@ impl Kind {
         match self {
             Kind::Key => "key",
             Kind::Password => "password",
+            Kind::Token => "token",
         }
     }
 
@@ -33,6 +37,7 @@ impl Kind {
         match text {
             "key" => Some(Kind::Key),
             "password" => Some(Kind::Password),
+            "token" => Some(Kind::Token),
             _ => None,
         }
     }
@@ -44,11 +49,16 @@ impl fmt::Display for Kind {
     }
 }
 
-/// How to log in: a private key or a password.
+/// How to log in: a private key or a password for SSH, or an API token.
 #[derive(Clone)]
 pub enum Credential {
     Key(Box<PrivateKey>),
     Password(String),
+    /// The token's ID (Proxmox: `user@realm!name`) and its secret.
+    Token {
+        id: String,
+        secret: String,
+    },
 }
 
 /// Never prints the secret.
@@ -57,6 +67,7 @@ impl fmt::Debug for Credential {
         match self {
             Credential::Key(key) => write!(f, "Key({})", key.fingerprint(HashAlg::Sha256)),
             Credential::Password(_) => f.write_str("Password(..)"),
+            Credential::Token { id, .. } => write!(f, "Token({id}, ..)"),
         }
     }
 }
@@ -87,10 +98,28 @@ impl Credential {
         }
     }
 
+    /// An API token. The ID may be empty for APIs that only take a secret;
+    /// it can't contain line breaks, since they separate it from the secret
+    /// when stored.
+    pub fn token(id: &str, secret: &str) -> Result<Self, String> {
+        let id = id.trim();
+        if id.contains(['\n', '\r']) {
+            return Err("the token ID can't contain line breaks".into());
+        }
+        if secret.trim().is_empty() {
+            return Err("the token secret is empty".into());
+        }
+        Ok(Credential::Token {
+            id: id.to_string(),
+            secret: secret.trim().to_string(),
+        })
+    }
+
     pub fn kind(&self) -> Kind {
         match self {
             Credential::Key(_) => Kind::Key,
             Credential::Password(_) => Kind::Password,
+            Credential::Token { .. } => Kind::Token,
         }
     }
 
@@ -98,7 +127,7 @@ impl Credential {
     pub fn public_key(&self) -> Option<String> {
         match self {
             Credential::Key(key) => key.public_key().to_openssh().ok(),
-            Credential::Password(_) => None,
+            _ => None,
         }
     }
 
@@ -106,7 +135,15 @@ impl Credential {
     pub fn fingerprint(&self) -> Option<String> {
         match self {
             Credential::Key(key) => Some(key.fingerprint(HashAlg::Sha256).to_string()),
-            Credential::Password(_) => None,
+            _ => None,
+        }
+    }
+
+    /// The ID of a token, which isn't secret and is shown in lists.
+    pub fn token_id(&self) -> Option<&str> {
+        match self {
+            Credential::Token { id, .. } => Some(id),
+            _ => None,
         }
     }
 
@@ -117,6 +154,7 @@ impl Credential {
                 .map(|text| text.as_bytes().to_vec())
                 .map_err(|e| format!("cannot encode the key: {e}")),
             Credential::Password(p) => Ok(p.as_bytes().to_vec()),
+            Credential::Token { id, secret } => Ok(format!("{id}\n{secret}").into_bytes()),
         }
     }
 
@@ -128,6 +166,14 @@ impl Credential {
             Kind::Password => String::from_utf8(bytes.to_vec())
                 .map(Credential::Password)
                 .map_err(|_| "stored password is not UTF-8".into()),
+            Kind::Token => {
+                let text = std::str::from_utf8(bytes).map_err(|_| "stored token is not UTF-8")?;
+                let (id, secret) = text.split_once('\n').ok_or("stored token is invalid")?;
+                Ok(Credential::Token {
+                    id: id.to_string(),
+                    secret: secret.to_string(),
+                })
+            }
         }
     }
 }
@@ -304,6 +350,15 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert_eq!(format!("{password:?}"), "Password(..)");
+
+        let token = Credential::token(" watcher@pve!mon ", "0f1e-uuid").unwrap();
+        let sealed = fresh.seal("pve", &token).unwrap();
+        let back = fresh.unseal("pve", Kind::Token, &sealed).unwrap();
+        assert_eq!(back.token_id(), Some("watcher@pve!mon"));
+        assert!(matches!(back, Credential::Token { secret, .. } if secret == "0f1e-uuid"));
+        assert_eq!(format!("{token:?}"), "Token(watcher@pve!mon, ..)");
+        assert!(Credential::token("a\nb", "s").is_err());
+        assert!(Credential::token("id", " ").is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

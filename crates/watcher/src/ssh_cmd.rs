@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use watcher_exec::ssh::{self, Credential, Sealer};
 use watcher_hub::ssh::check_name;
-use watcher_store::Store;
+use watcher_store::{NewSecret, Store};
 
 #[derive(clap::Subcommand)]
 pub enum SecretCommand {
@@ -37,9 +37,23 @@ pub enum SecretCommand {
         #[arg(long)]
         replace: bool,
     },
+    /// Store an API token, e.g. for Proxmox VE: its ID and its secret.
+    Token {
+        name: String,
+        /// The token's ID, e.g. watcher@pve!monitor for Proxmox VE.
+        #[arg(long)]
+        id: String,
+        /// Read the token's secret from the first line of stdin instead of
+        /// asking.
+        #[arg(long)]
+        secret_stdin: bool,
+        #[arg(long)]
+        replace: bool,
+    },
     /// Print a key's public key.
     Show { name: String },
-    /// List secrets (names, kinds, fingerprints; never the secrets).
+    /// List secrets (names, kinds, key fingerprints and token IDs; never the
+    /// secrets).
     List,
     /// Delete a secret.
     Remove { name: String },
@@ -67,10 +81,14 @@ pub async fn secret(command: SecretCommand, db: DbArgs) -> Result<ExitCode> {
                 .seal(&name, &credential)
                 .map_err(anyhow::Error::msg)?;
             let public_key = credential.public_key();
-            let kind = credential.kind().as_str();
-            store
-                .put_secret(&name, kind, public_key.as_deref(), &sealed, replace)
-                .await?;
+            let secret = NewSecret {
+                name: &name,
+                kind: credential.kind().as_str(),
+                public_key: public_key.as_deref(),
+                token_id: credential.token_id(),
+                sealed: &sealed,
+            };
+            store.put_secret(&secret, replace).await?;
             Ok::<_, anyhow::Error>((name, public_key))
         }
     };
@@ -128,6 +146,20 @@ pub async fn secret(command: SecretCommand, db: DbArgs) -> Result<ExitCode> {
             let (name, _) = put(name, Credential::Password(password), replace).await?;
             println!("stored password {name:?}");
         }
+        SecretCommand::Token {
+            name,
+            id,
+            secret_stdin,
+            replace,
+        } => {
+            let secret = match secret_stdin {
+                true => read_line()?,
+                false => rpassword::prompt_password("Token secret: ")?,
+            };
+            let credential = Credential::token(&id, &secret).map_err(anyhow::Error::msg)?;
+            let (name, _) = put(name, credential, replace).await?;
+            println!("stored token {name:?} ({})", id.trim());
+        }
         SecretCommand::Show { name } => {
             let list = store.secrets().await?;
             let Some(secret) = list.into_iter().find(|s| s.name == name) else {
@@ -135,7 +167,7 @@ pub async fn secret(command: SecretCommand, db: DbArgs) -> Result<ExitCode> {
             };
             match secret.public_key {
                 Some(key) => println!("{key}"),
-                None => bail!("{name:?} is a password, not a key"),
+                None => bail!("{name:?} is a {}, not a key", secret.kind),
             }
         }
         SecretCommand::List => {
@@ -144,7 +176,12 @@ pub async fn secret(command: SecretCommand, db: DbArgs) -> Result<ExitCode> {
                 println!("no secrets yet; create a key with: watcher secret new <name>");
             }
             for s in list {
-                let fingerprint = s.public_key.as_deref().and_then(ssh::fingerprint);
+                // Keys show their fingerprint, tokens their ID.
+                let fingerprint = s
+                    .public_key
+                    .as_deref()
+                    .and_then(ssh::fingerprint)
+                    .or(s.token_id);
                 println!(
                     "{:<24} {:<9} {:<52} updated {}",
                     s.name,

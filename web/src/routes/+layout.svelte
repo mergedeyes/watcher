@@ -91,7 +91,7 @@
 	const CONFIG_NAV = [
 		...KINDS.map((k) => ({ href: `/config/${k.path}`, label: k.label })),
 		{ href: '/config/files', label: 'Files' },
-		{ href: '/ssh', label: 'SSH' }
+		{ href: '/secrets', label: 'Secrets' }
 	];
 
 	function active(href: string) {

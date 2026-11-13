@@ -24,7 +24,7 @@ A check that no service uses gives a warning.
 |---|---|---|
 | `title` | | Name shown in the web UI. Can contain [macros](#macros). |
 | `command` | | The command to run. Required, unless `builtin` or `passive` is set. Can contain [macros](#macros). |
-| `builtin` | | Use a check built into Watcher instead of a command: `ping`, `tcp`, `http`, `dns` or `tls`. See [Built-in checks](#built-in-checks). |
+| `builtin` | | Use a check built into Watcher instead of a command: `ping`, `tcp`, `http`, `dns`, `tls` or `proxmox`. See [Built-in checks](#built-in-checks). |
 | `shell` | `false` | `true` runs the command with `/bin/sh -c`, needed for pipes, `$(...)` or `&&`. See [Shell](#shell). |
 | `run_on` | `local` | Where the command runs. `local`: on the Watcher machine. `host`: on the monitored host over SSH, see [Checks over SSH](../guides/ssh.md). |
 | `copy` | `false` | With `run_on = "host"`: upload the script to the host before running it. See [Copying scripts](../guides/ssh.md#copying-scripts). |
@@ -367,10 +367,10 @@ flap_detection = false
 ## Built-in checks
 
 Built-in checks run inside Watcher and need no plugin. The checks `ping`,
-`tcp`, `http`, `dns` and `tls` always exist, even without any
-configuration. If you write your own check with one of these names (for
-example `[check.http]` with a `check_http` command), it replaces the
-built-in one.
+`tcp`, `http`, `dns`, `tls` and `proxmox` always exist, even without any
+configuration (`proxmox` still needs its vars). If you write your own
+check with one of these names (for example `[check.http]` with a
+`check_http` command), it replaces the built-in one.
 
 You set them up with vars, on the service or on the host's service:
 
@@ -545,6 +545,56 @@ IMAP) isn't yet.
 
 ```
 TLS OK - www.example.com: valid until 2027-02-02 (85 days), issued by R11
+```
+
+### proxmox
+
+Checks Proxmox VE through its API: a cluster, its nodes, storages, VMs
+and containers, backups and updates. It logs in with an API token that you
+store in Watcher as a secret. The [Proxmox VE guide](../guides/proxmox.md)
+shows every step, from creating the token to the services.
+
+`mode` chooses what the check looks at. Every mode needs `secret`.
+
+| Var | Default | Description |
+|---|---|---|
+| `mode` | | Required. `cluster`, `node`, `storage`, `guest`, `backup` or `updates`, see the next table. |
+| `secret` | | Required. The name of the API token in Watcher's secrets, see [Store the token](../guides/proxmox.md#3-store-the-token-in-watcher). |
+| `port` | `8006` | The port of the API. |
+| `node` | see description | Modes `node` and `updates`: the Proxmox VE node to check. Without it, the only node there is; in a cluster with more than one node you need to set it. Modes `storage` and `backup`: only look at this node; without it, at all nodes. |
+| `storage` | all storages | Mode `storage`: only this storage, for example `local-zfs`. |
+| `vmid` | | Mode `guest`: required. The ID of the VM or container, for example `100`. |
+| `hours` | `24` | Mode `backup`: how many hours back to look for backups. |
+| `warn` | `80` (storage), `1` (updates) | Mode `storage`: WARNING at this percentage used. Mode `updates`: WARNING at this many pending updates; `0` never warns. |
+| `crit` | `90` (storage), none (updates) | Mode `storage`: CRITICAL at this percentage used. Mode `updates`: CRITICAL at this many pending updates. |
+| `fingerprint` | | The SHA-256 fingerprint of the server's certificate, as Proxmox VE shows it (`18:B4:0D:…`). Only this certificate is accepted then, also a self-signed one. |
+| `verify` | `true` | Without `fingerprint`: the certificate must be trusted by the system and valid for the address. `false` accepts any certificate. |
+
+A var that the mode doesn't use is an error in `watcher config check`, so a
+`vmid` on a `node` service doesn't go unnoticed.
+
+| Mode | What it checks | State | Metrics |
+|---|---|---|---|
+| `cluster` | Quorum, and which nodes are online. | CRITICAL without quorum. WARNING if a node is offline. A single node without a cluster is OK. | `nodes_online`, `nodes_offline` |
+| `node` | CPU, memory, swap, load, I/O wait, root file system and uptime of a node. | CRITICAL if the node is offline. Set [thresholds](#thresholds) for the rest. | `cpu`, `memory`, `swap` (only with swap), `iowait`, `rootfs` (all %), `memory_used`, `load1`, `load5`, `load15`, `uptime` |
+| `storage` | How full each storage is. | WARNING or CRITICAL by `warn` and `crit`. CRITICAL if a storage isn't available. | per storage: its name (%) and `<name>_used` (bytes) |
+| `guest` | One VM or container: whether it runs, and its load. | CRITICAL if it doesn't run. Templates are OK. | `cpu`, `memory` (%), `memory_used`, `disk` (% of containers), `uptime`, and the totals since start `netin`, `netout`, `diskread`, `diskwrite` |
+| `backup` | Backup tasks of the last `hours`, and guests that no backup job includes. | CRITICAL if a backup failed. WARNING if one had warnings, none ran at all, or a guest is in no backup job. | `backups_ok`, `backups_warning`, `backups_failed`, `guests_without_backup` |
+| `updates` | Pending package updates on a node. | WARNING or CRITICAL by `warn` and `crit`. | `updates` |
+
+Storage metrics are named `<node>/<storage>`, for example `pve/local-zfs`.
+Shared storages, and all storages when `node` is set, use only the storage
+name. The `cpu` of a guest is in percent of its own cores.
+
+Problems with the API itself give UNKNOWN: a wrong token, a missing
+permission, a certificate that doesn't match, or no answer before the
+timeout. The `updates` mode needs more than read access, see
+[Permissions](../guides/proxmox.md#permissions).
+
+```
+PROXMOX OK - pve: CPU 5.2%, memory 23.7% (7.4 GiB of 31.2 GiB), load 0.05, up 2 h
+PROXMOX WARNING - pve/local-zfs 85% (363.2 GiB of 427.5 GiB)
+PROXMOX CRITICAL - VM 101 opnsense on pve is stopped
 ```
 
 ### Under another name

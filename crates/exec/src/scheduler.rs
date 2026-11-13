@@ -14,7 +14,7 @@
 //! while paused.
 
 use crate::ssh::{self, Pool, Remote};
-use crate::{CommandLine, ExecOptions, run};
+use crate::{CommandLine, ExecOptions, run_with};
 use std::cmp::Reverse;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
@@ -189,7 +189,7 @@ pub async fn schedule(
                         let Ok(_permit) = permits.acquire_owned().await else { return };
                         let execution = match &job.remote {
                             Some(remote) => ssh::run(&pool, remote, &command, &job.options).await,
-                            None => run(&command, &job.options).await,
+                            None => run_with(&command, &job.options, Some(&pool)).await,
                         };
                         let result = evaluate(&execution.output, job.format, &job.thresholds);
                         let duration = execution.duration;
