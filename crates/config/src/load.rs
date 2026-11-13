@@ -2050,7 +2050,8 @@ impl<'a> Compiler<'a> {
                     "hostgroup",
                     config.hostgroups.iter().any(|g| g.name == name),
                 ),
-                Ref::Check => ("check", config.checks.iter().any(|c| c.name == name)),
+                // Built-in checks too: services listing them use them.
+                Ref::Check => ("check", self.checks.contains_key(name)),
                 Ref::ServiceGroup => (
                     "servicegroup",
                     config.servicegroups.iter().any(|g| g.name == name),
