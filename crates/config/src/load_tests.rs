@@ -1238,6 +1238,13 @@ name = "ns1"
         s.command.as_ref().unwrap().to_string(),
         "tcp 10.0.0.5:22 (built-in)"
     );
+
+    // Problems point at the host that lists it.
+    let (_, diags) = compile(&[("a.toml", "[[host]]\nname = \"h\"\nservices = [\"tcp\"]\n")]);
+    assert_eq!(
+        messages(&diags),
+        ["a.toml:1: error: host \"h\": service \"tcp\": vars.port is not set: the port"]
+    );
 }
 
 #[test]
