@@ -165,8 +165,15 @@ How the forms work:
   are. Clearing a field removes the key from the file.
 - Text fields suggest values (objects, scripts, vars, metrics, durations),
   but you can type anything.
-- The host form covers host groups, services, service groups, changes to
-  assigned services, and services only this host has.
+- The host form has one section for its services, **Services on This
+  Host**. You add services and service groups there. Below them, a table
+  lists every service the host gets and where it comes from: the host
+  itself, a service group, a host group, or the host check. Open a row to
+  change the service on this host only: Enabled, Check Interval,
+  Variables and Thresholds. Other settings written by hand for that
+  service, like `check`, are kept and named in the row. A service that is
+  on the host only through such a hand-written entry shows as "this host
+  only" and can be removed with ×.
 - A service runs either a check or a command of its own: while one is
   set, the other field is greyed out. A check runs either a command or a
   built-in check, in the same way.
