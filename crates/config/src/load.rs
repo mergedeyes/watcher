@@ -652,7 +652,12 @@ impl<'a> Compiler<'a> {
                 None if self.checks.contains_key(&raw.name) => Some(raw.name.clone()),
                 None => None,
             };
-            if check.is_none() && def.command.is_none() && def.passive != Some(true) {
+            // `builtin` on the service itself runs like a check of its own.
+            if check.is_none()
+                && def.command.is_none()
+                && def.builtin.is_none()
+                && def.passive != Some(true)
+            {
                 self.sink.error(
                     Some(&raw.origin),
                     format!(

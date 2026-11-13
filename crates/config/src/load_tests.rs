@@ -1200,6 +1200,32 @@ services = ["api"]
 }
 
 #[test]
+fn builtin_on_services() {
+    let config = ok(&[(
+        "a.toml",
+        r#"
+[service.ssh-port]
+builtin = "tcp"
+vars.port = "22"
+
+[[host]]
+name = "h"
+address = "10.0.0.5"
+services = ["ssh-port"]
+  [host.service.web-port]
+  builtin = "tcp"
+  vars.port = "80"
+"#,
+    )]);
+    let command = |id: &str| {
+        let s = config.services.iter().find(|s| s.id == id).unwrap();
+        s.command.as_ref().unwrap().to_string()
+    };
+    assert_eq!(command("h/ssh-port"), "tcp 10.0.0.5:22 (built-in)");
+    assert_eq!(command("h/web-port"), "tcp 10.0.0.5:80 (built-in)");
+}
+
+#[test]
 fn builtin_checks_take_their_settings_from_vars() {
     let config = ok(&[(
         "a.toml",
