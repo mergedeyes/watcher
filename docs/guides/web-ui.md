@@ -174,6 +174,12 @@ How the forms work:
   service, like `check`, are kept and named in the row. A service that is
   on the host only through such a hand-written entry shows as "this host
   only" and can be removed with ×.
+- Settings that only some hosts have, like Proxmox VE, show only on the
+  hosts that have them. **Add Host** opens a menu: **Host**, or
+  **Proxmox VE** for a Proxmox VE server or a VM or container on one,
+  which opens the form with its Proxmox VE section. On another host or a
+  host group, **Add Proxmox VE settings** below the form adds the
+  section, and **Remove** in the section takes the settings out again.
 - A service runs either a check or a command of its own: while one is
   set, the other field is greyed out. A check runs either a command or a
   built-in check, in the same way.

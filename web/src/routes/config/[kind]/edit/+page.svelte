@@ -15,7 +15,7 @@
 	import { Suggest } from '#lib/suggest.ts';
 	import MatchPreview from '#lib/MatchPreview.svelte';
 	import { RELATIONS, remote, without } from '#lib/membership.ts';
-	import { KINDS, SCHEMAS, SELECTOR_FIELDS, expandNames, fromForm, otherKeys, selectorFromForm, toForm, type Field, type FormValues, type ServiceRow, type WindowRow } from '#lib/schema.ts';
+	import { KINDS, SCHEMAS, SELECTOR_FIELDS, expandNames, fromForm, otherKeys, selectorFromForm, toForm, type Field, type FormValues, type Group, type ServiceRow, type WindowRow } from '#lib/schema.ts';
 
 	const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 	/** Settings of commands, which built-in checks don't have. */
@@ -98,8 +98,29 @@
 		untrack(() => {
 			values = null;
 			dropped = [];
+			const type = page.url.searchParams.get('type');
+			added = type ? [type] : [];
+			removed = [];
 		});
 	});
+
+	/** Extra sections (Proxmox VE) added with their button or `?type=`, and those taken out. */
+	let added = $state<string[]>([]);
+	let removed = $state<string[]>([]);
+
+	/** Whether a section shows: always, or for an extra one, when set in the file or added. */
+	function shows(g: Group): boolean {
+		if (!g.extra) return true;
+		if (removed.includes(g.extra)) return false;
+		return added.includes(g.extra) || g.fields.some((f) => raw[f.key.split('.')[0]!] !== undefined);
+	}
+
+	/** Takes an extra section out: its fields are cleared, so saving removes them. */
+	function removeExtra(g: Group) {
+		for (const f of g.fields) values![f.key] = f.type === 'bool' ? (f.default ?? false) : '';
+		removed = [...removed, g.extra!];
+		added = added.filter((x) => x !== g.extra);
+	}
 
 	// Fill the form once the object is there; later reloads don't reset edits.
 	$effect(() => {
@@ -467,8 +488,14 @@
 								</div>
 							</section>
 						{/if}
+						{#if shows(group)}
 						<section class="panel">
-							<div class="panel-title">{group.title}</div>
+							<div class="panel-title">
+								{group.title}
+								{#if group.extra}
+									<button type="button" class="btn small remove" onclick={() => removeExtra(group)}>Remove</button>
+								{/if}
+							</div>
 							<div class="fields">
 								{#each group.fields.map(shown) as f (f.key)}
 									{@const id = `f-${f.key}`}
@@ -593,7 +620,19 @@
 								{/each}
 							</div>
 						</section>
+						{/if}
 					{/each}
+					{#if SCHEMAS[kind.kind].some((g) => !shows(g))}
+						<div class="extras">
+							{#each SCHEMAS[kind.kind].filter((g) => !shows(g)) as g (g.title)}
+								<button type="button" class="btn small"
+									onclick={() => {
+										added = [...added, g.extra!];
+										removed = removed.filter((x) => x !== g.extra);
+									}}>Add {g.title} settings</button>
+							{/each}
+						</div>
+					{/if}
 				</fieldset>
 
 				{#if others.length > 0}
@@ -767,6 +806,17 @@
 
 	.row.three {
 		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+	}
+
+	.extras {
+		display: flex;
+		gap: 8px;
+		margin-top: 10px;
+	}
+
+	.panel-title .remove {
+		float: right;
+		margin-top: -3px;
 	}
 
 	.btn.small {

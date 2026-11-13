@@ -1,4 +1,4 @@
-<!-- "Edit Config" on status pages: one link, or a menu when an object is defined in several places. -->
+<!-- "Edit Config" on status pages: one link, or a menu when an object is defined in several places. Also "Add Host" with its kinds. -->
 <script module lang="ts">
 	export interface EditTarget {
 		label: string;
@@ -9,7 +9,7 @@
 </script>
 
 <script lang="ts">
-	let { targets }: { targets: EditTarget[] } = $props();
+	let { targets, label = 'Edit Config', primary = false }: { targets: EditTarget[]; label?: string; primary?: boolean } = $props();
 
 	let open = $state(false);
 	let root = $state<HTMLElement>();
@@ -26,10 +26,10 @@
 <svelte:window {onclick} {onkeydown} />
 
 {#if targets.length === 1}
-	<a class="btn" href={targets[0]!.href}>Edit Config</a>
+	<a class="btn" class:primary href={targets[0]!.href}>{label}</a>
 {:else if targets.length > 1}
 	<span class="menu" bind:this={root}>
-		<button type="button" class="btn" aria-haspopup="menu" aria-expanded={open} onclick={() => (open = !open)}>Edit Config ▾</button>
+		<button type="button" class="btn" class:primary aria-haspopup="menu" aria-expanded={open} onclick={() => (open = !open)}>{label} ▾</button>
 		{#if open}
 			<ul role="menu">
 				{#each targets as t (t.href)}
@@ -78,6 +78,10 @@
 
 	a[role='menuitem']:hover {
 		background: color-mix(in srgb, var(--link) 14%, transparent);
+	}
+
+	a[role='menuitem'] > span:first-child {
+		white-space: nowrap;
 	}
 
 	.hint {

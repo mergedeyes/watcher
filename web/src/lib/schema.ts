@@ -45,6 +45,11 @@ export interface Field {
 export interface Group {
 	title: string;
 	fields: Field[];
+	/**
+	 * Settings only some objects have (Proxmox VE): the section shows when
+	 * the object has them, or once added with its button or `?type=`.
+	 */
+	extra?: string;
 }
 
 const NAME: Field = { key: 'name', label: 'Name', type: 'text', required: true };
@@ -165,6 +170,7 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 		{ title: 'SSH', fields: SSH.map((f) => ({ ...f, help: f.help ?? 'for run_on = "host"; default: from host groups' })) },
 		{
 			title: 'Proxmox VE',
+			extra: 'proxmox',
 			fields: [
 				...PROXMOX_LOGIN.map((f) => ({ ...f, exclusive: ['proxmox.host'] })),
 				{ key: 'proxmox.discover', label: 'Discover', type: 'bool', default: false, exclusive: ['proxmox.host'], help: 'offer its VMs and containers as hosts (Configuration → Discovery)' },
@@ -184,7 +190,8 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 			]
 		},
 		{ title: 'Services', fields: [{ ...SERVICES, help: 'for every member, comma-separated' }, SERVICEGROUPS] },
-		{ title: 'Hosts Get', fields: [HOST_CHECK, GRAPH, ...SSH, ...PROXMOX_LOGIN, { ...VARS, help: 'host var defaults' }] }
+		{ title: 'Hosts Get', fields: [HOST_CHECK, GRAPH, ...SSH, { ...VARS, help: 'host var defaults' }] },
+		{ title: 'Proxmox VE', extra: 'proxmox', fields: PROXMOX_LOGIN.map((f) => ({ ...f, help: f.help ?? 'the API login for its hosts' })) }
 	],
 	servicegroup: [
 		{
