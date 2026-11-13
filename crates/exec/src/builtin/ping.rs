@@ -229,7 +229,7 @@ mod tests {
     async fn unresolvable_is_critical() {
         let (code, out) = Builtin::new("ping", "nonexistent.invalid", &vars(&[]))
             .unwrap()
-            .run(Duration::from_secs(10))
+            .run(Duration::from_secs(10), None)
             .await;
         assert_eq!(code, 2, "{out}");
         assert!(

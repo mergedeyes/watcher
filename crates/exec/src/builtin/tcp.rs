@@ -171,7 +171,7 @@ mod tests {
     async fn run(list: &[(&str, &str)]) -> (i32, String) {
         Builtin::new("tcp", "127.0.0.1", &vars(list))
             .unwrap()
-            .run(Duration::from_secs(2))
+            .run(Duration::from_secs(2), None)
             .await
     }
 
@@ -274,7 +274,7 @@ mod tests {
             &vars(&[("port", &port), ("expect", "x")]),
         )
         .unwrap()
-        .run(Duration::from_millis(600))
+        .run(Duration::from_millis(600), None)
         .await;
         assert_eq!(code, 2, "{out}");
         assert!(out.contains("no answer within"), "{out}");

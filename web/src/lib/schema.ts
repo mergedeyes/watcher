@@ -59,7 +59,7 @@ const SCHEDULE: Field[] = [
 
 const CHECK: Field[] = [
 	{ key: 'command', label: 'Command', type: 'mono', scripts: true, placeholder: 'check_ping -H $host.address$ -w $warn$ -c $crit$' },
-	{ key: 'builtin', label: 'Built-in', type: 'select', options: ['ping', 'tcp', 'http', 'dns', 'tls'], placeholder: 'none', help: 'a check built into Watcher instead of a command; settings in Variables' },
+	{ key: 'builtin', label: 'Built-in', type: 'select', options: ['ping', 'tcp', 'http', 'dns', 'tls', 'proxmox'], placeholder: 'none', help: 'a check built into Watcher instead of a command; settings in Variables' },
 	{ key: 'shell', label: 'Shell', type: 'bool', default: false, help: 'run with /bin/sh -c' },
 	{ key: 'run_on', label: 'Run On', type: 'select', options: ['local', 'host'], placeholder: 'local', help: 'host: over SSH, see the host’s SSH settings' },
 	{ key: 'copy', label: 'Copy', type: 'bool', default: false, help: 'upload the script from the check directories to the host first' },
@@ -89,7 +89,7 @@ const GRAPH: Field = { key: 'graph', label: 'Graph', type: 'text', help: 'host p
 const SSH: Field[] = [
 	{ key: 'ssh.user', label: 'SSH User', type: 'text', placeholder: 'monitor' },
 	{ key: 'ssh.port', label: 'SSH Port', type: 'int', placeholder: '22' },
-	{ key: 'ssh.secret', label: 'SSH Secret', type: 'text', help: 'key or password under Configuration → SSH' }
+	{ key: 'ssh.secret', label: 'SSH Secret', type: 'text', help: 'key or password under Configuration → Secrets' }
 ];
 
 export const SCHEMAS: Record<Kind, Group[]> = {

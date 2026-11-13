@@ -13,6 +13,8 @@
 	let privateKey = $state('');
 	let passphrase = $state('');
 	let password = $state('');
+	let tokenId = $state('');
+	let token = $state('');
 	let replace = $state(false);
 	/** The key just generated, to copy into authorized_keys. */
 	let created = $state<Secret | null>(null);
@@ -52,11 +54,15 @@
 			if (passphrase) secret.passphrase = passphrase;
 		}
 		if (kind === 'password') secret.password = password;
+		if (kind === 'token') {
+			secret.token_id = tokenId;
+			secret.token = token;
+		}
 		const result = await act(`Secret ${secret.name} stored`, () => api.createSecret(secret));
 		if (!result) return;
 		created = kind === 'generate' ? result : null;
 		copied = false;
-		name = privateKey = passphrase = password = '';
+		name = privateKey = passphrase = password = tokenId = token = '';
 		replace = false;
 	}
 
@@ -88,7 +94,7 @@
 </script>
 
 <div class="content">
-	<div class="page-head"><h1>SSH</h1></div>
+	<div class="page-head"><h1>Secrets</h1></div>
 	{#if !auth.admin}
 		<p class="notice">Admins only.</p>
 	{:else}
@@ -111,10 +117,14 @@
 						<option value="generate">New Key</option>
 						<option value="key">Import Key</option>
 						<option value="password">Password</option>
+						<option value="token">API Token</option>
 					</select>
 					<input placeholder="Name, e.g. monitor" bind:value={name} required maxlength="64" autocomplete="off" aria-label="Name" />
 					{#if kind === 'password'}
 						<input type="password" placeholder="Password" bind:value={password} required autocomplete="new-password" aria-label="Password" />
+					{:else if kind === 'token'}
+						<input placeholder="Token ID, e.g. watcher@pve!monitor" bind:value={tokenId} autocomplete="off" spellcheck="false" aria-label="Token ID" />
+						<input type="password" placeholder="Token secret" bind:value={token} required autocomplete="off" aria-label="Token secret" />
 					{:else if kind === 'key'}
 						<input type="password" placeholder="Passphrase, if encrypted" bind:value={passphrase} autocomplete="off" aria-label="Passphrase" />
 					{/if}
@@ -132,7 +142,10 @@
 						></textarea>
 					{/if}
 				</form>
-				<p class="muted hint">Hosts: <code>ssh = &#123; user = "monitor", secret = "NAME" &#125;</code>; services: <code>run_on = "host"</code></p>
+				<p class="muted hint">
+					Hosts: <code>ssh = &#123; user = "monitor", secret = "NAME" &#125;</code>; services: <code>run_on = "host"</code>. API tokens:
+					<code>builtin = "proxmox"</code> with <code>vars.secret = "NAME"</code>
+				</p>
 			</div>
 			{#if secrets.length > 0}
 				<table class="grid">
@@ -140,7 +153,7 @@
 						<tr>
 							<th>Name</th>
 							<th>Kind</th>
-							<th class="hide-narrow">Fingerprint</th>
+							<th class="hide-narrow">Fingerprint / Token ID</th>
 							<th>Hosts</th>
 							<th class="hide-narrow">Updated</th>
 							<th></th>
@@ -151,7 +164,7 @@
 							<tr>
 								<td class="nowrap">{s.name}</td>
 								<td>{s.kind}</td>
-								<td class="mono hide-narrow">{s.fingerprint ?? ''}</td>
+								<td class="mono hide-narrow">{s.fingerprint ?? s.token_id ?? ''}</td>
 								<td>{s.hosts.length ? s.hosts.join(', ') : '—'}</td>
 								<td class="nowrap hide-narrow">{datetime(s.updated)}</td>
 								<td class="nowrap actions">

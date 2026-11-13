@@ -388,7 +388,7 @@ mod tests {
         let _ = rustls::crypto::ring::default_provider().install_default();
         Builtin::new("http", address, &vars(list))
             .unwrap()
-            .run(Duration::from_secs(3))
+            .run(Duration::from_secs(3), None)
             .await
     }
 
@@ -552,7 +552,7 @@ mod tests {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let (code, out) = Builtin::new("http", &addr, &vars(&[]))
             .unwrap()
-            .run(Duration::from_millis(600))
+            .run(Duration::from_millis(600), None)
             .await;
         assert_eq!(code, 2, "{out}");
         assert!(out.contains("no answer within"), "{out}");

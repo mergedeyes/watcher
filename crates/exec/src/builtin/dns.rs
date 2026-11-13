@@ -281,7 +281,7 @@ mod tests {
     async fn run(list: &[(&str, &str)]) -> (i32, String) {
         Builtin::new("dns", "127.0.0.1", &vars(list))
             .unwrap()
-            .run(Duration::from_secs(2))
+            .run(Duration::from_secs(2), None)
             .await
     }
 
@@ -373,7 +373,7 @@ mod tests {
             &vars(&[("name", "www.test."), ("port", &port)]),
         )
         .unwrap()
-        .run(Duration::from_millis(800))
+        .run(Duration::from_millis(800), None)
         .await;
         assert_eq!(code, 2, "{out}");
         drop(silent);

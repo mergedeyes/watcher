@@ -354,14 +354,16 @@ export interface EventQuery {
 	limit?: number;
 }
 
-/** A secret for checks over SSH, without its value. */
+/** A secret for checks over SSH or API tokens, without its value. */
 export interface Secret {
 	name: string;
-	kind: 'key' | 'password';
+	kind: 'key' | 'password' | 'token';
 	/** Keys: the line for authorized_keys. */
 	public_key: string | null;
 	fingerprint: string | null;
-	/** Hosts that log in with it. */
+	/** Tokens: the token's ID, e.g. watcher@pve!monitor. */
+	token_id: string | null;
+	/** Hosts that log in with it (SSH, or built-in checks with the token). */
 	hosts: string[];
 	created: string;
 	updated: string;
@@ -369,10 +371,12 @@ export interface Secret {
 
 export interface NewSecret {
 	name: string;
-	kind: 'generate' | 'key' | 'password';
+	kind: 'generate' | 'key' | 'password' | 'token';
 	private_key?: string;
 	passphrase?: string;
 	password?: string;
+	token_id?: string;
+	token?: string;
 	replace?: boolean;
 }
 

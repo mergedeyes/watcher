@@ -132,6 +132,16 @@ pub struct Execution {
 /// Runs `command` and collects its output. Never fails: problems starting the
 /// process are reported as [`Termination::Failed`].
 pub async fn run(command: &CommandLine, opts: &ExecOptions) -> Execution {
+    run_with(command, opts, None).await
+}
+
+/// Like [`run`], with the secrets in `secrets` for built-in checks that
+/// log in to an API (`proxmox`).
+pub async fn run_with(
+    command: &CommandLine,
+    opts: &ExecOptions,
+    secrets: Option<&ssh::Pool>,
+) -> Execution {
     let start = Instant::now();
     let deadline = tokio::time::Instant::now() + opts.timeout;
     let failed = |msg: String| Execution {
@@ -147,7 +157,7 @@ pub async fn run(command: &CommandLine, opts: &ExecOptions) -> Execution {
 
     if let CommandLine::Builtin(builtin) = command {
         let (termination, stdout) =
-            match tokio::time::timeout(opts.timeout, builtin.run(opts.timeout)).await {
+            match tokio::time::timeout(opts.timeout, builtin.run(opts.timeout, secrets)).await {
                 Ok((code, out)) => (Termination::Exited(code), out),
                 Err(_) => (Termination::TimedOut(opts.timeout), String::new()),
             };

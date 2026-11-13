@@ -1,4 +1,4 @@
-//! SSH secrets and host keys. Secrets arrive sealed: this module never
+//! Secrets (SSH keys and passwords, API tokens) and SSH host keys. Secrets arrive sealed: this module never
 //! sees them in plain text.
 
 use crate::auth::conflict;
@@ -10,13 +10,25 @@ use std::time::SystemTime;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SecretInfo {
     pub name: String,
-    /// `key` or `password`.
+    /// `key`, `password` or `token`.
     pub kind: String,
     pub public_key: Option<String>,
+    /// Tokens: the token's ID, e.g. `watcher@pve!monitor`.
+    pub token_id: Option<String>,
     #[serde(serialize_with = "crate::query::rfc3339")]
     pub created: SystemTime,
     #[serde(serialize_with = "crate::query::rfc3339")]
     pub updated: SystemTime,
+}
+
+/// A secret to store, already sealed.
+#[derive(Debug, Clone, Copy)]
+pub struct NewSecret<'a> {
+    pub name: &'a str,
+    pub kind: &'a str,
+    pub public_key: Option<&'a str>,
+    pub token_id: Option<&'a str>,
+    pub sealed: &'a [u8],
 }
 
 /// A pinned host key, and a different one the host presented since.
@@ -50,8 +62,9 @@ fn host_key((address, port, key, pinned, offered, offered_at): HostKeyRow) -> Ho
 
 impl Store {
     pub async fn secrets(&self) -> Result<Vec<SecretInfo>> {
-        let rows: Vec<(String, String, Option<String>, f64, f64)> = sqlx::query_as(
-            "SELECT name, kind, public_key, extract(epoch FROM created)::float8,
+        type Row = (String, String, Option<String>, Option<String>, f64, f64);
+        let rows: Vec<Row> = sqlx::query_as(
+            "SELECT name, kind, public_key, token_id, extract(epoch FROM created)::float8,
                     extract(epoch FROM updated)::float8
              FROM secrets ORDER BY name",
         )
@@ -59,13 +72,16 @@ impl Store {
         .await?;
         Ok(rows
             .into_iter()
-            .map(|(name, kind, public_key, created, updated)| SecretInfo {
-                name,
-                kind,
-                public_key,
-                created: from_epoch(created),
-                updated: from_epoch(updated),
-            })
+            .map(
+                |(name, kind, public_key, token_id, created, updated)| SecretInfo {
+                    name,
+                    kind,
+                    public_key,
+                    token_id,
+                    created: from_epoch(created),
+                    updated: from_epoch(updated),
+                },
+            )
             .collect())
     }
 
@@ -80,27 +96,26 @@ impl Store {
     }
 
     /// Stores a secret; with `replace`, over one of the same name.
-    pub async fn put_secret(
-        &self,
-        name: &str,
-        kind: &str,
-        public_key: Option<&str>,
-        sealed: &[u8],
-        replace: bool,
-    ) -> Result<()> {
+    pub async fn put_secret(&self, secret: &NewSecret<'_>, replace: bool) -> Result<()> {
         let sql = match replace {
             true => {
-                "INSERT INTO secrets (name, kind, public_key, sealed) VALUES ($1, $2, $3, $4)
-                 ON CONFLICT (name) DO UPDATE SET kind = $2, public_key = $3, sealed = $4,
-                     updated = now()"
+                "INSERT INTO secrets (name, kind, public_key, token_id, sealed)
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (name) DO UPDATE SET kind = $2, public_key = $3, token_id = $4,
+                     sealed = $5, updated = now()"
             }
-            false => "INSERT INTO secrets (name, kind, public_key, sealed) VALUES ($1, $2, $3, $4)",
+            false => {
+                "INSERT INTO secrets (name, kind, public_key, token_id, sealed)
+                 VALUES ($1, $2, $3, $4, $5)"
+            }
         };
+        let name = secret.name;
         sqlx::query(sql)
             .bind(name)
-            .bind(kind)
-            .bind(public_key)
-            .bind(sealed)
+            .bind(secret.kind)
+            .bind(secret.public_key)
+            .bind(secret.token_id)
+            .bind(secret.sealed)
             .execute(&self.pool)
             .await
             .map_err(|e| conflict(e, || format!("secret {name:?} already exists")))?;

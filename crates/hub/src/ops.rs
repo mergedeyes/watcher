@@ -1226,7 +1226,10 @@ async fn run_once(
         (Some(_), None) => {
             return Err(ApiError::Unavailable("SSH is not set up".into()));
         }
-        (None, _) => watcher_exec::run(command, &options).await,
+        (None, ssh) => {
+            let secrets = ssh.map(|s| s.pool.as_ref());
+            watcher_exec::run_with(command, &options, secrets).await
+        }
     };
     let result = watcher_core::evaluate(&execution.output, format, thresholds);
     let termination = execution.output.termination.to_string();
