@@ -28,7 +28,7 @@ entry in a list. Each host needs a unique `name`.
 | `services` | | Services the host gets. See [service](service.md). A [built-in check](check.md#built-in-checks) like `http` or `tls` can be listed as it is, without a `[service.<name>]`. |
 | `servicegroups` | | Service groups the host gets; it gets all their services. See [servicegroup](servicegroup.md). |
 | `vars` | | Values for the `$name$` macros of the host's services, and the tables for `for_each`. Win over host group vars. [Built-in checks](check.md#built-in-checks) don't read them, except through macros like `$host.vars.port$`. |
-| `host_check` | from the host groups; otherwise `ping` if `address` is set | The service that decides whether the host is UP or DOWN. `false`: no host check, the host is always UP. See [Host state](#host-state). |
+| `host_check` | from the host groups; otherwise `ping` if `address` is set | The service that decides whether the host is UP or DOWN. The host gets this service if it doesn't have it already. `false`: no host check, the host is always UP. See [Host state](#host-state). |
 | `graph` | the host check | The service whose graph is shown on the host page. |
 | `ssh` | from the host groups | Login for [checks over SSH](../guides/ssh.md): `{ user, secret, port }`. See [ssh](#ssh). |
 | `proxmox` | from the host groups | For a Proxmox VE server: the API login, `{ secret, fingerprint, port, verify, discover }`. For a VM or container on one: `{ host, vmid }`. See [proxmox](#proxmox). |
@@ -274,7 +274,10 @@ What the host state changes:
   the host is UP and ends the retries.
 - A WARNING of the host check doesn't notify, because the host is still UP.
 
-The host check must be a service the host has; otherwise it's an error.
+If the host doesn't get the host check's service in another way (its
+`services`, a service group, a host group), it gets it for that, like
+`ping`. It must be a defined service, for example `[service.check_ping]`,
+or a [built-in check](check.md#built-in-checks).
 
 ## ssh
 
