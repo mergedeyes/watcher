@@ -687,17 +687,25 @@ impl<'a> Compiler<'a> {
                 origin: raw.origin.clone(),
             });
         }
-        // A built-in check can be listed in services = [...] as it is, as
-        // if there were an empty [service.<name>]. Not a service object of
+        // A check, built-in or from the config, can be listed in
+        // services = [...] as it is, as if there were an empty
+        // [service.<name>]: a service of its own is only needed for settings
+        // or for several services from one check. Not a service object of
         // the config, so it isn't listed or reported as unused.
-        for name in builtin::NAMES {
-            if !self.objects.contains_key(name) {
+        // Line 0: messages about it point at the host that lists it.
+        let checks: Vec<(String, Origin)> = self
+            .checks
+            .iter()
+            .map(|(name, (_, origin))| {
                 let origin = Origin {
-                    file: "(built-in)".into(),
+                    file: origin.file.clone(),
                     line: 0,
                 };
-                self.objects.insert(name.into(), (Table::new(), origin));
-            }
+                (name.clone(), origin)
+            })
+            .collect();
+        for (name, origin) in checks {
+            self.objects.entry(name).or_insert((Table::new(), origin));
         }
     }
 
@@ -795,10 +803,6 @@ impl<'a> Compiler<'a> {
             };
             format!(
                 "{what}: unknown service {name:?}: services = [...] takes names, not patterns{also}"
-            )
-        } else if self.checks.contains_key(name) {
-            format!(
-                "{what}: unknown service {name:?} (there is a check {name:?}: add [service.{name}])"
             )
         } else {
             format!("{what}: unknown service {name:?}")
@@ -1249,10 +1253,7 @@ impl<'a> Compiler<'a> {
                 } else {
                     msg += "is not a service on it";
                     // It names a service, which is easily mixed up with the
-                    // check or the plugin (check_ping): say what it can be.
-                    if self.checks.contains_key(hc) {
-                        msg += &format!("; there is a check {hc:?}: add [service.{hc}]");
-                    }
+                    // plugin (check_ping): say what it can be.
                     let services: Vec<&str> = config
                         .services
                         .iter()

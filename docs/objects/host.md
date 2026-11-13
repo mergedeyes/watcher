@@ -25,7 +25,7 @@ entry in a list. Each host needs a unique `name`.
 | `name` | | Required. Unique name of the host. |
 | `address` | the name | IP address or DNS name. Available in commands as `$host.address$`. |
 | `groups` | | Host groups the host belongs to. See [hostgroup](hostgroup.md). |
-| `services` | | Services the host gets. See [service](service.md). A [built-in check](check.md#built-in-checks) like `http` or `tls` can be listed as it is, without a `[service.<name>]`. |
+| `services` | | Services the host gets. See [service](service.md). A [check](check.md) can be listed as it is, without a `[service.<name>]`: a [built-in](check.md#built-in-checks) one like `http` or `tls`, or one of yours. |
 | `servicegroups` | | Service groups the host gets; it gets all their services. See [servicegroup](servicegroup.md). |
 | `vars` | | Values for the `$name$` macros of the host's services, and the tables for `for_each`. Win over host group vars. [Built-in checks](check.md#built-in-checks) don't read them, except through macros like `$host.vars.port$`. |
 | `host_check` | from the host groups; otherwise `ping` if `address` is set | The service that decides whether the host is UP or DOWN. The host gets this service if it doesn't have it already. `false`: no host check, the host is always UP. See [Host state](#host-state). |

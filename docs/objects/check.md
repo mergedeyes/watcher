@@ -2,8 +2,9 @@
 
 A check describes what to run and how to judge the result: a command,
 values for its placeholders, thresholds and timing. A check does nothing
-by itself. It runs once a [service](service.md) uses it and the service is
-on a [host](host.md).
+by itself. It runs once it is on a [host](host.md): listed in the host's
+`services = [...]` as it is, or used by a [service](service.md) on the
+host.
 
 ```toml
 [check.http]
@@ -394,9 +395,10 @@ vars = { name = "www.example.com" }
 vars = { name = "example.com", expect = "10.0.0.5" }
 ```
 
-A built-in check can also be listed in `services = [...]` of a host, a
-host group or a service group as it is, without a `[service.<name>]`. Its
-vars then come from the host's service, if you need any:
+Like any check, a built-in check can also be listed in `services = [...]`
+of a host, a host group or a service group as it is, without a
+`[service.<name>]`. Its vars then come from the host's service, if you
+need any:
 
 ```toml
 [[host]]

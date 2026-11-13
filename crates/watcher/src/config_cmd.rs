@@ -277,9 +277,13 @@ fn summary(out: &mut impl Write, config: &Config, warnings: usize) -> io::Result
         plural(config.files.len(), "file"),
         plural(config.hosts.len(), "host"),
         plural(config.checks.len(), "check"),
-        plural(config.service_objects.len(), "service"),
-        format!("{} on hosts", config.services.len()),
     ];
+    // Checks listed as services need no [service.x]: "0 services" would
+    // read as if nothing ran.
+    if !config.service_objects.is_empty() {
+        parts.push(plural(config.service_objects.len(), "service"));
+    }
+    parts.push(format!("{} on hosts", config.services.len()));
     if !config.contacts.is_empty() {
         parts.push(plural(config.contacts.len(), "contact"));
     }
