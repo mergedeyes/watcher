@@ -164,6 +164,15 @@ How the forms work:
   but you can type anything.
 - The host form covers host groups, services, service groups, changes to
   assigned services, and services only this host has.
+- A service runs either a check or a command of its own: while one is
+  set, the other field is greyed out. A check runs either a command or a
+  built-in check, in the same way.
+- Configuration → Checks also lists the [built-in checks](../objects/check.md#built-in-checks).
+  When a form's check is a built-in one, an **Options** section shows each
+  of its options with what it does, its default and whether it is
+  required (`*`). Values a check already sets show as `(from check …)`.
+  Settings that only commands have (Shell, Run On, Copy, Passive) are
+  greyed out then.
 - Group membership shows on both sides. The host form lists the host
   groups that list the host (`Also: dc1 · pattern web*`), and the host
   group form lists the hosts that list the group. The same goes for service
