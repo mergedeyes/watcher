@@ -124,7 +124,7 @@ A service runs once a host or host group lists it:
 ```toml
 [hostgroup.linux]
 members = ["*"]
-services = ["ping", "disk_root"]
+services = ["load", "disk_root"]
 ```
 
 ## One service per item: for_each

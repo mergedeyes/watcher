@@ -1251,18 +1251,9 @@ impl<'a> Compiler<'a> {
                 if disabled.contains(hc) {
                     msg += "is turned off on it (enabled = false)";
                 } else {
-                    msg += "is not a service on it";
-                    // It names a service, which is easily mixed up with the
-                    // plugin (check_ping): say what it can be.
-                    let services: Vec<&str> = config
-                        .services
-                        .iter()
-                        .filter(|s| s.host == host_idx)
-                        .map(|s| s.name.as_str())
-                        .collect();
-                    if !services.is_empty() {
-                        msg += &format!("; it names one of its services: {}", services.join(", "));
-                    }
+                    // Any service or check can be the host check; a plugin
+                    // (check_ping) is easily taken for one.
+                    msg += "is no service or check (it takes their names, not a plugin's)";
                     if host.address != host.name {
                         msg += "; without host_check, a host with an address uses ping";
                     }

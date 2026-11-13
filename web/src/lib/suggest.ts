@@ -169,7 +169,8 @@ export class Suggest {
 			case 'node':
 				return this.nodes().map((value) => ({ value }));
 			case 'host_check':
-				return this.serviceNames();
+				// Any service or check, built-in ones too: it runs for the host.
+				return this.names('service');
 			case 'graph':
 				return this.graphs.map((value) => ({ value }));
 			case 'states':

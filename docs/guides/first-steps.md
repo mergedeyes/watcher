@@ -79,10 +79,10 @@ watcher config check --services
 ```
 
 ```
-OK: 2 files, 1 host, 1 check, 2 on hosts
+OK: 2 files, 1 host, 1 check, 1 on hosts, 1 host check
 
   web01/http  every 1m     check_http -H 10.0.0.5 -u /
-  web01/ping  every 1m     ping -H 10.0.0.5 -p 5 -w 3000,80% -c 5000,100% (built-in)
+  web01/ping  every 1m     ping -H 10.0.0.5 -p 5 -w 3000,80% -c 5000,100% (built-in)  (host check)
 ```
 
 In the web UI, open Hosts → web01. The Config Tree on that page shows

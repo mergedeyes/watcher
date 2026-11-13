@@ -67,8 +67,9 @@ contacts = ["admin"]
 
 A small company network:
 
-- Every host gets the service group `server` (ping and SSH) through the
-  host group `all`. Ping also decides whether a host is UP or DOWN.
+- Every host gets the service group `server` (SSH) through the host group
+  `all`, and ping as its host check, which decides whether it is UP or
+  DOWN.
 - Web servers and databases get their services through host groups that
   match their names.
 - The service group `shop` doesn't give anyone services. It only groups the
@@ -111,7 +112,7 @@ vars.db = "postgres"
 # conf.d/groups.toml
 [servicegroup.server]
 title = "Server Basics"
-services = ["ping", "ssh"]
+services = ["ssh"]
 
 [servicegroup.shop]
 title = "Webshop"
@@ -268,7 +269,6 @@ command = "check_smtp -H $host.address$"
 # conf.d/groups.toml
 [hostgroup.all]
 members = ["*"]
-services = ["ping"]
 host_check = "ping"
 
 [hostgroup.windows]

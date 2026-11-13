@@ -8,12 +8,12 @@ It gets services directly or through [host groups](hostgroup.md) and
 [[host]]
 name = "web01"
 address = "10.0.0.5"
-services = ["ping", "http"]
+services = ["http"]
 ```
 
-web01 gets the services `ping` and `http`, and their checks run against
-10.0.0.5. Because the host has an address, its `ping` service also decides
-whether the host is UP or DOWN, see [Host state](#host-state).
+web01 gets the service `http`, and its check runs against 10.0.0.5.
+Because the host has an address, Watcher also pings it to decide whether
+the host is UP or DOWN, see [Host state](#host-state).
 
 Hosts are written with double brackets, `[[host]]`, because each one is an
 entry in a list. Each host needs a unique `name`.
@@ -28,7 +28,7 @@ entry in a list. Each host needs a unique `name`.
 | `services` | | Services the host gets. See [service](service.md). A [check](check.md) can be listed as it is, without a `[service.<name>]`: a [built-in](check.md#built-in-checks) one like `http` or `tls`, or one of yours. |
 | `servicegroups` | | Service groups the host gets; it gets all their services. See [servicegroup](servicegroup.md). |
 | `vars` | | Values for the `$name$` macros of the host's services, and the tables for `for_each`. Win over host group vars. [Built-in checks](check.md#built-in-checks) don't read them, except through macros like `$host.vars.port$`. |
-| `host_check` | from the host groups; otherwise `ping` if `address` is set | The service that decides whether the host is UP or DOWN. The host gets this service if it doesn't have it already. `false`: no host check, the host is always UP. See [Host state](#host-state). |
+| `host_check` | from the host groups; otherwise `ping` if `address` is set | The service or check that decides whether the host is UP or DOWN. It runs for the host itself and isn't one of its services. `false`: no host check, the host is always UP. See [Host state](#host-state). |
 | `graph` | the host check | The service whose graph is shown on the host page. If the host doesn't have that service, or its graphs are off (`graphs = false`), the page shows the host check's graph. |
 | `ssh` | from the host groups | Login for [checks over SSH](../guides/ssh.md): `{ user, secret, port }`. See [ssh](#ssh). |
 | `proxmox` | from the host groups | For a Proxmox VE server: the API login, `{ secret, fingerprint, port, verify, discover }`. For a VM or container on one: `{ host, vmid }`. See [proxmox](#proxmox). |
@@ -253,20 +253,20 @@ groups = ["linux"]
 
 ## Host state
 
-A host is UP or DOWN. The state comes from one of its services, the host
-check:
+A host is UP or DOWN. The state comes from its host check: a service or a
+check that runs for the host itself.
 
 | State of the host check | Host state |
 |---|---|
 | OK, WARNING | UP |
 | CRITICAL, UNKNOWN | DOWN |
 
-Which service is the host check:
+Which one is the host check:
 
 1. `host_check` on the host, if set.
 2. Otherwise `host_check` from its host groups.
-3. Otherwise, if the host has an `address`: its service `ping`. If it has
-   no service `ping`, Watcher adds one using the
+3. Otherwise, if the host has an `address`: `ping`, your
+   `[service.ping]` or `[check.ping]` if there is one, else the
    [built-in ping check](check.md#built-in-checks).
 4. Otherwise there is no host check, and the host is always UP.
 
@@ -282,10 +282,18 @@ What the host state changes:
   the host is UP and ends the retries.
 - A WARNING of the host check doesn't notify, because the host is still UP.
 
-If the host doesn't get the host check's service in another way (its
-`services`, a service group, a host group), it gets it for that, like
-`ping`. It must be a defined service, for example `[service.check_ping]`,
-or a [built-in check](check.md#built-in-checks).
+`host_check` takes the name of a service, for example `[service.check_ping]`
+with settings of its own, or of a check, also a
+[built-in check](check.md#built-in-checks) like `tcp`. It isn't the
+plugin's name: `check_ping` works only if you named a service or check
+like that.
+
+The host check is not one of the host's services. The web UI shows it with
+the host's state on the host page, not in the lists of services, and
+service totals don't count it. Notify rules and dependencies treat its
+alerts as alerts about the host. If the host also lists the same service in
+`services`, it runs once, as the host check. Settings for it on one host
+go in `[host.service.<name>]`, as for a service.
 
 ## ssh
 

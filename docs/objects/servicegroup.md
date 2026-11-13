@@ -10,14 +10,14 @@ A service group is a set of services. It has two uses:
 ```toml
 [servicegroup.linux-basics]
 title = "Linux Basics"
-services = ["ping", "load", "disk_root"]
+services = ["ssh", "load", "disk_root"]
 
 [hostgroup.linux]
 members = ["*"]
 servicegroups = ["linux-basics"]
 ```
 
-Every host gets `ping`, `load` and `disk_root`.
+Every host gets `ssh`, `load` and `disk_root`.
 
 ## Fields
 
@@ -57,7 +57,7 @@ name = "db01"
 ```toml
 [servicegroup.server]
 title = "Server Basics"
-services = ["ping", "ssh", "load"]
+services = ["ssh", "load"]
 
 [hostgroup.all]
 members = ["*"]

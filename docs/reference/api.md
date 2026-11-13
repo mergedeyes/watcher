@@ -40,7 +40,7 @@ Requests with a session cookie that change something need a matching
 |---|---|
 | `GET health` | Status and version. |
 | `GET hosts` | Hosts with their state; filters below. |
-| `GET hosts/{host}` | One host with its services. |
+| `GET hosts/{host}` | One host with its services, and its host check apart as `check`. Lists and totals of services (`services`, `summary`, `groups`, `names`) leave host checks out; they count as their hosts. |
 | `GET services` | Services; filters below. |
 | `GET services/{host}/{service}` | One service with its last result. |
 | `POST services/{host}/{service}/result` | Submit a result for a passive service. |

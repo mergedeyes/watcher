@@ -109,14 +109,14 @@ The setup token you need to enter on the page is printed to the log.
 ## config check
 
 Checks the configuration and prints a summary, or every service with its
-command.
+command. Host checks are counted apart and marked `(host check)`.
 
 ```
 watcher config check [PATH] [--services]
 ```
 
 ```
-OK: 4 files, 2 hosts, 4 checks, 5 services, 5 on hosts, 1 contact
+OK: 4 files, 2 hosts, 4 checks, 5 services, 4 on hosts, 1 host check, 1 contact
 
   localhost/disk_root  every 30s    check_disk -w '20%' -c '10%' -p /
   localhost/backup     fresh 1day 2h  (passive)

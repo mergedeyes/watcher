@@ -129,11 +129,12 @@ async fn health_and_lists() {
     let hub = hub();
     let (status, health) = call(&hub, "GET", "/api/v1/health", None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(health["services"], 3);
+    // db01's host check is the host's, not one of its services.
+    assert_eq!(health["services"], 2);
     assert_eq!(health["database"], Value::Null);
 
     let (_, list) = call(&hub, "GET", "/api/v1/services", None).await;
-    assert_eq!(list["counts"]["pending"], 3);
+    assert_eq!(list["counts"]["pending"], 2);
     assert_eq!(list["services"][0]["state"], Value::Null);
 
     hub.record(&event("web01/http", 2, "HTTP CRITICAL - down | time=1.5s"));
@@ -150,7 +151,7 @@ async fn health_and_lists() {
     .await;
     assert_eq!(hard["services"].as_array().unwrap().len(), 0);
     let (_, by_state) = call(&hub, "GET", "/api/v1/services?state=pending", None).await;
-    assert_eq!(by_state["services"][0]["service"], "backup");
+    assert_eq!(by_state["services"][0]["service"], "dump");
     let (status, _) = call(&hub, "GET", "/api/v1/services?state=bad", None).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
@@ -170,6 +171,11 @@ async fn health_and_lists() {
     let (status, web) = call(&hub, "GET", "/api/v1/hosts/web01", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(web["services"][0]["output"], "HTTP CRITICAL - down");
+    assert_eq!(web["check"], Value::Null);
+    let (_, db) = call(&hub, "GET", "/api/v1/hosts/db01", None).await;
+    assert_eq!(db["check"]["service"], "backup");
+    assert_eq!(db["services"].as_array().unwrap().len(), 1);
+    assert_eq!(db["services"][0]["service"], "dump");
     let (status, err) = call(&hub, "GET", "/api/v1/hosts/nope", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(err["error"], "no host \"nope\"");
@@ -370,7 +376,7 @@ async fn stream_sends_results() {
     // A summary first, then results.
     let first = next_event(&mut body).await;
     assert!(first.starts_with("event: summary\ndata: {"), "{first}");
-    assert!(first.contains(r#""pending":3"#), "{first}");
+    assert!(first.contains(r#""pending":2"#), "{first}");
 
     hub.record(&event("web01/http", 0, "HTTP OK"));
     let text = next_event(&mut body).await;
@@ -478,18 +484,18 @@ async fn lists_filter_sort_and_page() {
     };
 
     let all = get("/api/v1/services?sort=status&desc=true").await;
-    assert_eq!(names(&all), ["web01/http", "db01/dump", "db01/backup"]);
+    assert_eq!(names(&all), ["web01/http", "db01/dump"]);
     let page = get("/api/v1/services?sort=status&desc=true&offset=1&limit=1").await;
-    assert_eq!(page["total"], 3);
+    assert_eq!(page["total"], 2);
     assert_eq!(names(&page), ["db01/dump"]);
     let by_host = get("/api/v1/services?sort=host").await;
-    assert_eq!(names(&by_host), ["db01/backup", "db01/dump", "web01/http"]);
+    assert_eq!(names(&by_host), ["db01/dump", "web01/http"]);
 
     // Counts ignore the state filter, so totals boxes stay complete.
     let warning = get("/api/v1/services?state=warning").await;
     assert_eq!(names(&warning), ["db01/dump"]);
     assert_eq!(warning["counts"]["critical"], 1);
-    assert_eq!(warning["counts"]["pending"], 1);
+    assert_eq!(warning["counts"]["pending"], 0);
     assert_eq!(warning["total"], 1);
 
     assert_eq!(names(&get("/api/v1/services?q=SLOW").await), ["db01/dump"]);
@@ -518,7 +524,7 @@ async fn lists_filter_sort_and_page() {
     );
     let summary = get("/api/v1/summary").await;
     assert_eq!(summary["services"]["unhandled"], 1);
-    assert_eq!(summary["services"]["total"], 3);
+    assert_eq!(summary["services"]["total"], 2);
     assert_eq!(summary["services"]["critical"], 1);
     assert_eq!(summary["hosts"]["total"], 2);
     assert_eq!(summary["hosts"]["up"], 1);
@@ -543,7 +549,7 @@ async fn lists_filter_sort_and_page() {
 
     let names = get("/api/v1/names").await;
     assert_eq!(names["hosts"], json!(["web01", "db01"]));
-    assert_eq!(names["services"], json!(["backup", "dump", "http"]));
+    assert_eq!(names["services"], json!(["dump", "http"]));
 }
 
 #[tokio::test]

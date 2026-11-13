@@ -1870,7 +1870,7 @@ host_check = "check_pingg"
     assert_eq!(
         messages(&diags),
         [
-            "a.toml:2: error: host \"PROXMOX\": host_check \"check_pingg\" is not a service on it; it names one of its services: tls; without host_check, a host with an address uses ping",
+            "a.toml:2: error: host \"PROXMOX\": host_check \"check_pingg\" is no service or check (it takes their names, not a plugin's); without host_check, a host with an address uses ping",
         ]
     );
 }

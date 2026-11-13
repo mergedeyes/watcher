@@ -134,6 +134,10 @@ the rows you see right away. When a state changes, the list is loaded
 again, so services move into or out of it. Paused keeps the page still;
 Refresh loads it once.
 
+The host page shows the host check with the host's state, under Host
+State Information. It isn't in the host's list of services, and service
+totals don't count it.
+
 **Graphs** show the last 15 minutes by default, with ranges down to 30
 seconds. Drag to zoom in, double-click to reset. The host page shows the
 host's `graph` service, or the host check, and you can pick another one.

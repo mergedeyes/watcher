@@ -243,8 +243,13 @@ pub struct HostFlags {
 }
 
 impl HostView {
-    /// `services` are the host's services, including its host check.
-    pub fn new(host: &Host, services: &[&ServiceView], flags: &HostFlags) -> Self {
+    /// `check` is the host check; `services` the host's other services.
+    pub fn new(
+        host: &Host,
+        check: Option<&ServiceView>,
+        services: &[&ServiceView],
+        flags: &HostFlags,
+    ) -> Self {
         let mut counts = Counts::default();
         let mut worst: Option<State> = None;
         for s in services {
@@ -253,10 +258,6 @@ impl HostView {
                 worst = Some(worst.map_or(state, |w| w.worst(state)));
             }
         }
-        let check = host
-            .host_check
-            .as_ref()
-            .and_then(|name| services.iter().find(|s| s.service == *name));
         let state = match (&host.host_check, check) {
             (None, _) => Some(HostState::Up),
             (Some(_), view) => view.and_then(|v| v.state).map(HostState::from_check),

@@ -691,7 +691,7 @@ export const api = {
 		get<{ hosts: string[]; services: string[] }>(`/names?${params(q)}`),
 	watch: (stream: string, watch: Watch) => send<unknown>('PUT', `/stream/${seg(stream)}`, watch),
 	host: (name: string) =>
-		get<{ host: HostView; services: ServiceView[]; origin: string; flags: Flag[] }>(`/hosts/${seg(name)}`),
+		get<{ host: HostView; services: ServiceView[]; check: ServiceView | null; origin: string; flags: Flag[] }>(`/hosts/${seg(name)}`),
 	service: (host: string, service: string) =>
 		get<ServiceDetail>(`/services/${seg(host)}/${seg(service)}`),
 	series: (host: string, service: string) =>

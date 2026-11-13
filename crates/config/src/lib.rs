@@ -756,6 +756,12 @@ impl Config {
         self.host(service).host_check.as_deref() == Some(service.name.as_str())
     }
 
+    /// The services of all hosts as the user sees them: without host
+    /// checks, which run for the host itself and show on its page.
+    pub fn listed_services(&self) -> impl Iterator<Item = &Service> {
+        self.services.iter().filter(|s| !self.is_host_check(s))
+    }
+
     pub fn service(&self, id: &str) -> Option<&Service> {
         self.index().services.get(id).map(|&i| &self.services[i])
     }
