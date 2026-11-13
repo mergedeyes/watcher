@@ -805,17 +805,18 @@ paths:
 
   /ssh/secrets:
     get:
-      summary: Secrets for checks over SSH, without their values (admins)
+      summary: Secrets for checks over SSH and API tokens, without their values (admins)
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Secret" } } } } }
         "403": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
     post:
-      summary: Generate or store a key, or store a password (admins)
+      summary: Generate or store a key, or store a password or API token (admins)
       description: >
         Stored sealed with `secret.key` in the data directory (created on
         first use). `generate` makes an ed25519 key: put `public_key` into
-        the target's `authorized_keys`.
+        the target's `authorized_keys`. `token` stores an API token, e.g.
+        for `builtin = "proxmox"`.
       requestBody:
         required: true
         content:
@@ -824,11 +825,13 @@ paths:
               type: object
               required: [name, kind]
               properties:
-                name: { type: string, description: "As in ssh = { secret = ... }" }
-                kind: { type: string, enum: [generate, key, password] }
+                name: { type: string, description: "As in ssh = { secret = ... } or vars.secret" }
+                kind: { type: string, enum: [generate, key, password, token] }
                 private_key: { type: string, description: "kind key: ed25519 or ECDSA; OpenSSH, PEM or PuTTY" }
                 passphrase: { type: string, description: "kind key, if encrypted" }
                 password: { type: string, description: kind password }
+                token_id: { type: string, description: "kind token: its ID, e.g. watcher@pve!monitor" }
+                token: { type: string, description: "kind token: its secret" }
                 replace: { type: boolean, default: false }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Secret" } } } }
@@ -1466,10 +1469,11 @@ components:
       type: object
       properties:
         name: { type: string }
-        kind: { type: string, enum: [key, password] }
+        kind: { type: string, enum: [key, password, token] }
         public_key: { type: [string, "null"], description: For authorized_keys }
         fingerprint: { type: [string, "null"], example: "SHA256:..." }
-        hosts: { type: array, items: { type: string }, description: Hosts that use it }
+        token_id: { type: [string, "null"], description: "Tokens: the token's ID", example: "watcher@pve!monitor" }
+        hosts: { type: array, items: { type: string }, description: "Hosts that use it, over SSH or with a proxmox check" }
         created: { $ref: "#/components/schemas/Time" }
         updated: { $ref: "#/components/schemas/Time" }
     HostKey:
