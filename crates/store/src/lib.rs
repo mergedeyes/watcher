@@ -5,6 +5,7 @@
 //! extension can be used, and otherwise keeps working on the plain table.
 
 mod auth;
+mod discovery;
 mod ingest;
 mod nodes;
 mod notifications;
@@ -17,6 +18,7 @@ mod sync;
 mod write;
 
 pub use auth::{ApiToken, Login, TokenRef, User};
+pub use discovery::{DiscoveredGuest, FoundGuest};
 pub use ingest::{Record, ingest, ingest_with};
 pub use nodes::NodeInfo;
 pub use notifications::{NotificationFilter, SentNotification};

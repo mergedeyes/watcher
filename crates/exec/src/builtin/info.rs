@@ -95,8 +95,25 @@ const ADDRESS: VarInfo = default(
 const WARN_TIME: VarInfo = var("warn", VarKind::Duration, "WARNING at this response time.");
 const CRIT_TIME: VarInfo = var("crit", VarKind::Duration, "CRITICAL at this response time.");
 
+const PVE_ADDRESS: VarInfo = default(
+    var(
+        "address",
+        VarKind::Text,
+        "The Proxmox VE API's address, instead of the host's (for a VM or container: of the Proxmox VE host it names).",
+    ),
+    "the host's address",
+);
+const PVE_NODE: VarInfo = default(
+    var(
+        "node",
+        VarKind::Text,
+        "The node to check. Needed in a cluster with more than one node.",
+    ),
+    "the only node",
+);
+
 /// The built-in checks, in the order of [`super::NAMES`].
-pub const INFO: [Info; 6] = [
+pub const INFO: [Info; 11] = [
     Info {
         name: "ping",
         title: "Ping",
@@ -296,63 +313,87 @@ pub const INFO: [Info; 6] = [
         ],
     },
     Info {
-        name: "proxmox",
-        title: "Proxmox VE",
-        summary: "Checks Proxmox VE through its API: cluster, node, storages, a guest, backups or updates.",
+        name: "proxmox-cluster",
+        title: "Proxmox VE Cluster",
+        summary: "Quorum, and which nodes are online. Login and certificate from the host's proxmox settings.",
+        vars: &[PVE_ADDRESS],
+    },
+    Info {
+        name: "proxmox-node",
+        title: "Proxmox VE Node",
+        summary: "CPU, memory, swap, load, I/O wait, root file system and uptime of a node; set thresholds on them.",
+        vars: &[PVE_ADDRESS, PVE_NODE],
+    },
+    Info {
+        name: "proxmox-storage",
+        title: "Proxmox VE Storage",
+        summary: "How full each storage is.",
         vars: &[
-            ADDRESS,
-            required(var(
-                "mode",
-                VarKind::Choice(&["cluster", "node", "storage", "guest", "backup", "updates"]),
-                "What to check.",
-            )),
-            required(var(
-                "secret",
-                VarKind::Text,
-                "The API token in Configuration → Secrets.",
-            )),
-            default(var("port", VarKind::Number, "The port of the API."), "8006"),
+            PVE_ADDRESS,
+            var("node", VarKind::Text, "Only the storages of this node."),
             var(
-                "node",
+                "storage",
                 VarKind::Text,
-                "node, updates: the node to check (needed with more than one). storage, backup: only this node.",
+                "Only this storage, e.g. local-zfs.",
             ),
-            var("storage", VarKind::Text, "storage: only this storage."),
-            var(
-                "vmid",
-                VarKind::Number,
-                "guest: the ID of the VM or container. Required for guest.",
+            default(
+                var("warn", VarKind::Number, "WARNING at this percentage used."),
+                "80",
             ),
+            default(
+                var("crit", VarKind::Number, "CRITICAL at this percentage used."),
+                "90",
+            ),
+        ],
+    },
+    Info {
+        name: "proxmox-guest",
+        title: "Proxmox VE Guest",
+        summary: "One VM or container: whether it runs, CPU, memory, disk and network.",
+        vars: &[
+            PVE_ADDRESS,
+            default(
+                var("vmid", VarKind::Number, "The ID of the VM or container."),
+                "the host's proxmox.vmid",
+            ),
+        ],
+    },
+    Info {
+        name: "proxmox-backup",
+        title: "Proxmox VE Backups",
+        summary: "Failed or missing backups, and VMs or containers that no backup job includes.",
+        vars: &[
+            PVE_ADDRESS,
+            var("node", VarKind::Text, "Only the backups of this node."),
             default(
                 var(
                     "hours",
                     VarKind::Number,
-                    "backup: how many hours back to look.",
+                    "How many hours back to look for backups.",
                 ),
                 "24",
             ),
-            var(
-                "warn",
-                VarKind::Number,
-                "storage: WARNING at this percentage used (80). updates: at this many updates (1).",
+        ],
+    },
+    Info {
+        name: "proxmox-updates",
+        title: "Proxmox VE Updates",
+        summary: "Pending package updates on a node. The token needs Sys.Modify on the node.",
+        vars: &[
+            PVE_ADDRESS,
+            PVE_NODE,
+            default(
+                var(
+                    "warn",
+                    VarKind::Number,
+                    "WARNING at this many pending updates; 0 never warns.",
+                ),
+                "1",
             ),
             var(
                 "crit",
                 VarKind::Number,
-                "storage: CRITICAL at this percentage used (90). updates: at this many updates.",
-            ),
-            var(
-                "fingerprint",
-                VarKind::Text,
-                "SHA-256 fingerprint of the server's certificate (18:B4:0D:…), for a self-signed one.",
-            ),
-            default(
-                var(
-                    "verify",
-                    VarKind::Bool,
-                    "Without fingerprint: the system must trust the certificate.",
-                ),
-                "true",
+                "CRITICAL at this many pending updates.",
             ),
         ],
     },

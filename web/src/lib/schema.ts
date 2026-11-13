@@ -102,6 +102,14 @@ const SSH: Field[] = [
 	{ key: 'ssh.secret', label: 'SSH Secret', type: 'text', help: 'key or password under Configuration → Secrets' }
 ];
 
+/** The Proxmox VE API login: on a Proxmox VE host or its host groups. */
+const PROXMOX_LOGIN: Field[] = [
+	{ key: 'proxmox.secret', label: 'Proxmox Secret', type: 'text', help: 'an API token under Configuration → Secrets' },
+	{ key: 'proxmox.fingerprint', label: 'Proxmox Fingerprint', type: 'mono', placeholder: '18:B4:0D:…', help: 'SHA-256 of the API certificate, for a self-signed one' },
+	{ key: 'proxmox.port', label: 'Proxmox Port', type: 'int', placeholder: '8006' },
+	{ key: 'proxmox.verify', label: 'Proxmox Verify', type: 'bool', default: true, help: 'without a fingerprint: the system must trust the certificate' }
+];
+
 export const SCHEMAS: Record<Kind, Group[]> = {
 	check: [
 		{ title: 'Check', fields: [NAME, TITLE, ...CHECK] },
@@ -147,6 +155,15 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 		{ title: 'Services', fields: [SERVICES, SERVICEGROUPS] },
 		{ title: 'SSH', fields: SSH.map((f) => ({ ...f, help: f.help ?? 'for run_on = "host"; default: from host groups' })) },
 		{
+			title: 'Proxmox VE',
+			fields: [
+				...PROXMOX_LOGIN.map((f) => ({ ...f, exclusive: ['proxmox.host'] })),
+				{ key: 'proxmox.discover', label: 'Discover', type: 'bool', default: false, exclusive: ['proxmox.host'], help: 'offer its VMs and containers as hosts (Configuration → Discovery)' },
+				{ key: 'proxmox.host', label: 'On Host', type: 'text', suggestOne: 'host', exclusive: ['proxmox.secret'], help: 'for a VM or container: the Proxmox VE host it runs on' },
+				{ key: 'proxmox.vmid', label: 'VM ID', type: 'int', exclusive: ['proxmox.secret'], placeholder: '100', help: 'with On Host' }
+			]
+		},
+		{
 			title: 'Host Services',
 			fields: [{ key: 'service', label: 'Overrides', type: 'services', help: 'settings of assigned services on this host, or one-off services' }]
 		},
@@ -162,7 +179,7 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 			]
 		},
 		{ title: 'Services', fields: [{ ...SERVICES, help: 'for every member, comma-separated' }, SERVICEGROUPS] },
-		{ title: 'Hosts Get', fields: [HOST_CHECK, GRAPH, ...SSH, { ...VARS, help: 'host var defaults' }] }
+		{ title: 'Hosts Get', fields: [HOST_CHECK, GRAPH, ...SSH, ...PROXMOX_LOGIN, { ...VARS, help: 'host var defaults' }] }
 	],
 	servicegroup: [
 		{

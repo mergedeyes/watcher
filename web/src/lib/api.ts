@@ -399,6 +399,38 @@ export interface BuiltinCheck {
 	vars: BuiltinVar[];
 }
 
+/** A VM or container that a discovery found. */
+export interface DiscoveredGuest {
+	vmid: number;
+	kind: 'qemu' | 'lxc';
+	name: string;
+	node: string;
+	running: boolean;
+	/** The last address seen, from the guest agent or the container. */
+	address: string | null;
+	ignored: boolean;
+	first_seen: string;
+	last_seen: string;
+	/** The host it was accepted as. */
+	host: string | null;
+}
+
+/** A Proxmox VE host with discover = true, its last run and the guests it found. */
+export interface Discovery {
+	/** The Proxmox VE host. */
+	name: string;
+	/** The API it asks. */
+	url: string;
+	/** Seconds. */
+	interval: number;
+	/** Where accepted hosts go, relative to conf_dir. */
+	file: string;
+	last_run: string | null;
+	error: string | null;
+	running: boolean;
+	guests: DiscoveredGuest[];
+}
+
 /** A pinned SSH host key, and a changed one waiting for acceptance. */
 export interface HostKey {
 	address: string;
@@ -711,6 +743,15 @@ export const api = {
 	removeNode: (name: string) => send<void>('DELETE', `/nodes/${seg(name)}`),
 
 	secrets: () => get<Secret[]>('/ssh/secrets'),
+	discoveries: () => get<Discovery[]>('/discovery'),
+	runDiscovery: (name: string) => send<void>('POST', `/discovery/${seg(name)}/run`),
+	/** accept, remove: write the config like `apply` (with the leases held). */
+	discoveryAction: (name: string, action: 'accept' | 'remove' | 'ignore' | 'unignore', vmids: number[]) =>
+		get<{ changes: Changes; diagnostics: Problem[] } | undefined>(`/discovery/${seg(name)}/${action}`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json', 'x-watcher-lease': [...heldLeases].join(',') },
+			body: JSON.stringify({ vmids })
+		}),
 	createSecret: (secret: NewSecret) => send<Secret>('POST', '/ssh/secrets', secret),
 	deleteSecret: (name: string) => send<void>('DELETE', `/ssh/secrets/${seg(name)}`),
 	hostKeys: () => get<HostKey[]>('/ssh/hostkeys'),

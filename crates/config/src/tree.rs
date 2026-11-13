@@ -492,6 +492,23 @@ impl<'a> Builder<'a> {
             out.push(self.value("ssh.port", ssh.port.to_string(), src("ssh.port")));
             out.push(self.value("ssh.secret", ssh.secret.clone(), src("ssh.secret")));
         }
+        if let Some(p) = &host.proxmox {
+            let values = [
+                ("secret", p.secret.clone()),
+                ("port", p.port.map(|v| v.to_string())),
+                ("fingerprint", p.fingerprint.clone()),
+                ("verify", p.verify.map(|v| v.to_string())),
+                ("discover", p.discover.then(|| "true".to_string())),
+                ("host", p.host.clone()),
+                ("vmid", p.vmid.map(|v| v.to_string())),
+            ];
+            for (key, value) in values {
+                if let Some(v) = value {
+                    let key = format!("proxmox.{key}");
+                    out.push(self.value(&key, v, src(&key)));
+                }
+            }
+        }
         // Sources are recorded per text value: a table shows each of them.
         for (k, v) in &host.vars {
             let mut leaves = Vec::new();

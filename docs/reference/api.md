@@ -286,7 +286,7 @@ Admins only. The values of secrets never leave the server.
 
 | Method and path | Description |
 |---|---|
-| `GET ssh/secrets` | Name, kind (`key`, `password` or `token`), public key, fingerprint, token ID, and the hosts using each secret (over SSH, or with a `proxmox` check). |
+| `GET ssh/secrets` | Name, kind (`key`, `password` or `token`), public key, fingerprint, token ID, and the hosts using each secret (over SSH, or as `proxmox.secret`). |
 | `POST ssh/secrets` | Create a secret, see below. `"replace": true` overwrites one of the same name. |
 | `DELETE ssh/secrets/{name}` | Delete a secret. |
 | `GET ssh/hostkeys` | Stored host keys, and keys that changed (`offered`). |
@@ -300,13 +300,29 @@ Bodies for `POST ssh/secrets`:
 | `{"name", "kind": "generate"}` | A new ed25519 key. |
 | `{"name", "kind": "key", "private_key", "passphrase"}` | An imported key. |
 | `{"name", "kind": "password", "password"}` | A password. |
-| `{"name", "kind": "token", "token_id", "token"}` | An API token, for example for the [proxmox check](../guides/proxmox.md). `token_id` is its ID (`watcher@pve!monitor`), `token` its secret. |
+| `{"name", "kind": "token", "token_id", "token"}` | An API token, for example for the [Proxmox VE checks](../guides/proxmox.md). `token_id` is its ID (`watcher@pve!monitor`), `token` its secret. |
 
 ```sh
 curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
   -d '{"name": "monitor", "kind": "generate"}' .../api/v1/ssh/secrets
 # → {"name": "monitor", "kind": "key", "public_key": "ssh-ed25519 AAAA... watcher-monitor", ...}
 ```
+
+## Discovery
+
+Admins only. Proxmox VE hosts with `proxmox = { discover = true }` and the
+VMs and containers they found; see
+[Accept VMs and containers](../guides/proxmox.md#5-accept-vms-and-containers).
+`{name}` is the Proxmox VE host.
+
+| Method and path | Description |
+|---|---|
+| `GET discovery` | Each Proxmox VE host with discovery: `name`, `url`, `file` (where accepted hosts go), `last_run`, `error`, `running`, and `guests`: `vmid`, `kind` (`qemu` or `lxc`), `name`, `node`, `running`, `address`, `ignored`, `host` (the host it was added as). |
+| `POST discovery/{name}/run` | Ask the API now. |
+| `POST discovery/{name}/accept` | Add guests as hosts, like `config/apply`: `{"vmids": [100, 101]}`. |
+| `POST discovery/{name}/remove` | Remove the hosts of guests; they are offered again. Same body. |
+| `POST discovery/{name}/ignore` | Stop offering guests. Same body. |
+| `POST discovery/{name}/unignore` | Offer ignored guests again. Same body. |
 
 ## Configuration
 

@@ -846,6 +846,76 @@ paths:
         "204": { description: Deleted }
         "404": { $ref: "#/components/responses/Error" }
 
+  /discovery:
+    get:
+      summary: Discoveries and the guests they found (admins)
+      description: >
+        Every Proxmox VE host with `proxmox = { discover = true }`, its last
+        run, and the VMs and containers it found. `host` is set for guests
+        accepted as hosts.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Discovery" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /discovery/{name}/run:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Run a discovery now (admins)
+      responses:
+        "202": { description: Started }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /discovery/{name}/accept:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Add guests as hosts (admins)
+      description: >
+        Writes each guest as a `[[host]]` to `discovered/<name>.toml`, with
+        `proxmox = { host, vmid }` and the service `proxmox-guest`, and
+        reloads, like `POST config/apply`. The host is named after the
+        guest, or `<name>-<vmid>` if that name is taken.
+      parameters: [{ $ref: "#/components/parameters/lease" }]
+      requestBody: { $ref: "#/components/requestBodies/Guests" }
+      responses:
+        "200": { description: Applied, content: { application/json: { schema: { $ref: "#/components/schemas/ApplyResult" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "423": { $ref: "#/components/responses/Error" }
+
+  /discovery/{name}/remove:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Remove the hosts of accepted guests; they are offered again (admins)
+      parameters: [{ $ref: "#/components/parameters/lease" }]
+      requestBody: { $ref: "#/components/requestBodies/Guests" }
+      responses:
+        "200": { description: Applied, content: { application/json: { schema: { $ref: "#/components/schemas/ApplyResult" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "423": { $ref: "#/components/responses/Error" }
+
+  /discovery/{name}/ignore:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Stop offering guests (admins)
+      requestBody: { $ref: "#/components/requestBodies/Guests" }
+      responses:
+        "204": { description: Done }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /discovery/{name}/unignore:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Offer ignored guests again (admins)
+      requestBody: { $ref: "#/components/requestBodies/Guests" }
+      responses:
+        "204": { description: Done }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
   /ssh/hostkeys:
     get:
       summary: Pinned host keys, and changed keys waiting for acceptance (admins)
@@ -1223,6 +1293,15 @@ components:
     lease: { name: X-Watcher-Lease, in: header, description: "Edit leases held, comma-separated (config/locks)", schema: { type: string } }
 
   requestBodies:
+    Guests:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [vmids]
+            properties:
+              vmids: { type: array, items: { type: integer }, example: [100, 101] }
     Code:
       required: true
       content:
@@ -1276,6 +1355,37 @@ components:
               holder: { $ref: "#/components/schemas/Lock" }
 
   schemas:
+    ApplyResult:
+      type: object
+      description: As from `POST config/apply`
+      properties:
+        changes: { $ref: "#/components/schemas/Changes" }
+        diagnostics: { type: array, items: { $ref: "#/components/schemas/Problem" } }
+    Discovery:
+      type: object
+      properties:
+        name: { type: string, description: The Proxmox VE host }
+        url: { type: string, description: The API it asks, example: "https://192.0.2.10:8006" }
+        interval: { type: integer, description: Seconds }
+        file: { type: string, description: "Where accepted hosts go, relative to conf_dir", example: discovered/pve1.toml }
+        last_run: { oneOf: [{ $ref: "#/components/schemas/Time" }, { type: "null" }] }
+        error: { type: [string, "null"], description: Why the last run failed }
+        running: { type: boolean }
+        guests: { type: array, items: { $ref: "#/components/schemas/DiscoveredGuest" } }
+    DiscoveredGuest:
+      type: object
+      properties:
+        discovery: { type: string }
+        vmid: { type: integer }
+        kind: { type: string, enum: [qemu, lxc] }
+        name: { type: string }
+        node: { type: string }
+        running: { type: boolean }
+        address: { type: [string, "null"], description: "The last address seen (guest agent or container interfaces)" }
+        ignored: { type: boolean }
+        first_seen: { $ref: "#/components/schemas/Time" }
+        last_seen: { $ref: "#/components/schemas/Time" }
+        host: { type: [string, "null"], description: The host it was accepted as }
     Error:
       type: object
       properties:

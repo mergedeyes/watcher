@@ -156,7 +156,7 @@ fn secret_view(config: &Config, info: SecretInfo) -> SecretView {
         .collect();
     for service in &config.services {
         if let Some(CommandLine::Builtin(Builtin::Proxmox(p))) = &service.command
-            && p.secret == info.name
+            && p.connection.secret == info.name
             && let Some(host) = config.hosts.get(service.host)
             && !hosts.contains(&host.name)
         {

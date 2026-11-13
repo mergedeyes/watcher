@@ -3,7 +3,7 @@
 
 use crate::list::{self, HostList, HostQuery, ServiceList, ServiceQuery};
 use crate::view::{SeriesView, ServiceDetail};
-use crate::{Hub, auth, config, nodes, ops, ssh, stream};
+use crate::{Hub, auth, config, discovery, nodes, ops, ssh, stream};
 use axum::extract::{Path, Query, State as AxState};
 use axum::http::StatusCode;
 use axum::middleware;
@@ -57,6 +57,15 @@ pub fn router(hub: Arc<Hub>) -> Router {
             get(ssh::secrets).post(ssh::create_secret),
         )
         .route("/api/v1/ssh/secrets/{name}", delete(ssh::delete_secret))
+        .route("/api/v1/discovery", get(discovery::list))
+        .route("/api/v1/discovery/{name}/run", post(discovery::run_now))
+        .route("/api/v1/discovery/{name}/accept", post(discovery::accept))
+        .route("/api/v1/discovery/{name}/remove", post(discovery::remove))
+        .route("/api/v1/discovery/{name}/ignore", post(discovery::ignore))
+        .route(
+            "/api/v1/discovery/{name}/unignore",
+            post(discovery::unignore),
+        )
         .route("/api/v1/ssh/hostkeys", get(ssh::host_keys))
         .route(
             "/api/v1/ssh/hostkeys/{address}/{port}",

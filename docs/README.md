@@ -37,7 +37,7 @@ for common cases.
 - [Notifications](guides/notifications.md): SMTP, email format, webhooks, Slack, Teams, Telegram, ntfy, Gotify, PagerDuty, Jira, scripts, notification log
 - [Alerting recipes](guides/alerting-recipes.md): ready-made setups for reminders, escalations, teams, customers and maintenance windows
 - [Checks over SSH](guides/ssh.md): running checks on the hosts, secrets, host keys
-- [Monitoring Proxmox VE](guides/proxmox.md): cluster, nodes, storages, VMs and containers, backups and updates through the API
+- [Monitoring Proxmox VE](guides/proxmox.md): cluster, nodes, storages, VMs and containers, backups and updates through the API; discovering VMs and containers
 - [Nodes](guides/nodes.md): a hub and Watchers at other sites that connect to it
 - [Operations](guides/operations.md): acknowledgements, downtimes, muting, turning checks off
 - [Web UI](guides/web-ui.md): pages, logins, two-factor authentication, editing the configuration

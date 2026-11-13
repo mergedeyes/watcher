@@ -117,6 +117,7 @@ fn same_host(a: &Host, b: &Host) -> bool {
         && a.vars == b.vars
         && a.host_check == b.host_check
         && a.graph == b.graph
+        && a.proxmox == b.proxmox
         && a.enabled == b.enabled
 }
 

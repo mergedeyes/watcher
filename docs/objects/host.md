@@ -31,6 +31,7 @@ entry in a list. Each host needs a unique `name`.
 | `host_check` | from the host groups; otherwise `ping` if `address` is set | The service that decides whether the host is UP or DOWN. `false`: no host check, the host is always UP. See [Host state](#host-state). |
 | `graph` | the host check | The service whose graph is shown on the host page. |
 | `ssh` | from the host groups | Login for [checks over SSH](../guides/ssh.md): `{ user, secret, port }`. See [ssh](#ssh). |
+| `proxmox` | from the host groups | For a Proxmox VE server: the API login, `{ secret, fingerprint, port, verify, discover }`. For a VM or container on one: `{ host, vmid }`. See [proxmox](#proxmox). |
 | `enabled` | `true` | `false`: the host is not monitored. |
 | `node` | `local` | The [node](../guides/nodes.md) at the host's site. The Nodes page lists the host under it. `local` means this Watcher itself, the same as no `node`. *Not yet:* the node doesn't run the host's checks; the hub still does. |
 | `service.<name>` | | A host service: settings of one service on this host only. See [Host services](#host-services). |
@@ -146,7 +147,7 @@ A host service takes the same fields as a [service](service.md):
 | `enabled` | `true` | `false`: this host doesn't get the service. |
 | `title` | the service's or check's `title` | Name shown in the web UI. Can contain [macros](check.md#macros). |
 | `command` | the service's or check's | The command to run. Can contain [macros](check.md#macros). |
-| `builtin` | the service's or check's | Use a check built into Watcher instead of a command: `ping`, `tcp`, `http`, `dns`, `tls` or `proxmox`. See [Built-in checks](check.md#built-in-checks). |
+| `builtin` | the service's or check's | Use a check built into Watcher instead of a command: `ping`, `tcp`, `http`, `dns`, `tls`, or one of the [Proxmox VE checks](check.md#proxmox-ve-checks). See [Built-in checks](check.md#built-in-checks). |
 | `shell` | `false` | `true` runs the command with `/bin/sh -c`, needed for pipes, `$(...)` or `&&`. |
 | `run_on` | `local` | Where the command runs. `local`: on the Watcher machine. `host`: on the monitored host over SSH, see [Checks over SSH](../guides/ssh.md). |
 | `copy` | `false` | With `run_on = "host"`: upload the script to the host before running it. |
@@ -300,9 +301,44 @@ groups = ["linux"]
 ssh = { port = 2222 }          # user and secret from linux
 ```
 
+## proxmox
+
+Settings for the [Proxmox VE checks](check.md#proxmox-ve-checks). A host is
+either a Proxmox VE server, with the API login, or a VM or container on
+one, which names that server.
+
+| Field | Default | Description |
+|---|---|---|
+| `secret` | | Proxmox VE server: name of the API token stored in Watcher. See [Store the token](../guides/proxmox.md#3-store-the-token-in-watcher). |
+| `fingerprint` | | The SHA-256 fingerprint of the API's certificate, as Proxmox VE shows it (`18:B4:0D:…`). Only this certificate is accepted then, also a self-signed one. |
+| `port` | `8006` | The API's port. |
+| `verify` | `true` | Without `fingerprint`: the certificate must be trusted by the system and valid for the address. `false` accepts any certificate. |
+| `discover` | `false` | Look for its VMs and containers every 10 minutes and offer them as hosts under Configuration → Discovery. See [Accept VMs and containers](../guides/proxmox.md#5-accept-vms-and-containers). |
+| `host` | | VM or container: the Proxmox VE host it runs on. Its checks ask that host's API, with its login. |
+| `vmid` | | VM or container: its ID in Proxmox VE, e.g. `100`. Needed with `host`. |
+
+A Proxmox VE server needs `secret`, from itself or a host group. A VM or
+container has only `host` and `vmid`; hosts that discovery adds get them
+written for them.
+
+```toml
+[[host]]
+name = "pve1"
+address = "192.0.2.10"
+proxmox = { secret = "pve", fingerprint = "18:B4:0D:EC:C4:69:B9:5C:8B:30:C2:82:ED:4A:0C:B9:49:01:0A:3B:04:0F:55:86:68:A8:85:40:6F:22:F3:A2", discover = true }
+services = ["proxmox-node", "proxmox-storage"]
+
+[[host]]
+name = "db01"
+address = "192.0.2.21"
+proxmox = { host = "pve1", vmid = 101 }
+services = ["proxmox-guest"]
+```
+
 ## See also
 
 - [hostgroup](hostgroup.md): settings for many hosts at once
 - [How a host gets its services](../guides/configuration.md#how-a-host-gets-its-services)
 - [Which value wins](../guides/configuration.md#which-value-wins)
 - [Checks over SSH](../guides/ssh.md)
+- [Monitoring Proxmox VE](../guides/proxmox.md)

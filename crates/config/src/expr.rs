@@ -514,6 +514,7 @@ mod tests {
             host_check: None,
             graph: None,
             ssh: None,
+            proxmox: None,
             enabled: true,
             origin: Default::default(),
             sources: Default::default(),

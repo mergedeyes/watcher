@@ -29,7 +29,19 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 /// The built-in checks, by name.
-pub const NAMES: [&str; 6] = ["ping", "tcp", "http", "dns", "tls", "proxmox"];
+pub const NAMES: [&str; 11] = [
+    "ping",
+    "tcp",
+    "http",
+    "dns",
+    "tls",
+    "proxmox-cluster",
+    "proxmox-node",
+    "proxmox-storage",
+    "proxmox-guest",
+    "proxmox-backup",
+    "proxmox-updates",
+];
 
 /// The vars built-in check `name` reads.
 pub fn vars_of(name: &str) -> Vec<&'static str> {
@@ -52,6 +64,17 @@ impl Builtin {
     /// Builds built-in check `name` for a host at `address`, with the
     /// settings in `vars`. The var `address` replaces the host's.
     pub fn new(name: &str, address: &str, vars: &BTreeMap<String, String>) -> Result<Self, String> {
+        Self::with_proxmox(name, address, vars, None)
+    }
+
+    /// Like [`Builtin::new`]; the `proxmox-*` checks also need the host's
+    /// `proxmox` settings, and `address` is the Proxmox VE API's.
+    pub fn with_proxmox(
+        name: &str,
+        address: &str,
+        vars: &BTreeMap<String, String>,
+        proxmox: Option<&proxmox::Settings>,
+    ) -> Result<Self, String> {
         let vars = Vars(vars);
         let address = vars.get("address").unwrap_or(address);
         Ok(match name {
@@ -60,7 +83,9 @@ impl Builtin {
             "http" => Builtin::Http(Box::new(Http::new(address, &vars)?)),
             "dns" => Builtin::Dns(Dns::new(address, &vars)?),
             "tls" => Builtin::Tls(Tls::new(address, &vars)?),
-            "proxmox" => Builtin::Proxmox(Box::new(Proxmox::new(address, &vars)?)),
+            n if proxmox::NAMES.contains(&n) => {
+                Builtin::Proxmox(Box::new(Proxmox::new(n, address, &vars, proxmox)?))
+            }
             _ => {
                 return Err(format!(
                     "unknown builtin {name:?} (known: {})",
@@ -78,7 +103,7 @@ impl Builtin {
             Builtin::Http(_) => "http",
             Builtin::Dns(_) => "dns",
             Builtin::Tls(_) => "tls",
-            Builtin::Proxmox(_) => "proxmox",
+            Builtin::Proxmox(c) => c.mode.name(),
         }
     }
 
@@ -90,7 +115,7 @@ impl Builtin {
             Builtin::Http(_) => "http (built-in)",
             Builtin::Dns(_) => "dns (built-in)",
             Builtin::Tls(_) => "tls (built-in)",
-            Builtin::Proxmox(_) => "proxmox (built-in)",
+            Builtin::Proxmox(c) => c.mode.program(),
         }
     }
 
@@ -428,7 +453,7 @@ mod tests {
         assert!(
             Builtin::new("smtp", "h", &vars(&[]))
                 .unwrap_err()
-                .contains("known: ping, tcp, http, dns, tls, proxmox")
+                .contains("known: ping, tcp, http, dns, tls, proxmox-cluster,")
         );
     }
 }

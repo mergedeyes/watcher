@@ -251,6 +251,10 @@ pub async fn run(mut args: Args) -> Result<ExitCode> {
         reload: reload_tx,
         check_dirs: check_dirs.clone(),
     });
+    // Discovery keeps what it finds in the database.
+    if storage.is_some() {
+        tokio::spawn(watcher_hub::discovery::run(hub.clone()));
+    }
     let (changed_tx, mut changed) = mpsc::channel(1);
     // Kept alive until the end of `run`.
     let _watcher = match mode {
