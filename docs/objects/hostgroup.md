@@ -21,7 +21,7 @@ services `http` and `https_cert`.
 |---|---|---|
 | `title` | | Name shown in the web UI. |
 | `members` | | Host names. `*` matches any text, `?` one character. |
-| `services` | | Services every member gets. |
+| `services` | | Services every member gets. A [built-in check](check.md#built-in-checks) like `http` or `tls` can be listed as it is, without a `[service.<name>]`. |
 | `servicegroups` | | Service groups every member gets, with all their services. |
 | `host_check` | | The service that decides whether its hosts are UP or DOWN. `false`: no host check. See [Host state](host.md#host-state). |
 | `graph` | | The service whose graph is shown on the host pages. |

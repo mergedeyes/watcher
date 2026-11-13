@@ -8,6 +8,7 @@
 
 mod dns;
 mod http;
+pub mod info;
 mod ping;
 pub mod proxmox;
 mod tcp;
@@ -15,6 +16,7 @@ mod tls;
 
 pub use dns::Dns;
 pub use http::Http;
+pub use info::{Info, VarInfo, VarKind, info};
 pub use ping::{Limits, Ping};
 pub use proxmox::Proxmox;
 pub use tcp::Tcp;
@@ -30,34 +32,10 @@ use std::time::Duration;
 pub const NAMES: [&str; 6] = ["ping", "tcp", "http", "dns", "tls", "proxmox"];
 
 /// The vars built-in check `name` reads.
-pub fn vars_of(name: &str) -> &'static [&'static str] {
-    match name {
-        "ping" => &["address", "packets", "warn", "crit"],
-        "tcp" => &["address", "port", "send", "expect", "warn", "crit"],
-        "http" => &[
-            "address", "url", "method", "headers", "body", "user", "password", "status", "content",
-            "follow", "verify", "warn", "crit",
-        ],
-        "dns" => &[
-            "address", "name", "type", "server", "port", "expect", "warn", "crit",
-        ],
-        "tls" => &["address", "port", "name", "warn", "crit", "verify"],
-        "proxmox" => &[
-            "address",
-            "port",
-            "mode",
-            "secret",
-            "node",
-            "storage",
-            "vmid",
-            "hours",
-            "warn",
-            "crit",
-            "verify",
-            "fingerprint",
-        ],
-        _ => &[],
-    }
+pub fn vars_of(name: &str) -> Vec<&'static str> {
+    info(name)
+        .map(|i| i.vars.iter().map(|v| v.name).collect())
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -426,6 +404,23 @@ mod tests {
         );
         let b = Builtin::new("http", "10.0.0.5", &vars(&[("address", "::1")])).unwrap();
         assert_eq!(b.to_string(), "http GET http://[::1]/ (built-in)");
+    }
+
+    #[test]
+    fn every_builtin_is_described() {
+        let names: Vec<&str> = info::INFO.iter().map(|i| i.name).collect();
+        assert_eq!(names, NAMES);
+        for i in &info::INFO {
+            assert!(i.vars.iter().any(|v| v.name == "address"), "{}", i.name);
+            let mut seen: Vec<&str> = i.vars.iter().map(|v| v.name).collect();
+            seen.sort_unstable();
+            seen.dedup();
+            assert_eq!(seen.len(), i.vars.len(), "{}: a var twice", i.name);
+        }
+        assert_eq!(
+            vars_of("tcp"),
+            ["address", "port", "send", "expect", "warn", "crit"]
+        );
     }
 
     #[test]

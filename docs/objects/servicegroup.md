@@ -24,7 +24,7 @@ Every host gets `ping`, `load` and `disk_root`.
 | Field | Default | Description |
 |---|---|---|
 | `title` | | Name shown in the web UI. |
-| `services` | | Names of the services in the group. |
+| `services` | | Names of the services in the group. A [built-in check](check.md#built-in-checks) like `http` or `tls` can be listed as it is, without a `[service.<name>]`. |
 
 ## Members
 

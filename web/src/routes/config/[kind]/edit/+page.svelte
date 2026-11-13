@@ -17,6 +17,8 @@
 	import { KINDS, SCHEMAS, SELECTOR_FIELDS, expandNames, fromForm, otherKeys, selectorFromForm, toForm, type Field, type FormValues, type ServiceRow, type WindowRow } from '#lib/schema.ts';
 
 	const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+	/** Settings of commands, which built-in checks don't have. */
+	const COMMAND_ONLY = ['shell', 'run_on', 'copy', 'passive'];
 	const TIMES = ['00:00', '01:00', '02:00', '03:00', '04:00', '05:00', '06:00', '12:00', '18:00', '20:00', '22:00', '23:00', '24:00'];
 
 	let kind = $derived(KINDS.find((k) => k.path === page.params.kind));
@@ -96,6 +98,9 @@
 		untrack(() => {
 			if (values !== null) return;
 			const filled = toForm(k, fields);
+			// "New Service" from a built-in check in the check list.
+			const preset = page.url.searchParams.get('check');
+			if (k === 'service' && name === null && cloneName === null && preset) filled.check = preset;
 			// From a service page: on a host, a row to override the service.
 			const rows = filled.service as ServiceRow[] | undefined;
 			if (focus && k === 'host' && rows && !rows.some((r) => r[0] === focus)) rows.push([focus, '', '', '', '']);
@@ -158,8 +163,66 @@
 	}
 
 	let suggest = $derived(
-		new Suggest(config.objects, serviceNames, scripts?.scripts ?? [])
+		new Suggest(config.objects, serviceNames, scripts?.scripts ?? [], config.builtins.map((b) => b.name))
 	);
+
+	/** The values of a select field; built-in checks come from the server. */
+	function choices(f: Field): string[] {
+		return f.key === 'builtin' ? config.builtins.map((b) => b.name) : (f.options ?? []);
+	}
+
+	/** Greyed out: a field that rules this one out has a value (check or command, ...). */
+	function blocked(f: Field): boolean {
+		// Built-in checks run inside Watcher: no shell, no SSH, not passive.
+		if (builtin && COMMAND_ONLY.includes(f.key)) return true;
+		return (f.exclusive ?? []).some((k) => String(values?.[k] ?? '').trim() !== '');
+	}
+
+	/** The check a service runs: its own, or the one named like it. */
+	let serviceCheck = $derived(
+		kind?.kind === 'service' && values && !String(values.command ?? '').trim()
+			? String(values.check ?? '').trim() || String(values.name ?? '').trim()
+			: ''
+	);
+
+	/** The built-in check this form sets up, whose options get fields of their own. */
+	let builtin = $derived.by(() => {
+		if (!kind || !values) return undefined;
+		if (kind.kind === 'check') return config.builtins.find((b) => b.name === String(values!.builtin ?? ''));
+		return serviceCheck ? config.builtinOf(serviceCheck) : undefined;
+	});
+
+	/** What the service's check object sets, which applies without a value here. */
+	let inherited = $derived.by(() => {
+		const v = serviceCheck ? config.find('check', serviceCheck)?.fields.vars : undefined;
+		if (typeof v !== 'object' || v === null || Array.isArray(v)) return {} as Record<string, string>;
+		return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, typeof x === 'object' ? '' : String(x)]));
+	});
+
+	/** Options with fields of their own; tables stay in Variables. */
+	function ownField(name: string): boolean {
+		return builtin?.vars.some((v) => v.name === name && v.type !== 'table') ?? false;
+	}
+
+	function option(name: string): string {
+		return rows<[string, string]>('vars').find((r) => r[0] === name)?.[1] ?? '';
+	}
+
+	function setOption(name: string, value: string) {
+		if (!values) return;
+		const list = rows<[string, string]>('vars');
+		const i = list.findIndex((r) => r[0] === name);
+		if (value === '') values.vars = list.filter((_, j) => j !== i);
+		else if (i >= 0) list[i]![1] = value;
+		else values.vars = [...list, [name, value]];
+	}
+
+	/** What applies to an option left empty. */
+	function fallback(name: string, shown: string | null): string {
+		const from = inherited[name];
+		if (from) return `${from} (from check ${serviceCheck})`;
+		return shown ?? '';
+	}
 
 	/** Services the host gets (as written), by name: where from. Host services with these names override them. */
 	let assignedServices = $derived.by(() => {
@@ -297,7 +360,40 @@
 		{:else if values}
 			<form onsubmit={save}>
 				<fieldset disabled={!editable}>
-					{#each SCHEMAS[kind.kind] as group (group.title)}
+					{#each SCHEMAS[kind.kind] as group, gi (group.title)}
+						{#if gi === 1 && builtin}
+							<section class="panel">
+								<div class="panel-title">Options: {builtin.title} <span class="muted">built-in</span></div>
+								<p class="summary">{builtin.summary}</p>
+								<div class="fields">
+									{#each builtin.vars as v (v.name)}
+										{@const id = `o-${v.name}`}
+										<label for={id} class="mono">{v.name}{v.required && !inherited[v.name] ? ' *' : ''}</label>
+										<div class="input">
+											{#if v.type === 'table'}
+												<div class="help">A table: add rows named <span class="mono">{v.name}.&lt;key&gt;</span> under Variables, e.g. <span class="mono">{v.name}.Accept</span>.</div>
+											{:else if v.type === 'bool' || v.type === 'choice'}
+												<select {id} value={option(v.name)} onchange={(e) => setOption(v.name, e.currentTarget.value)}>
+													<option value="">— ({fallback(v.name, v.default) || 'none'})</option>
+													{#each v.type === 'bool' ? ['true', 'false'] : v.choices as c (c)}<option value={c}>{c}</option>{/each}
+												</select>
+											{:else}
+												<Combobox
+													{id}
+													mono
+													inputmode={v.type === 'number' ? 'numeric' : undefined}
+													placeholder={fallback(v.name, v.default)}
+													required={v.required && !inherited[v.name]}
+													options={suggest.varValues(v.name)}
+													bind:value={() => option(v.name), (x) => setOption(v.name, x)}
+												/>
+											{/if}
+											<div class="help">{v.help}</div>
+										</div>
+									{/each}
+								</div>
+							</section>
+						{/if}
 						<section class="panel">
 							<div class="panel-title">{group.title}</div>
 							<div class="fields">
@@ -306,21 +402,23 @@
 									<label for={id}>{f.label}{f.required ? ' *' : ''}</label>
 									<div class="input">
 										{#if f.type === 'bool'}
-											<input {id} type="checkbox" bind:checked={values[f.key] as boolean} />
+											<input {id} type="checkbox" bind:checked={values[f.key] as boolean} disabled={blocked(f)} />
 										{:else if f.type === 'select'}
-											<select {id} bind:value={values[f.key]}>
+											<select {id} bind:value={values[f.key]} disabled={blocked(f)}>
 												<option value="">— ({f.placeholder ?? 'auto'})</option>
-												{#each f.options ?? [] as o (o)}<option value={o}>{o}</option>{/each}
+												{#each choices(f) as o (o)}<option value={o}>{o}</option>{/each}
 											</select>
 										{:else if f.type === 'vars'}
 											<div class="rows">
 												{#each rows<[string, string]>(f.key) as row, i (i)}
+													{#if !ownField(row[0])}
 													<div class="row two">
 														<Combobox mono placeholder="name" bind:value={row[0]} label="Variable name" options={suggest.varNames()} />
 														<Combobox mono placeholder="value" bind:value={row[1]} label="Variable value" options={suggest.varValues(row[0])} />
 														<button type="button" class="btn" aria-label="Remove"
 															onclick={() => (values![f.key] = rows<[string, string]>(f.key).filter((_, j) => j !== i))}>×</button>
 													</div>
+													{/if}
 												{/each}
 												<button type="button" class="btn small"
 													onclick={() => (values![f.key] = [...rows<[string, string]>(f.key), ['', '']])}>Add variable</button>
@@ -380,7 +478,7 @@
 												{#each rows<ServiceRow>(f.key) as row, i (i)}
 													<div class="row svc" class:focused={focus !== null && row[0] === focus}>
 														<Combobox mono placeholder="name" bind:value={row[0]} label="Service" options={suggest.serviceNames()} />
-														<Combobox mono placeholder={row[0] || 'check'} bind:value={row[1]} label="Check" options={suggest.names('check')} />
+														<Combobox mono placeholder={row[0] || 'check'} bind:value={row[1]} label="Check" options={suggest.checkNames()} />
 														<Combobox multi placeholder="groups" bind:value={row[2]} label="Service groups" options={suggest.names('servicegroup')} />
 														<select bind:value={row[3]} aria-label="Enabled">
 															<option value="">—</option>
@@ -403,8 +501,9 @@
 												mono={f.type !== 'text'}
 												multi={f.type === 'list'}
 												inputmode={f.type === 'int' ? 'numeric' : undefined}
-												placeholder={f.placeholder}
+												placeholder={blocked(f) ? `not used: ${f.exclusive?.join(', ')} is set` : f.placeholder}
 												required={f.required}
+												disabled={blocked(f)}
 												options={suggest.field(kind.kind, f)}
 												bind:value={() => String(values![f.key] ?? ''), (v) => (values![f.key] = v)}
 											/>
@@ -507,6 +606,10 @@
 
 	.input > input[type='checkbox'] {
 		margin-top: 7px;
+	}
+
+	.summary {
+		margin: 10px 12px 0;
 	}
 
 	.help {

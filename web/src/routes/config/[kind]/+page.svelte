@@ -33,6 +33,15 @@
 			.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 	});
 
+	/** On the check list: the built-in checks no check of the same name replaces. */
+	let builtins = $derived.by(() => {
+		if (kind?.kind !== 'check') return [];
+		const q = query.trim().toLowerCase();
+		return config.builtins.filter(
+			(b) => !config.find('check', b.name) && (!q || `${b.name} ${b.title} ${b.summary}`.toLowerCase().includes(q))
+		);
+	});
+
 	function keys(o: ConfigObject) {
 		return Object.keys(o.fields)
 			.filter((k) => k !== 'name')
@@ -81,7 +90,7 @@
 		<p class="notice">Unknown object type.</p>
 	{:else}
 		<div class="page-head">
-			<h1>{kind.label} <span class="muted">{count(rows.length)}</span></h1>
+			<h1>{kind.label} <span class="muted">{count(rows.length + builtins.length)}</span></h1>
 			<div class="actions">
 				<input type="search" placeholder="Search" bind:value={query} aria-label="Search" />
 				{#if config.writable}
@@ -158,7 +167,7 @@
 									<td class="mono info">{f.passive === true ? 'passive' : f.command !== undefined ? list(f.command) : list(f.check ?? o.name)}</td>
 									<td class="hide-narrow">{@render both(o)}</td>
 								{:else if kind.kind === 'check'}
-									<td class="mono info">{f.passive === true ? 'passive' : list(f.command)}</td>
+									<td class="mono info">{f.passive === true ? 'passive' : f.builtin !== undefined ? `built-in ${list(f.builtin)}` : list(f.command)}</td>
 								{:else if kind.kind === 'hostgroup'}
 									<td>{list(f.title)}</td>
 									<td class="mono">{@render both(o)}</td>
@@ -198,7 +207,17 @@
 								{/if}
 							</tr>
 						{:else}
-							<tr><td colspan="7" class="empty">No {kind.label.toLowerCase()}.</td></tr>
+							{#if builtins.length === 0}<tr><td colspan="7" class="empty">No {kind.label.toLowerCase()}.</td></tr>{/if}
+						{/each}
+						{#each builtins as b (b.name)}
+							<tr class="builtin">
+								<td class="nowrap mono">{b.name}</td>
+								<td><span class="title">{b.title}</span> <span class="muted">{b.summary}</span></td>
+								<td class="hide-narrow muted">built-in</td>
+								{#if config.writable}
+									<td class="nowrap"><a href="/config/services/edit?check={encodeURIComponent(b.name)}">New Service</a></td>
+								{/if}
+							</tr>
 						{/each}
 					</tbody>
 				</table>
@@ -212,6 +231,10 @@
 		display: flex;
 		gap: 8px;
 		align-items: center;
+	}
+
+	tr.builtin .title {
+		font-weight: 500;
 	}
 
 	tr.disabled td {

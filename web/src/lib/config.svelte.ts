@@ -1,13 +1,15 @@
 // The object files and objects, for the Configuration pages. Loaded again
 // after the server reloads its config.
 
-import { api, type ConfigObject, type ConfigOverview, type Kind, type Problem } from './api.ts';
+import { api, type BuiltinCheck, type ConfigObject, type ConfigOverview, type Kind, type Problem } from './api.ts';
 
 class ConfigState {
 	overview = $state<ConfigOverview | null>(null);
 	objects = $state<ConfigObject[]>([]);
 	/** Files that don't parse; their objects are missing from `objects`. */
 	broken = $state<Problem[]>([]);
+	/** The built-in checks; they don't change while the server runs. */
+	builtins = $state<BuiltinCheck[]>([]);
 	error = $state<string | null>(null);
 
 	get loaded() {
@@ -20,14 +22,29 @@ class ConfigState {
 
 	async load() {
 		try {
-			const [overview, objects] = await Promise.all([api.config(), api.configObjects()]);
+			const [overview, objects, builtins] = await Promise.all([
+				api.config(),
+				api.configObjects(),
+				this.builtins.length ? this.builtins : api.configBuiltins()
+			]);
 			this.overview = overview;
+			this.builtins = builtins;
 			this.objects = objects.objects;
 			this.broken = objects.diagnostics;
 			this.error = null;
 		} catch (e) {
 			this.error = e instanceof Error ? e.message : String(e);
 		}
+	}
+
+	/**
+	 * The built-in check behind check `name`: the built-in itself, unless a
+	 * check of that name replaces it, or the built-in a check object uses.
+	 */
+	builtinOf(name: string): BuiltinCheck | undefined {
+		const check = this.find('check', name);
+		const builtin = check ? check.fields.builtin : name;
+		return typeof builtin === 'string' ? this.builtins.find((b) => b.name === builtin) : undefined;
 	}
 
 	of(kind: Kind) {

@@ -380,6 +380,25 @@ export interface NewSecret {
 	replace?: boolean;
 }
 
+/** A var of a built-in check, for its form fields. */
+export interface BuiltinVar {
+	name: string;
+	help: string;
+	/** As shown to people, e.g. "the host's address". */
+	default: string | null;
+	required: boolean;
+	type: 'text' | 'number' | 'duration' | 'bool' | 'choice' | 'table';
+	choices: string[];
+}
+
+/** A check built into Watcher. */
+export interface BuiltinCheck {
+	name: string;
+	title: string;
+	summary: string;
+	vars: BuiltinVar[];
+}
+
 /** A pinned SSH host key, and a changed one waiting for acceptance. */
 export interface HostKey {
 	address: string;
@@ -711,6 +730,8 @@ export const api = {
 	configTree: (kind: TreeKind, name: string) =>
 		get<TreeNode>(`/config/tree/${kind}/${name.split('/').map(seg).join('/')}`),
 	/** Executables in the check directories, where bare command names are looked up. */
+	/** The built-in checks and their vars. */
+	configBuiltins: () => get<BuiltinCheck[]>('/config/builtins'),
 	configScripts: () => get<{ dirs: string[]; scripts: { name: string; dir: string }[] }>('/config/scripts'),
 	/** The file change for creating (no name), updating or deleting (no fields) an object. */
 	editObject: (kind: Kind, name: string | null, fields: Record<string, unknown> | null) =>

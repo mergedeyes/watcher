@@ -394,6 +394,26 @@ vars = { name = "www.example.com" }
 vars = { name = "example.com", expect = "10.0.0.5" }
 ```
 
+A built-in check can also be listed in `services = [...]` of a host, a
+host group or a service group as it is, without a `[service.<name>]`. Its
+vars then come from the host's service, if you need any:
+
+```toml
+[[host]]
+name = "www"
+address = "10.0.0.5"
+services = ["http", "tls", "tcp"]
+  [host.service.tcp]
+  vars.port = "22"
+```
+
+In the web UI, Configuration → Checks lists the built-in checks below your
+own, each with **New Service**. When a service's check is a built-in one
+(or a check that uses one), the form shows the built-in check's options
+in their own section, each with what it does, its default and whether it
+is required. The same section appears in the check form when you choose
+a built-in check.
+
 Built-in checks read the vars of the check, the service and the host
 service (`[host.service.<name>]`). Host and host group vars don't apply, so
 a host var like `port` that you set for something else can't change them.

@@ -677,6 +677,18 @@ impl<'a> Compiler<'a> {
                 origin: raw.origin.clone(),
             });
         }
+        // A built-in check can be listed in services = [...] as it is, as
+        // if there were an empty [service.<name>]. Not a service object of
+        // the config, so it isn't listed or reported as unused.
+        for name in builtin::NAMES {
+            if !self.objects.contains_key(name) {
+                let origin = Origin {
+                    file: "(built-in)".into(),
+                    line: 0,
+                };
+                self.objects.insert(name.into(), (Table::new(), origin));
+            }
+        }
     }
 
     fn compile_servicegroups(&mut self, config: &mut Config) {
@@ -1352,10 +1364,12 @@ impl<'a> Compiler<'a> {
             .as_ref()
             .and_then(|o| self.objects.get(o))
             .map(|(_, origin)| origin.clone());
+        // A built-in check listed as a service has no file of its own:
+        // messages then point at the host.
         let origin = overrides
             .last()
             .map(|(_, s)| s.origin.clone())
-            .or_else(|| object_origin.clone())
+            .or_else(|| object_origin.clone().filter(|o| o.line > 0))
             .unwrap_or_else(|| host.origin.clone());
         if plan.object.is_none()
             && let Err(msg) = valid_name(name)

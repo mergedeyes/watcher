@@ -323,6 +323,7 @@ Admins only.
 | `POST config/reload` | Read the files again. |
 | `POST config/match` | `{"kind": "host"\|"service", "selectors": [...]}`: what the selectors match now, and why. |
 | `GET config/scripts` | The check directories and the executables in them. |
+| `GET config/builtins` | The built-in checks: name, title, summary, and each var with its help text, default, whether it is required, its type (`text`, `number`, `duration`, `bool`, `choice`, `table`) and choices. |
 | `GET config/tree/{kind}/{name}` | The Config Tree. For a service on a host, the name is `host/service`. |
 | `POST config/edit` | Turn an object change into a file change. Writes nothing. |
 | `POST config/edit-many` | The same for several objects, for example clones. |

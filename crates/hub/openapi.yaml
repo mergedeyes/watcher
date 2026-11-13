@@ -1014,6 +1014,35 @@ paths:
               schema: { $ref: "#/components/schemas/TreeNode" }
         "404": { $ref: "#/components/responses/Error" }
 
+  /config/builtins:
+    get:
+      summary: The built-in checks and their vars, for forms (admins)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name: { type: string, example: tcp }
+                    title: { type: string, example: TCP }
+                    summary: { type: string }
+                    vars:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          name: { type: string, example: port }
+                          help: { type: string }
+                          default: { type: [string, "null"], description: "As shown to people, e.g. the host's address" }
+                          required: { type: boolean }
+                          type: { type: string, enum: [text, number, duration, bool, choice, table] }
+                          choices: { type: array, items: { type: string }, description: For type choice }
+        "403": { $ref: "#/components/responses/Error" }
+
   /config/scripts:
     get:
       summary: Check directories and the executables in them (admins)
