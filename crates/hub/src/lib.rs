@@ -7,6 +7,7 @@ mod api;
 pub mod auth;
 pub mod ca;
 pub mod config;
+pub mod discovery;
 mod link;
 mod list;
 mod locks;
@@ -123,6 +124,8 @@ pub struct Hub {
     link: OnceLock<NodeLink>,
     /// Nodes connected right now.
     nodes: nodes::Registry,
+    /// Runs of the discoveries.
+    discovery: discovery::Runs,
 }
 
 impl Hub {
@@ -174,6 +177,7 @@ impl Hub {
             summary: Mutex::new(None),
             link: OnceLock::new(),
             nodes: nodes::Registry::default(),
+            discovery: discovery::Runs::default(),
         })
     }
 

@@ -13,8 +13,8 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::{mpsc, watch};
 use watcher_core::{Format, RawOutput, ServiceState, State, StateType, Termination, evaluate};
 use watcher_store::{
-    Backend, EventFilter, HostSpec, NewSecret, Record, SeriesCache, ServiceSpec, Store, SyncMode,
-    ingest, ingest_with,
+    Backend, EventFilter, FoundGuest, HostSpec, NewSecret, Record, SeriesCache, ServiceSpec, Store,
+    SyncMode, ingest, ingest_with,
 };
 
 /// A database created for one test.
@@ -626,6 +626,58 @@ async fn flags_downtimes_and_settings() {
             store.setting("notifications").await.unwrap(),
             Some(serde_json::json!(false))
         );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn discovered_guests() {
+    each_server(|store, _, _| async move {
+        let guest = |vmid: u32, address: Option<&str>| FoundGuest {
+            vmid,
+            kind: "qemu".into(),
+            name: format!("vm{vmid}"),
+            node: "pve".into(),
+            running: address.is_some(),
+            address: address.map(String::from),
+        };
+        let found = [guest(100, Some("10.0.0.1")), guest(101, None)];
+        store.sync_discovered("pve1", &found).await.unwrap();
+        store
+            .sync_discovered("pve2", &[guest(100, None)])
+            .await
+            .unwrap();
+        assert_eq!(
+            store.ignore_discovered("pve1", &[101], true).await.unwrap(),
+            1
+        );
+
+        // 100 stopped: its last address stays. 101 is gone.
+        store
+            .sync_discovered("pve1", &[guest(100, None), guest(102, None)])
+            .await
+            .unwrap();
+        let list = store.discovered(Some("pve1")).await.unwrap();
+        let rows: Vec<(u32, Option<&str>, bool, bool)> = list
+            .iter()
+            .map(|g| (g.vmid, g.address.as_deref(), g.running, g.ignored))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (100, Some("10.0.0.1"), false, false),
+                (102, None, false, false)
+            ]
+        );
+        assert_eq!(store.discovered(None).await.unwrap().len(), 3);
+        assert_eq!(
+            store
+                .forget_discoveries_except(&["pve1".into()])
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(store.discovered(None).await.unwrap().len(), 2);
     })
     .await;
 }

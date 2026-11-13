@@ -178,6 +178,7 @@ pub struct Host {
     pub graph: Option<String>,
     /// How to reach it for checks with `run_on = "host"`.
     pub ssh: Option<Ssh>,
+    pub proxmox: Option<Proxmox>,
     pub enabled: bool,
     pub origin: Origin,
     /// Where `address`, `node`, `host_check`, `graph`, `ssh.<x>` and each
@@ -213,6 +214,23 @@ pub struct Ssh {
 
 impl Ssh {
     pub const DEFAULT_PORT: u16 = 22;
+}
+
+/// `proxmox = { ... }` of a host, after its host groups': a Proxmox VE
+/// host with the API login (`secret`, ...), or a VM or container on one
+/// (`host` and `vmid`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Proxmox {
+    /// The API token in the secret store.
+    pub secret: Option<String>,
+    pub port: Option<u16>,
+    pub fingerprint: Option<String>,
+    pub verify: Option<bool>,
+    /// Look for VMs and containers to offer as hosts.
+    pub discover: bool,
+    /// For a guest: the Proxmox VE host it runs on.
+    pub host: Option<String>,
+    pub vmid: Option<u32>,
 }
 
 /// Where a service's command runs.
@@ -318,6 +336,27 @@ pub struct Group {
     /// Service groups whose services its hosts get (host groups).
     pub servicegroups: Vec<String>,
     pub origin: Origin,
+}
+
+/// A Proxmox VE host with `proxmox = { discover = true }`: its VMs and
+/// containers are offered as hosts. Accepted ones are written to
+/// [`Discovery::file`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Discovery {
+    /// The Proxmox VE host.
+    pub name: String,
+    pub connection: watcher_exec::builtin::proxmox::Connection,
+    pub interval: Duration,
+    pub origin: Origin,
+}
+
+impl Discovery {
+    pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(600);
+
+    /// Where accepted hosts go, relative to the object directory.
+    pub fn file(&self) -> String {
+        format!("discovered/{}.toml", self.name)
+    }
 }
 
 /// Times in which notify rules apply, in local time.
@@ -641,6 +680,7 @@ pub struct Config {
     pub contactgroups: Vec<Group>,
     pub downtimegroups: Vec<DowntimeGroup>,
     pub timeperiods: Vec<TimePeriod>,
+    pub discoveries: Vec<Discovery>,
     pub notify: Vec<NotifyRule>,
     pub dependencies: Vec<Dependency>,
     pub sinks: Vec<Sink>,
@@ -814,6 +854,10 @@ impl Config {
     }
 
     /// The time period named `name`.
+    pub fn discovery(&self, name: &str) -> Option<&Discovery> {
+        self.discoveries.iter().find(|d| d.name == name)
+    }
+
     pub fn timeperiod(&self, name: &str) -> Option<&TimePeriod> {
         self.timeperiods.iter().find(|p| p.name == name)
     }

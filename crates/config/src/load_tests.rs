@@ -721,7 +721,7 @@ host_check = true
     assert_eq!(
         messages(&diags),
         [
-            "a.toml:2: error: check \"x\": unknown builtin \"smtp\" (known: ping, tcp, http, dns, tls, proxmox)",
+            "a.toml:2: error: check \"x\": unknown builtin \"smtp\" (known: ping, tcp, http, dns, tls, proxmox-cluster, proxmox-node, proxmox-storage, proxmox-guest, proxmox-backup, proxmox-updates)",
             "a.toml:5: error: check \"y\": builtin \"ping\" runs without command or passive",
             "a.toml:9: error: host \"h\": host_check: a service name, or false for none",
         ]
@@ -1702,4 +1702,99 @@ hosts = { node = "local" }
         .map(|h| h.name.as_str())
         .collect();
     assert_eq!(matched, ["hq-router", "hq-nas"]);
+}
+
+#[test]
+fn proxmox_hosts() {
+    let config = ok(&[(
+        "a.toml",
+        r#"
+# The login for every Proxmox VE node.
+[hostgroup.pve]
+members = ["pve*"]
+proxmox = { secret = "pve", fingerprint = "18:B4:0D:EC:C4:69:B9:5C:8B:30:C2:82:ED:4A:0C:B9:49:01:0A:3B:04:0F:55:86:68:A8:85:40:6F:22:F3:A2" }
+services = ["proxmox-node"]
+
+[[host]]
+name = "pve1"
+address = "192.0.2.10"
+proxmox = { discover = true }
+services = ["proxmox-cluster", "proxmox-storage"]
+
+[[host]]
+name = "jellyfin"
+address = "192.0.2.71"
+proxmox = { host = "pve1", vmid = 100 }
+services = ["proxmox-guest"]
+"#,
+    )]);
+    let command = |id: &str| {
+        let s = config.service(id).unwrap();
+        s.command.as_ref().unwrap().to_string()
+    };
+    assert_eq!(
+        command("pve1/proxmox-node"),
+        "proxmox-node https://192.0.2.10:8006 secret=pve fingerprint=18:B4:0D:EC:… (built-in)"
+    );
+    assert_eq!(
+        command("pve1/proxmox-storage"),
+        "proxmox-storage https://192.0.2.10:8006 warn=80% crit=90% secret=pve fingerprint=18:B4:0D:EC:… (built-in)"
+    );
+    // A guest asks its Proxmox VE host, with the login from there.
+    assert_eq!(
+        command("jellyfin/proxmox-guest"),
+        "proxmox-guest https://192.0.2.10:8006 vmid=100 secret=pve fingerprint=18:B4:0D:EC:… (built-in)"
+    );
+    let names: Vec<&str> = config.discoveries.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(names, ["pve1"]);
+    assert_eq!(
+        config.discoveries[0].connection.url,
+        "https://192.0.2.10:8006"
+    );
+    assert_eq!(config.discoveries[0].file(), "discovered/pve1.toml");
+
+    let (_, diags) = compile(&[(
+        "a.toml",
+        r#"
+[[host]]
+name = "a"
+proxmox = { host = "nope", vmid = 100 }
+
+[[host]]
+name = "b"
+proxmox = { vmid = 100 }
+
+[[host]]
+name = "c"
+proxmox = { host = "a", vmid = 100, secret = "x" }
+
+[[host]]
+name = "d"
+proxmox = { discover = true }
+
+[[host]]
+name = "e"
+proxmox = { host = "a", vmid = 101 }
+
+[[host]]
+name = "f"
+services = ["proxmox-node"]
+
+[[host]]
+name = "g"
+proxmox = { secret = "s", fingerprint = "12:34" }
+"#,
+    )]);
+    assert_eq!(
+        messages(&diags),
+        [
+            "a.toml:2: error: host \"a\": proxmox.host \"nope\": no such host",
+            "a.toml:6: error: host \"b\": proxmox: a VM or container needs host and vmid",
+            "a.toml:10: error: host \"c\": proxmox: a VM or container (host, vmid) takes the login from its Proxmox VE host; secret, port, fingerprint, verify and discover go there",
+            "a.toml:14: error: host \"d\": proxmox: needs secret (an API token), or host and vmid for a VM or container",
+            "a.toml:18: error: host \"e\": proxmox.host \"a\" has no proxmox = { secret = ... }",
+            "a.toml:22: error: host \"f\": service \"proxmox-node\": proxmox-node needs proxmox = { secret = \"...\" } on the host or a host group (for a VM or container: proxmox = { host = \"<Proxmox VE host>\", vmid = 100 })",
+            "a.toml:26: error: host \"g\": proxmox: fingerprint \"12:34\": expected a SHA-256 fingerprint, e.g. 18:B4:0D:… (64 hex digits)",
+        ]
+    );
 }

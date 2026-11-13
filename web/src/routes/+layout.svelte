@@ -90,6 +90,7 @@
 
 	const CONFIG_NAV = [
 		...KINDS.map((k) => ({ href: `/config/${k.path}`, label: k.label })),
+		{ href: '/discovery', label: 'Discovery' },
 		{ href: '/config/files', label: 'Files' },
 		{ href: '/secrets', label: 'Secrets' }
 	];

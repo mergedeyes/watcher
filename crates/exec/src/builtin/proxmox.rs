@@ -1,6 +1,8 @@
-//! `proxmox`: Proxmox VE over its API, with an API token from the secrets.
-//! One check with several modes: the cluster's quorum, a node's load, the
+//! `proxmox-*`: Proxmox VE over its API, with an API token from the
+//! secrets. Six built-in checks: the cluster's quorum, a node's load, the
 //! storages, one guest (VM or container), backups, and pending updates.
+//! Where the API is and how to log in comes from the host's `proxmox`
+//! settings ([`Settings`]), not from vars.
 
 use super::{Vars, chain, host_part, label, worst};
 use crate::ssh::{Credential, Pool};
@@ -11,10 +13,21 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_PORT: u16 = 8006;
+
+/// The names of the Proxmox VE checks.
+pub const NAMES: [&str; 6] = [
+    "proxmox-cluster",
+    "proxmox-node",
+    "proxmox-storage",
+    "proxmox-guest",
+    "proxmox-backup",
+    "proxmox-updates",
+];
 
 /// What the check looks at.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,19 +51,30 @@ pub enum Mode {
 }
 
 impl Mode {
-    fn name(&self) -> &'static str {
+    /// The check's name: `proxmox-node`.
+    pub fn name(&self) -> &'static str {
         match self {
-            Mode::Cluster => "cluster",
-            Mode::Node => "node",
-            Mode::Storage { .. } => "storage",
-            Mode::Guest { .. } => "guest",
-            Mode::Backup { .. } => "backup",
-            Mode::Updates { .. } => "updates",
+            Mode::Cluster => "proxmox-cluster",
+            Mode::Node => "proxmox-node",
+            Mode::Storage { .. } => "proxmox-storage",
+            Mode::Guest { .. } => "proxmox-guest",
+            Mode::Backup { .. } => "proxmox-backup",
+            Mode::Updates { .. } => "proxmox-updates",
+        }
+    }
+
+    /// For messages: `proxmox-node (built-in)`.
+    pub fn program(&self) -> &'static str {
+        match self {
+            Mode::Cluster => "proxmox-cluster (built-in)",
+            Mode::Node => "proxmox-node (built-in)",
+            Mode::Storage { .. } => "proxmox-storage (built-in)",
+            Mode::Guest { .. } => "proxmox-guest (built-in)",
+            Mode::Backup { .. } => "proxmox-backup (built-in)",
+            Mode::Updates { .. } => "proxmox-updates (built-in)",
         }
     }
 }
-
-const MODES: &str = "cluster, node, storage, guest, backup, updates";
 
 /// How the server's certificate is checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -64,51 +88,47 @@ pub enum Trust {
     Any,
 }
 
+/// The host's `proxmox` settings, as the checks need them: of the host
+/// itself, or for a guest, of the Proxmox VE host it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Settings {
+    /// The name of the API token in the secrets.
+    pub secret: String,
+    pub port: u16,
+    pub fingerprint: Option<String>,
+    pub verify: bool,
+    /// For guests: their VM ID, the default of `proxmox-guest`.
+    pub vmid: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Proxmox {
-    /// `https://pve.example.com:8006`
-    pub url: String,
-    /// The name of the token in the secrets.
-    pub secret: String,
+    pub connection: Connection,
     pub mode: Mode,
     /// The node for `node`, `updates` and (to narrow it) `storage` and
     /// `backup`; without it, the only node if there is just one.
     pub node: Option<String>,
-    pub trust: Trust,
 }
 
 impl Proxmox {
-    /// Vars: `mode`, `secret`, `port` (8006), `node`, `storage`, `vmid`,
-    /// `hours`, `warn`, `crit`, `verify`, `fingerprint`.
-    pub(super) fn new(address: &str, vars: &Vars<'_>) -> Result<Self, String> {
-        let mode_name = vars.required("mode", MODES)?;
-        // Vars of other modes are refused, so a typo in `mode` or a var in
-        // the wrong place doesn't go unnoticed.
-        let takes: &[&str] = match mode_name {
-            "cluster" => &[],
-            "node" => &["node"],
-            "storage" => &["node", "storage", "warn", "crit"],
-            "guest" => &["vmid"],
-            "backup" => &["node", "hours"],
-            "updates" => &["node", "warn", "crit"],
-            other => return Err(format!("vars.mode {other:?}: expected one of {MODES}")),
+    /// Check `name` (one of [`NAMES`]) of the API at `address`, with the
+    /// host's `settings`.
+    pub(super) fn new(
+        name: &str,
+        address: &str,
+        vars: &Vars<'_>,
+        settings: Option<&Settings>,
+    ) -> Result<Self, String> {
+        let Some(s) = settings else {
+            return Err(format!(
+                "{name} needs proxmox = {{ secret = \"...\" }} on the host or a host group \
+                 (for a VM or container: proxmox = {{ host = \"<Proxmox VE host>\", vmid = 100 }})"
+            ));
         };
-        for key in ["node", "storage", "vmid", "hours", "warn", "crit"] {
-            if vars.get(key).is_some() && !takes.contains(&key) {
-                return Err(format!(
-                    "vars.{key}: not used with mode {mode_name:?} (it takes: {})",
-                    if takes.is_empty() {
-                        "nothing extra".to_string()
-                    } else {
-                        takes.join(", ")
-                    }
-                ));
-            }
-        }
-        let mode = match mode_name {
-            "cluster" => Mode::Cluster,
-            "node" => Mode::Node,
-            "storage" => {
+        let mode = match name {
+            "proxmox-cluster" => Mode::Cluster,
+            "proxmox-node" => Mode::Node,
+            "proxmox-storage" => {
                 let warn = percent(vars, "warn", 80)?;
                 let crit = percent(vars, "crit", 90)?;
                 Mode::Storage {
@@ -117,18 +137,31 @@ impl Proxmox {
                     crit,
                 }
             }
-            "guest" => {
-                let text = vars.required("vmid", "the VM or container ID, e.g. 100")?;
-                match text.parse::<u32>() {
-                    Ok(vmid) if vmid >= 100 => Mode::Guest { vmid },
-                    _ => return Err(format!("vars.vmid {text:?}: expected an ID from 100 up")),
+            "proxmox-guest" => {
+                let vmid =
+                    match vars.get("vmid") {
+                        Some(text) => Some(text.parse::<u32>().map_err(|_| {
+                            format!("vars.vmid {text:?}: expected an ID from 100 up")
+                        })?),
+                        None => s.vmid,
+                    };
+                match vmid {
+                    Some(vmid) if vmid >= 100 => Mode::Guest { vmid },
+                    Some(vmid) => return Err(format!("vmid {vmid}: expected an ID from 100 up")),
+                    None => {
+                        return Err(
+                            "proxmox-guest needs the VM ID: proxmox = { host = \"...\", vmid = 100 } \
+                             on the host, or vars.vmid"
+                                .into(),
+                        );
+                    }
                 }
             }
-            "backup" => match vars.number("hours", 24)? {
+            "proxmox-backup" => match vars.number("hours", 24)? {
                 h @ 1..=8784 => Mode::Backup { hours: h as u32 },
                 h => return Err(format!("vars.hours {h}: expected 1 to 8784 (a year)")),
             },
-            _ => {
+            "proxmox-updates" => {
                 let count = |key: &str| -> Result<Option<u32>, String> {
                     vars.get(key)
                         .map(|t| {
@@ -142,25 +175,19 @@ impl Proxmox {
                     crit: count("crit")?,
                 }
             }
+            other => return Err(format!("unknown Proxmox VE check {other:?}")),
         };
-        let fingerprint = vars.get("fingerprint").map(parse_fingerprint).transpose()?;
-        let trust = match (fingerprint, vars.flag("verify", true)?) {
-            (Some(fp), _) => Trust::Fingerprint(fp),
-            (None, true) => Trust::System,
-            (None, false) => Trust::Any,
-        };
-        let port = vars.port("port", Some(DEFAULT_PORT))?;
+        let connection = Connection::new(
+            address,
+            s.port,
+            &s.secret,
+            s.fingerprint.as_deref(),
+            s.verify,
+        )?;
         Ok(Proxmox {
-            url: format!("https://{}:{port}", host_part(address)),
-            secret: vars
-                .required(
-                    "secret",
-                    "the name of the API token, see `watcher secret token`",
-                )?
-                .to_string(),
+            connection,
             mode,
             node: vars.get("node").map(name_part("node")).transpose()?,
-            trust,
         })
     }
 
@@ -169,37 +196,10 @@ impl Proxmox {
         let Some(secrets) = secrets else {
             return unknown("secrets aren't available here (needs the server's database)".into());
         };
-        let token = match secrets.credential(&self.secret).await {
-            Ok(Credential::Token { id, secret }) if !id.is_empty() => {
-                format!("PVEAPIToken={id}={secret}")
-            }
-            Ok(Credential::Token { .. }) => {
-                return unknown(format!(
-                    "secret {:?} has no token ID (user@realm!name)",
-                    self.secret
-                ));
-            }
-            Ok(other) => {
-                // Easily mixed up when storing it, so say how to fix it.
-                return unknown(format!(
-                    "secret {name:?} is a {}, not an API token: store it as one with \
-                     Replace (Configuration → Secrets → API Token, or watcher secret token \
-                     {name} --id 'user@realm!name' --replace)",
-                    other.kind(),
-                    name = self.secret,
-                ));
-            }
+        let c = &self.connection;
+        let api = match Api::open(&c.url, &c.secret, c.trust, secrets, wait).await {
+            Ok(api) => api,
             Err(e) => return unknown(e),
-        };
-        let client = match client(self.trust) {
-            Ok(c) => c,
-            Err(e) => return unknown(format!("no HTTP client: {e}")),
-        };
-        let api = Api {
-            client,
-            url: &self.url,
-            token,
-            wait,
         };
         let report = match tokio::time::timeout(wait, self.check(&api)).await {
             Ok(Ok(report)) => report,
@@ -207,7 +207,7 @@ impl Proxmox {
             Err(_) => {
                 return unknown(format!(
                     "{}: no complete answer within {}",
-                    self.url,
+                    c.url,
                     super::took(wait)
                 ));
             }
@@ -252,7 +252,7 @@ impl Proxmox {
 
 impl fmt::Display for Proxmox {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "proxmox {} mode={}", self.url, self.mode.name())?;
+        write!(f, "{} {}", self.mode.name(), self.connection.url)?;
         if let Some(node) = &self.node {
             write!(f, " node={node}")?;
         }
@@ -278,8 +278,8 @@ impl fmt::Display for Proxmox {
             Mode::Cluster | Mode::Node => {}
         }
         // The secret's name only; the token never leaves the vault.
-        write!(f, " secret={}", self.secret)?;
-        match self.trust {
+        write!(f, " secret={}", self.connection.secret)?;
+        match self.connection.trust {
             Trust::System => Ok(()),
             Trust::Fingerprint(fp) => write!(f, " fingerprint={}", hex_colons(&fp[..4]) + ":…"),
             Trust::Any => f.write_str(" verify=false"),
@@ -323,7 +323,43 @@ struct Api<'a> {
     wait: Duration,
 }
 
-impl Api<'_> {
+impl<'a> Api<'a> {
+    /// The API at `url`, logged in with the token stored as `secret`.
+    async fn open(
+        url: &'a str,
+        secret: &str,
+        trust: Trust,
+        secrets: &Pool,
+        wait: Duration,
+    ) -> Result<Api<'a>, String> {
+        let token = match secrets.credential(secret).await? {
+            Credential::Token { id, secret } if !id.is_empty() => {
+                format!("PVEAPIToken={id}={secret}")
+            }
+            Credential::Token { .. } => {
+                return Err(format!(
+                    "secret {secret:?} has no token ID (user@realm!name)"
+                ));
+            }
+            // Easily mixed up when storing it, so say how to fix it.
+            other => {
+                return Err(format!(
+                    "secret {secret:?} is a {}, not an API token: store it as one with \
+                     Replace (Configuration → Secrets → API Token, or watcher secret token \
+                     {secret} --id 'user@realm!name' --replace)",
+                    other.kind(),
+                ));
+            }
+        };
+        let client = client(trust).map_err(|e| format!("no HTTP client: {e}"))?;
+        Ok(Api {
+            client,
+            url,
+            token,
+            wait,
+        })
+    }
+
     /// `data` of `GET /api2/json<path>`.
     async fn get(&self, path: &str) -> Result<Value, String> {
         let url = format!("{}/api2/json{path}", self.url);
@@ -784,6 +820,133 @@ async fn updates(
     Ok(report)
 }
 
+/// A Proxmox VE API and the token to log in with, for discovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Connection {
+    /// `https://pve.example.com:8006`
+    pub url: String,
+    /// The name of the token in the secrets.
+    pub secret: String,
+    pub trust: Trust,
+}
+
+/// A VM or container, as discovery finds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Guest {
+    pub vmid: u32,
+    pub name: String,
+    /// `qemu` (VM) or `lxc` (container).
+    pub kind: String,
+    pub node: String,
+    pub running: bool,
+    /// From the QEMU guest agent or the container's interfaces, while it
+    /// runs: the first IPv4 address, else the first IPv6 address that
+    /// isn't loopback or link-local.
+    pub address: Option<String>,
+}
+
+impl Connection {
+    /// `fingerprint` as Proxmox VE shows it; without it, `verify` decides
+    /// whether the system must trust the certificate.
+    pub fn new(
+        address: &str,
+        port: u16,
+        secret: &str,
+        fingerprint: Option<&str>,
+        verify: bool,
+    ) -> Result<Self, String> {
+        let trust = match fingerprint.map(parse_fingerprint).transpose()? {
+            Some(fp) => Trust::Fingerprint(fp),
+            None if verify => Trust::System,
+            None => Trust::Any,
+        };
+        Ok(Connection {
+            url: format!("https://{}:{port}", host_part(address)),
+            secret: secret.to_string(),
+            trust,
+        })
+    }
+
+    /// The VMs and containers of the cluster, without templates. Each
+    /// request may take up to `wait`.
+    pub async fn guests(&self, secrets: &Pool, wait: Duration) -> Result<Vec<Guest>, String> {
+        let api = Api::open(&self.url, &self.secret, self.trust, secrets, wait).await?;
+        let mut guests = Vec::new();
+        for g in api.list("/cluster/resources?type=vm").await? {
+            if number(&g, "template") == Some(1.0) {
+                continue;
+            }
+            let (Some(vmid), Some(kind), Some(node)) =
+                (number(&g, "vmid"), text(&g, "type"), text(&g, "node"))
+            else {
+                continue;
+            };
+            let vmid = vmid as u32;
+            // Node names go into the paths below; anything odd is skipped.
+            if name_part("node")(&node).is_err() || !matches!(kind.as_str(), "qemu" | "lxc") {
+                continue;
+            }
+            let running = text(&g, "status").as_deref() == Some("running");
+            // Addresses are only known while the guest runs, and for VMs
+            // only with the guest agent. Without them the guest is still
+            // listed.
+            let address = if running {
+                let path = match kind.as_str() {
+                    "qemu" => format!("/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces"),
+                    _ => format!("/nodes/{node}/lxc/{vmid}/interfaces"),
+                };
+                api.get(&path).await.ok().and_then(|v| guest_address(&v))
+            } else {
+                None
+            };
+            guests.push(Guest {
+                vmid,
+                name: text_of(&g, "name").unwrap_or_else(|| format!("{kind}-{vmid}")),
+                kind,
+                node,
+                running,
+                address,
+            });
+        }
+        guests.sort_by_key(|g| g.vmid);
+        Ok(guests)
+    }
+}
+
+/// The address to reach a guest at, from the agent's answer (`{"result":
+/// [interfaces]}`) or a container's interface list.
+fn guest_address(answer: &Value) -> Option<String> {
+    let interfaces = match answer {
+        Value::Array(list) => list.as_slice(),
+        other => other.get("result")?.as_array()?.as_slice(),
+    };
+    let mut v4 = None;
+    let mut v6 = None;
+    for interface in interfaces {
+        if matches!(text(interface, "name").as_deref(), Some("lo" | "lo0")) {
+            continue;
+        }
+        let Some(list) = interface.get("ip-addresses").and_then(Value::as_array) else {
+            continue;
+        };
+        for a in list {
+            let Some(ip) = text(a, "ip-address").and_then(|t| t.parse::<IpAddr>().ok()) else {
+                continue;
+            };
+            match ip {
+                IpAddr::V4(ip) if !ip.is_loopback() && !ip.is_link_local() => {
+                    v4.get_or_insert(ip.to_string());
+                }
+                IpAddr::V6(ip) if !ip.is_loopback() && !ip.is_unicast_link_local() => {
+                    v6.get_or_insert(ip.to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+    v4.or(v6)
+}
+
 /// One client per way of trusting the server, kept for all runs: unlike
 /// the `http` check, which measures a fresh connection, these keep their
 /// connections to the API open between runs.
@@ -850,7 +1013,7 @@ impl ServerCertVerifier for Pinned {
             Ok(ServerCertVerified::assertion())
         } else {
             Err(rustls::Error::General(format!(
-                "certificate fingerprint is {}, not the one in vars.fingerprint",
+                "certificate fingerprint is {}, not the one in proxmox.fingerprint",
                 hex_colons(&actual)
             )))
         }
@@ -897,7 +1060,7 @@ fn parse_fingerprint(text: &str) -> Result<[u8; 32], String> {
     let hex: String = text.chars().filter(|c| *c != ':').collect();
     let err = || {
         format!(
-            "vars.fingerprint {text:?}: expected a SHA-256 fingerprint, \
+            "fingerprint {text:?}: expected a SHA-256 fingerprint, \
              e.g. 18:B4:0D:… (64 hex digits)"
         )
     };
@@ -1045,7 +1208,7 @@ fn error_text(err: &reqwest::Error) -> String {
     }
     // A new Proxmox VE server has a self-signed certificate.
     if text.contains("UnknownIssuer") {
-        text += "; for a self-signed certificate, set vars.fingerprint";
+        text += "; for a self-signed certificate, set proxmox.fingerprint on the host";
     }
     text
 }
@@ -1163,24 +1326,33 @@ mod tests {
         (port, fingerprint)
     }
 
-    async fn check(
-        routes: &[(&str, u16, &str)],
-        secret: &str,
-        list: &[(&str, &str)],
-    ) -> (i32, String) {
-        let (port, fingerprint) = server(routes).await;
-        let port = port.to_string();
-        let mut all = vec![
-            ("port", port.as_str()),
-            ("secret", secret),
-            ("fingerprint", fingerprint.as_str()),
-        ];
-        all.extend_from_slice(list);
+    /// The host's `proxmox` settings, as the config passes them.
+    fn settings(secret: &str, port: u16, fingerprint: Option<&str>) -> Settings {
+        Settings {
+            secret: secret.into(),
+            port,
+            fingerprint: fingerprint.map(String::from),
+            verify: true,
+            vmid: None,
+        }
+    }
+
+    async fn run(name: &str, list: &[(&str, &str)], s: &Settings) -> (i32, String) {
         let pool = Pool::new(Arc::new(TestVault));
-        Builtin::new("proxmox", "127.0.0.1", &vars(&all))
+        Builtin::with_proxmox(name, "127.0.0.1", &vars(list), Some(s))
             .unwrap()
             .run(Duration::from_secs(5), Some(&pool))
             .await
+    }
+
+    async fn check(
+        routes: &[(&str, u16, &str)],
+        secret: &str,
+        name: &str,
+        list: &[(&str, &str)],
+    ) -> (i32, String) {
+        let (port, fingerprint) = server(routes).await;
+        run(name, list, &settings(secret, port, Some(&fingerprint))).await
     }
 
     // Answers as a Proxmox VE 9.2 server gave them, shortened.
@@ -1204,54 +1376,62 @@ mod tests {
         {"vmid":101,"name":"opnsense","type":"qemu","node":"pve","status":"stopped","template":0}]}"#;
 
     #[test]
-    fn settings() {
-        let err = |list: &[(&str, &str)]| Builtin::new("proxmox", "h", &vars(list)).unwrap_err();
-        assert!(err(&[("secret", "pve")]).contains("vars.mode is not set"));
-        assert!(err(&[("mode", "vms"), ("secret", "pve")]).contains("expected one of cluster"));
-        assert!(err(&[("mode", "node")]).contains("vars.secret is not set"));
+    fn options() {
+        let s = settings("pve", DEFAULT_PORT, None);
+        let err = |name: &str, list: &[(&str, &str)]| {
+            Builtin::with_proxmox(name, "h", &vars(list), Some(&s)).unwrap_err()
+        };
         assert!(
-            err(&[("mode", "node"), ("secret", "s"), ("vmid", "100")])
-                .contains("vars.vmid: not used with mode \"node\" (it takes: node)")
+            Builtin::new("proxmox-node", "h", &vars(&[]))
+                .unwrap_err()
+                .contains("proxmox-node needs proxmox = { secret = \"...\" } on the host")
         );
-        assert!(err(&[("mode", "guest"), ("secret", "s")]).contains("vars.vmid is not set"));
-        assert!(err(&[("mode", "guest"), ("secret", "s"), ("vmid", "7")]).contains("from 100"));
-        assert!(err(&[("mode", "storage"), ("secret", "s"), ("warn", "120")]).contains("0 to 100"));
+        assert!(err("proxmox-guest", &[]).contains("proxmox-guest needs the VM ID"));
+        assert!(err("proxmox-guest", &[("vmid", "7")]).contains("from 100"));
+        assert!(err("proxmox-storage", &[("warn", "120")]).contains("0 to 100"));
+        assert!(err("proxmox-node", &[("node", "pve/../x")]).contains("letters, digits"));
+        let bad = Settings {
+            fingerprint: Some("18:B4".into()),
+            ..s.clone()
+        };
         assert!(
-            err(&[("mode", "node"), ("secret", "s"), ("node", "pve/../x")])
-                .contains("letters, digits")
-        );
-        assert!(
-            err(&[("mode", "node"), ("secret", "s"), ("fingerprint", "18:B4")])
-                .contains("SHA-256 fingerprint")
+            Builtin::with_proxmox("proxmox-node", "h", &vars(&[]), Some(&bad))
+                .unwrap_err()
+                .contains("fingerprint \"18:B4\": expected a SHA-256 fingerprint")
         );
 
-        let b = Builtin::new(
-            "proxmox",
-            "::1",
-            &vars(&[("mode", "storage"), ("secret", "pve"), ("verify", "false")]),
-        )
-        .unwrap();
+        let any = Settings {
+            verify: false,
+            ..s.clone()
+        };
+        let b = Builtin::with_proxmox("proxmox-storage", "::1", &vars(&[]), Some(&any)).unwrap();
         assert_eq!(
             b.to_string(),
-            "proxmox https://[::1]:8006 mode=storage warn=80% crit=90% secret=pve verify=false (built-in)"
+            "proxmox-storage https://[::1]:8006 warn=80% crit=90% secret=pve verify=false (built-in)"
         );
+        assert_eq!(b.name(), "proxmox-storage");
+        // A guest: the VM ID from the host's settings, unless vars.vmid.
         let fp = "18:B4:0D:EC:C4:69:B9:5C:8B:30:C2:82:ED:4A:0C:B9:49:01:0A:3B:04:0F:55:86:68:A8:85:40:6F:22:F3:A2";
-        let b = Builtin::new(
-            "proxmox",
-            "pve.example.com",
-            &vars(&[
-                ("mode", "guest"),
-                ("vmid", "101"),
-                ("secret", "pve"),
-                ("fingerprint", &fp.to_lowercase()),
-            ]),
-        )
-        .unwrap();
+        let guest = Settings {
+            fingerprint: Some(fp.to_lowercase()),
+            vmid: Some(101),
+            ..s.clone()
+        };
+        let b = Builtin::with_proxmox("proxmox-guest", "pve.example.com", &vars(&[]), Some(&guest))
+            .unwrap();
         assert_eq!(
             b.to_string(),
-            "proxmox https://pve.example.com:8006 mode=guest vmid=101 secret=pve \
+            "proxmox-guest https://pve.example.com:8006 vmid=101 secret=pve \
              fingerprint=18:B4:0D:EC:… (built-in)"
         );
+        let b = Builtin::with_proxmox(
+            "proxmox-guest",
+            "pve.example.com",
+            &vars(&[("vmid", "102")]),
+            Some(&guest),
+        )
+        .unwrap();
+        assert!(b.to_string().contains(" vmid=102 "));
     }
 
     #[tokio::test]
@@ -1260,7 +1440,7 @@ mod tests {
             ("/nodes", 200, NODES),
             ("/nodes/pve/status", 200, NODE_STATUS),
         ];
-        let (code, out) = check(&routes, "pve", &[("mode", "node")]).await;
+        let (code, out) = check(&routes, "pve", "proxmox-node", &[]).await;
         assert_eq!(code, 0, "{out}");
         assert_eq!(
             out,
@@ -1269,12 +1449,12 @@ mod tests {
              load1=0.05 load5=0.13 load15=0.26 iowait=0.1%;;;0;100 rootfs=0.64%;;;0;100 uptime=8695s"
         );
         let offline = NODES.replace("online", "offline");
-        let (code, out) = check(&[("/nodes", 200, &offline)], "pve", &[("mode", "node")]).await;
+        let (code, out) = check(&[("/nodes", 200, &offline)], "pve", "proxmox-node", &[]).await;
         assert_eq!(
             (code, out.as_str()),
             (2, "PROXMOX CRITICAL - pve is offline")
         );
-        let (code, out) = check(&routes, "pve", &[("mode", "node"), ("node", "pve9")]).await;
+        let (code, out) = check(&routes, "pve", "proxmox-node", &[("node", "pve9")]).await;
         assert_eq!(code, 3, "{out}");
         assert!(out.contains("no node \"pve9\" (nodes: pve)"), "{out}");
     }
@@ -1285,7 +1465,8 @@ mod tests {
         let (code, out) = check(
             &[("/cluster/status", 200, standalone)],
             "pve",
-            &[("mode", "cluster")],
+            "proxmox-cluster",
+            &[],
         )
         .await;
         assert_eq!(code, 0, "{out}");
@@ -1299,7 +1480,8 @@ mod tests {
         let (code, out) = check(
             &[("/cluster/status", 200, lost)],
             "pve",
-            &[("mode", "cluster")],
+            "proxmox-cluster",
+            &[],
         )
         .await;
         assert_eq!(code, 2, "{out}");
@@ -1314,7 +1496,7 @@ mod tests {
     #[tokio::test]
     async fn storage() {
         let routes = [("/cluster/resources?type=storage", 200, STORAGE)];
-        let (code, out) = check(&routes, "pve", &[("mode", "storage")]).await;
+        let (code, out) = check(&routes, "pve", "proxmox-storage", &[]).await;
         assert_eq!(code, 1, "{out}");
         assert!(
             out.starts_with("PROXMOX WARNING - pve/local-zfs 85% (363.2 GiB of 427.5 GiB)|pve/hdd=2.86%;80;90;0;100 "),
@@ -1325,7 +1507,8 @@ mod tests {
         let (code, out) = check(
             &routes,
             "pve",
-            &[("mode", "storage"), ("storage", "hdd"), ("node", "pve")],
+            "proxmox-storage",
+            &[("storage", "hdd"), ("node", "pve")],
         )
         .await;
         assert_eq!(code, 0, "{out}");
@@ -1333,7 +1516,7 @@ mod tests {
             out.starts_with("PROXMOX OK - hdd 2.9% used|hdd=2.86%;80;90;0;100 hdd_used="),
             "{out}"
         );
-        let (code, out) = check(&routes, "pve", &[("mode", "storage"), ("storage", "ceph")]).await;
+        let (code, out) = check(&routes, "pve", "proxmox-storage", &[("storage", "ceph")]).await;
         assert_eq!(
             (code, out.as_str()),
             (3, "PROXMOX UNKNOWN - no storage \"ceph\"")
@@ -1343,7 +1526,7 @@ mod tests {
     #[tokio::test]
     async fn guest() {
         let routes = [("/cluster/resources?type=vm", 200, GUESTS)];
-        let (code, out) = check(&routes, "pve", &[("mode", "guest"), ("vmid", "100")]).await;
+        let (code, out) = check(&routes, "pve", "proxmox-guest", &[("vmid", "100")]).await;
         assert_eq!(code, 0, "{out}");
         assert!(
             out.starts_with(
@@ -1356,12 +1539,12 @@ mod tests {
             out.contains(" disk=4.38%;;;0;100 uptime=7789s netin=26501672963c"),
             "{out}"
         );
-        let (code, out) = check(&routes, "pve", &[("mode", "guest"), ("vmid", "101")]).await;
+        let (code, out) = check(&routes, "pve", "proxmox-guest", &[("vmid", "101")]).await;
         assert_eq!(
             (code, out.as_str()),
             (2, "PROXMOX CRITICAL - VM 101 opnsense on pve is stopped")
         );
-        let (code, out) = check(&routes, "pve", &[("mode", "guest"), ("vmid", "102")]).await;
+        let (code, out) = check(&routes, "pve", "proxmox-guest", &[("vmid", "102")]).await;
         assert_eq!(
             (code, out.as_str()),
             (3, "PROXMOX UNKNOWN - no VM or container 102")
@@ -1379,7 +1562,7 @@ mod tests {
             ("/nodes/pve/tasks", 200, tasks),
             ("/cluster/backup-info/not-backed-up", 200, uncovered),
         ];
-        let (code, out) = check(&routes, "pve", &[("mode", "backup")]).await;
+        let (code, out) = check(&routes, "pve", "proxmox-backup", &[]).await;
         assert_eq!(code, 2, "{out}");
         assert_eq!(
             out,
@@ -1392,7 +1575,7 @@ mod tests {
             ("/nodes/pve/tasks", 200, r#"{"data":[]}"#),
             ("/cluster/backup-info/not-backed-up", 200, r#"{"data":[]}"#),
         ];
-        let (code, out) = check(&routes, "pve", &[("mode", "backup"), ("hours", "168")]).await;
+        let (code, out) = check(&routes, "pve", "proxmox-backup", &[("hours", "168")]).await;
         assert_eq!(code, 1, "{out}");
         assert!(
             out.starts_with("PROXMOX WARNING - no backups ran in the last 168 h|"),
@@ -1405,7 +1588,7 @@ mod tests {
         let list =
             r#"{"data":[{"Package":"pve-manager","OldVersion":"9.2.25","Version":"9.2.26"}]}"#;
         let routes = [("/nodes", 200, NODES), ("/nodes/pve/apt/update", 200, list)];
-        let (code, out) = check(&routes, "pve", &[("mode", "updates")]).await;
+        let (code, out) = check(&routes, "pve", "proxmox-updates", &[]).await;
         assert_eq!(
             (code, out.as_str()),
             (
@@ -1417,7 +1600,7 @@ mod tests {
         let denied =
             r#"{"message":"Permission check failed (/nodes/pve, Sys.Modify)\n","data":null}"#;
         let routes = [("/nodes/pve/apt/update", 403, denied)];
-        let (code, out) = check(&routes, "pve", &[("mode", "updates"), ("node", "pve")]).await;
+        let (code, out) = check(&routes, "pve", "proxmox-updates", &[("node", "pve")]).await;
         assert_eq!(
             (code, out.as_str()),
             (
@@ -1430,10 +1613,10 @@ mod tests {
     #[tokio::test]
     async fn refusals() {
         let routes = [("/cluster/status", 200, r#"{"data":[]}"#)];
-        let (code, out) = check(&routes, "wrong", &[("mode", "cluster")]).await;
+        let (code, out) = check(&routes, "wrong", "proxmox-cluster", &[]).await;
         assert_eq!(code, 3, "{out}");
         assert!(out.contains("the API refused the token (401"), "{out}");
-        let (code, out) = check(&routes, "pw", &[("mode", "cluster")]).await;
+        let (code, out) = check(&routes, "pw", "proxmox-cluster", &[]).await;
         assert_eq!(
             (code, out.as_str()),
             (
@@ -1443,7 +1626,7 @@ mod tests {
                  --id 'user@realm!name' --replace)"
             )
         );
-        let (code, out) = check(&routes, "gone", &[("mode", "cluster")]).await;
+        let (code, out) = check(&routes, "gone", "proxmox-cluster", &[]).await;
         assert_eq!(
             (code, out.as_str()),
             (3, "PROXMOX UNKNOWN - secret \"gone\": no such secret")
@@ -1451,19 +1634,8 @@ mod tests {
 
         // Another certificate than the pinned one.
         let (port, _) = server(&routes).await;
-        let port = port.to_string();
         let other = ["00"; 32].join(":");
-        let pool = Pool::new(Arc::new(TestVault));
-        let list = [
-            ("port", port.as_str()),
-            ("secret", "pve"),
-            ("mode", "cluster"),
-            ("fingerprint", other.as_str()),
-        ];
-        let (code, out) = Builtin::new("proxmox", "127.0.0.1", &vars(&list))
-            .unwrap()
-            .run(Duration::from_secs(5), Some(&pool))
-            .await;
+        let (code, out) = run("proxmox-cluster", &[], &settings("pve", port, Some(&other))).await;
         assert_eq!(code, 3, "{out}");
         assert!(
             out.starts_with(&format!(
@@ -1472,30 +1644,100 @@ mod tests {
             "{out}"
         );
         // Self-signed, so not trusted by the system.
-        let list = [
-            ("port", port.as_str()),
-            ("secret", "pve"),
-            ("mode", "cluster"),
-        ];
-        let (code, out) = Builtin::new("proxmox", "127.0.0.1", &vars(&list))
-            .unwrap()
-            .run(Duration::from_secs(5), Some(&pool))
-            .await;
+        let (code, out) = run("proxmox-cluster", &[], &settings("pve", port, None)).await;
         assert_eq!(code, 3, "{out}");
         assert!(
             out.ends_with(
                 "invalid peer certificate: UnknownIssuer; for a self-signed certificate, \
-                 set vars.fingerprint"
+                 set proxmox.fingerprint on the host"
             ),
             "{out}"
         );
         // Without secrets, as in `run-check`.
-        let (code, out) = Builtin::new("proxmox", "127.0.0.1", &vars(&list))
-            .unwrap()
-            .run(Duration::from_secs(5), None)
-            .await;
+        let (code, out) = Builtin::with_proxmox(
+            "proxmox-cluster",
+            "127.0.0.1",
+            &vars(&[]),
+            Some(&settings("pve", port, None)),
+        )
+        .unwrap()
+        .run(Duration::from_secs(5), None)
+        .await;
         assert_eq!(code, 3, "{out}");
         assert!(out.contains("secrets aren't available here"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn discovery() {
+        // As PVE 9.2 answered for an OPNsense VM (agent) and a container.
+        let agent = r#"{"data":{"result":[
+            {"name":"vtnet0","ip-addresses":[
+                {"ip-address-type":"ipv6","ip-address":"fe80::be24:11ff:feca:5b77","prefix":64},
+                {"ip-address":"192.168.178.72","ip-address-type":"ipv4","prefix":24}]},
+            {"name":"vtnet1","ip-addresses":[{"ip-address":"10.10.10.1","ip-address-type":"ipv4"}]},
+            {"name":"lo0","ip-addresses":[{"ip-address":"127.0.0.1","ip-address-type":"ipv4"}]}]}}"#;
+        let interfaces = r#"{"data":[
+            {"name":"lo","ip-addresses":[{"ip-address":"127.0.0.1","ip-address-type":"inet"}]},
+            {"name":"eth0","ip-addresses":[
+                {"ip-address":"2003:d2:6f2c:d300:be24:11ff:fe67:41dd","ip-address-type":"inet6"},
+                {"ip-address":"192.168.178.71","ip-address-type":"inet"}]}]}"#;
+        let guests = r#"{"data":[
+            {"vmid":101,"name":"opnsense","type":"qemu","node":"pve","status":"running","template":0},
+            {"vmid":100,"name":"jellyfin","type":"lxc","node":"pve","status":"running","template":0},
+            {"vmid":102,"name":"db","type":"qemu","node":"pve","status":"stopped","template":0},
+            {"vmid":103,"type":"qemu","node":"pve","status":"running","template":0},
+            {"vmid":9000,"name":"debian-tpl","type":"qemu","node":"pve","status":"stopped","template":1}]}"#;
+        let (port, fingerprint) = server(&[
+            ("/cluster/resources?type=vm", 200, guests),
+            (
+                "/nodes/pve/qemu/101/agent/network-get-interfaces",
+                200,
+                agent,
+            ),
+            ("/nodes/pve/lxc/100/interfaces", 200, interfaces),
+            // No guest agent.
+            (
+                "/nodes/pve/qemu/103/agent/network-get-interfaces",
+                500,
+                r#"{"message":"QEMU guest agent is not running\n","data":null}"#,
+            ),
+        ])
+        .await;
+        let pool = Pool::new(Arc::new(TestVault));
+        let connection =
+            Connection::new("127.0.0.1", port, "pve", Some(&fingerprint), true).unwrap();
+        let found = connection
+            .guests(&pool, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let summary: Vec<(u32, &str, &str, bool, Option<&str>)> = found
+            .iter()
+            .map(|g| {
+                (
+                    g.vmid,
+                    g.name.as_str(),
+                    g.kind.as_str(),
+                    g.running,
+                    g.address.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                (100, "jellyfin", "lxc", true, Some("192.168.178.71")),
+                (101, "opnsense", "qemu", true, Some("192.168.178.72")),
+                (102, "db", "qemu", false, None),
+                (103, "qemu-103", "qemu", true, None),
+            ]
+        );
+        let wrong = Connection::new("127.0.0.1", port, "pw", Some(&fingerprint), true).unwrap();
+        let err = wrong
+            .guests(&pool, Duration::from_secs(5))
+            .await
+            .unwrap_err();
+        assert!(err.contains("is a password, not an API token"), "{err}");
+        assert!(Connection::new("h", 8006, "pve", Some("12:34"), true).is_err());
     }
 
     #[test]

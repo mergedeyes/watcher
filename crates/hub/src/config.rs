@@ -46,7 +46,7 @@ type User = Option<Extension<CurrentUser>>;
 
 /// Who is making the request: admins only, or anyone when login is off
 /// (the server then only listens on loopback).
-fn admin(hub: &Hub, user: &User) -> Result<String, ApiError> {
+pub(crate) fn admin(hub: &Hub, user: &User) -> Result<String, ApiError> {
     if !hub.auth.required {
         return Ok("local user".into());
     }
@@ -63,13 +63,13 @@ fn with_missing_commands(mut loaded: Loaded, check_dirs: &CheckDirs) -> Loaded {
     loaded
 }
 
-fn files(hub: &Hub) -> Result<&ConfigFiles, ApiError> {
+pub(crate) fn files(hub: &Hub) -> Result<&ConfigFiles, ApiError> {
     hub.config_files
         .get()
         .ok_or_else(|| ApiError::Unavailable("config editing is not available".into()))
 }
 
-fn writable(files: &ConfigFiles) -> Result<(), ApiError> {
+pub(crate) fn writable(files: &ConfigFiles) -> Result<(), ApiError> {
     match files.mode {
         ConfigMode::Files => Err(ApiError::Forbidden(
             "the configuration is read-only here (config_mode = \"files\")".into(),
@@ -105,7 +105,7 @@ fn problems(files: &ConfigFiles, diagnostics: &[Diagnostic]) -> Vec<Problem> {
         .collect()
 }
 
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, ApiError> {
     tokio::task::spawn_blocking(f)
@@ -125,7 +125,7 @@ fn locked(holder: &Holder) -> Response {
 /// Header with the edit leases the client holds, comma-separated.
 pub const LEASE_HEADER: &str = "x-watcher-lease";
 
-fn lease_ids(headers: &HeaderMap) -> Vec<String> {
+pub(crate) fn lease_ids(headers: &HeaderMap) -> Vec<String> {
     headers
         .get_all(LEASE_HEADER)
         .iter()
@@ -508,7 +508,7 @@ pub struct EditManyBody {
     edits: Vec<EditBody>,
 }
 
-fn edit_error(files: &ConfigFiles, err: EditError) -> Result<Response, ApiError> {
+pub(crate) fn edit_error(files: &ConfigFiles, err: EditError) -> Result<Response, ApiError> {
     match err {
         EditError::File(err) => Ok(file_error(files, err)),
         err @ EditError::NotFound(..) => Err(ApiError::NotFound(err.to_string())),
@@ -619,7 +619,7 @@ pub async fn apply(
 
 /// Writes changes and reloads; see [`apply`]. 423 if someone else is
 /// editing one of the files (`leases`: the edit leases the writer holds).
-async fn apply_changes(
+pub(crate) async fn apply_changes(
     hub: &Hub,
     files: &ConfigFiles,
     by: String,

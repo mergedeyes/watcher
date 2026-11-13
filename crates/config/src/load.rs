@@ -331,6 +331,7 @@ impl RawObjects {
         c.compile_servicegroups(&mut config);
         c.compile_hostgroups(&mut config);
         let hosts = c.compile_hosts(&mut config);
+        c.compile_proxmox(&mut config);
         c.compile_services(&mut config, &hosts);
         c.compile_downtimegroups(&mut config);
         c.compile_contacts(&mut config);
@@ -482,6 +483,7 @@ fn host_part(
     host_check: Option<&str>,
     graph: Option<&str>,
     ssh: Option<&Table>,
+    proxmox: Option<&Table>,
     vars: &Table,
 ) -> Table {
     let mut t = Table::new();
@@ -497,6 +499,9 @@ fn host_part(
     }
     if let Some(ssh) = ssh {
         t.insert("ssh".into(), Value::Table(ssh.clone()));
+    }
+    if let Some(proxmox) = proxmox {
+        t.insert("proxmox".into(), Value::Table(proxmox.clone()));
     }
     if !vars.is_empty() {
         t.insert("vars".into(), Value::Table(vars.clone()));
@@ -828,6 +833,10 @@ impl<'a> Compiler<'a> {
                 self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
                 ok = false;
             }
+            if let Some(Err(msg)) = def.proxmox.as_ref().map(ProxmoxDef::parse) {
+                self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
+                ok = false;
+            }
             config.hostgroups.push(Group {
                 name: raw.name.clone(),
                 title: def.title.clone(),
@@ -851,6 +860,7 @@ impl<'a> Compiler<'a> {
                     def.host_check.as_deref(),
                     def.graph.as_deref(),
                     def.ssh.as_ref(),
+                    def.proxmox.as_ref(),
                     &def.vars,
                 ),
                 &source,
@@ -989,6 +999,7 @@ impl<'a> Compiler<'a> {
                     def.host_check.as_deref(),
                     def.graph.as_deref(),
                     def.ssh.as_ref(),
+                    def.proxmox.as_ref(),
                     &def.vars,
                 ),
                 &host_src,
@@ -1085,6 +1096,17 @@ impl<'a> Compiler<'a> {
                     }
                 },
             };
+            let proxmox = match layered.table.get("proxmox").and_then(Value::as_table) {
+                None => None,
+                Some(table) => match ProxmoxDef::parse(table).and_then(ProxmoxDef::check) {
+                    Ok(p) => Some(p),
+                    Err(msg) => {
+                        self.sink.error(Some(&raw.origin), format!("{what}: {msg}"));
+                        ok = false;
+                        None
+                    }
+                },
+            };
             if !ok {
                 continue;
             }
@@ -1115,6 +1137,7 @@ impl<'a> Compiler<'a> {
                 },
                 graph: text("graph"),
                 ssh,
+                proxmox,
                 enabled: def.enabled,
                 origin: raw.origin.clone(),
                 sources: layered
@@ -1580,7 +1603,12 @@ impl<'a> Compiler<'a> {
                         }
                     }
                 }
-                let built = Builtin::new(name, &host.address, &vars);
+                let built = match proxmox_target(config, host) {
+                    Some((api, settings)) if builtin::proxmox::NAMES.contains(&name) => {
+                        Builtin::with_proxmox(name, &api, &vars, Some(&settings))
+                    }
+                    _ => Builtin::new(name, &host.address, &vars),
+                };
                 builtin_vars = Some(vars);
                 match built {
                     Ok(b) => Some(CommandLine::Builtin(b)),
@@ -1790,6 +1818,54 @@ impl<'a> Compiler<'a> {
                 schedule,
                 origin: raw.origin.clone(),
             });
+        }
+    }
+
+    /// Checks that guests name a Proxmox VE host with a login, and collects
+    /// the hosts that discover their guests.
+    fn compile_proxmox(&mut self, config: &mut Config) {
+        for host in &config.hosts {
+            let Some(p) = &host.proxmox else { continue };
+            let what = format!("host {:?}", host.name);
+            if let Some(pve) = &p.host {
+                let target = config.hosts.iter().find(|h| h.name == *pve);
+                let msg = match target.and_then(|h| h.proxmox.as_ref()) {
+                    _ if target.is_none() => Some(format!("proxmox.host {pve:?}: no such host")),
+                    Some(t) if t.secret.is_some() => None,
+                    _ => Some(format!(
+                        "proxmox.host {pve:?} has no proxmox = {{ secret = ... }}"
+                    )),
+                };
+                if let Some(msg) = msg {
+                    self.sink
+                        .error(Some(&host.origin), format!("{what}: {msg}"));
+                }
+                continue;
+            }
+            if !p.discover || !host.enabled {
+                continue;
+            }
+            let Some((address, s)) = proxmox_target(config, host) else {
+                continue;
+            };
+            let connection = watcher_exec::builtin::proxmox::Connection::new(
+                &address,
+                s.port,
+                &s.secret,
+                s.fingerprint.as_deref(),
+                s.verify,
+            );
+            match connection {
+                Ok(connection) => config.discoveries.push(crate::Discovery {
+                    name: host.name.clone(),
+                    connection,
+                    interval: crate::Discovery::DEFAULT_INTERVAL,
+                    origin: host.origin.clone(),
+                }),
+                Err(e) => self
+                    .sink
+                    .error(Some(&host.origin), format!("{what}: proxmox: {e}")),
+            }
         }
     }
 
@@ -2783,6 +2859,7 @@ struct HostDef {
     host_check: Option<String>,
     graph: Option<String>,
     ssh: Option<Table>,
+    proxmox: Option<Table>,
     #[serde(default = "yes")]
     enabled: bool,
     #[serde(default)]
@@ -2804,6 +2881,7 @@ struct HostGroupDef {
     host_check: Option<String>,
     graph: Option<String>,
     ssh: Option<Table>,
+    proxmox: Option<Table>,
     #[serde(default)]
     vars: Table,
 }
@@ -2822,6 +2900,69 @@ impl SshDef {
     fn parse(table: &Table) -> Result<Self, String> {
         SshDef::deserialize(Value::Table(table.clone()))
             .map_err(|err| format!("ssh: {}", err.message().trim()))
+    }
+}
+
+/// `proxmox = { ... }` of a host or host group, checked once merged.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProxmoxDef {
+    secret: Option<String>,
+    port: Option<u16>,
+    fingerprint: Option<String>,
+    verify: Option<bool>,
+    discover: Option<bool>,
+    host: Option<String>,
+    vmid: Option<u32>,
+}
+
+impl ProxmoxDef {
+    fn parse(table: &Table) -> Result<Self, String> {
+        ProxmoxDef::deserialize(Value::Table(table.clone()))
+            .map_err(|err| format!("proxmox: {}", err.message().trim()))
+    }
+
+    /// A Proxmox VE host (`secret`, ...) or a guest on one (`host`,
+    /// `vmid`), not both.
+    fn check(self) -> Result<crate::Proxmox, String> {
+        let guest = self.host.is_some() || self.vmid.is_some();
+        let login = self.secret.is_some()
+            || self.port.is_some()
+            || self.fingerprint.is_some()
+            || self.verify.is_some()
+            || self.discover.is_some();
+        if guest && (self.host.is_none() || self.vmid.is_none()) {
+            return Err("proxmox: a VM or container needs host and vmid".into());
+        }
+        if guest && login {
+            return Err(
+                "proxmox: a VM or container (host, vmid) takes the login from its Proxmox VE \
+                 host; secret, port, fingerprint, verify and discover go there"
+                    .into(),
+            );
+        }
+        if !guest && self.secret.is_none() {
+            return Err(
+                "proxmox: needs secret (an API token), or host and vmid for a VM or container"
+                    .into(),
+            );
+        }
+        if self.vmid.is_some_and(|v| v < 100) {
+            return Err("proxmox: vmid starts at 100".into());
+        }
+        if let Some(fp) = &self.fingerprint {
+            watcher_exec::builtin::proxmox::Connection::new("h", 1, "s", Some(fp), true)
+                .map_err(|e| format!("proxmox: {e}"))?;
+        }
+        Ok(crate::Proxmox {
+            secret: self.secret,
+            port: self.port,
+            fingerprint: self.fingerprint,
+            verify: self.verify,
+            discover: self.discover.unwrap_or(false),
+            host: self.host,
+            vmid: self.vmid,
+        })
     }
 }
 
@@ -3009,6 +3150,31 @@ fn parse_size(text: &str) -> Option<u64> {
 
 fn yes() -> bool {
     true
+}
+
+/// Where the `proxmox-*` checks of `host` ask and how they log in: the
+/// host's own `proxmox` settings, or for a VM or container, those of the
+/// Proxmox VE host it names, with its VM ID.
+fn proxmox_target(
+    config: &Config,
+    host: &Host,
+) -> Option<(String, watcher_exec::builtin::proxmox::Settings)> {
+    let own = host.proxmox.as_ref()?;
+    let (api, vmid) = match &own.host {
+        Some(name) => (config.hosts.iter().find(|h| h.name == *name)?, own.vmid),
+        None => (host, None),
+    };
+    let p = api.proxmox.as_ref()?;
+    let settings = watcher_exec::builtin::proxmox::Settings {
+        secret: p.secret.clone()?,
+        port: p
+            .port
+            .unwrap_or(watcher_exec::builtin::proxmox::DEFAULT_PORT),
+        fingerprint: p.fingerprint.clone(),
+        verify: p.verify.unwrap_or(true),
+        vmid,
+    };
+    Some((api.address.clone(), settings))
 }
 
 /// A duration like `"1m"` or `"15s"`.
