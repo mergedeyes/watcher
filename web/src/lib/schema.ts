@@ -38,6 +38,8 @@ export interface Field {
 	selects?: 'host' | 'service';
 	/** For `table.key`: the table may also be written as just this value (`ntfy = "https://…"`). */
 	short?: boolean;
+	/** Fields that rule this one out: it is greyed out while one of them has a value. */
+	exclusive?: string[];
 }
 
 export interface Group {
@@ -57,9 +59,17 @@ const SCHEDULE: Field[] = [
 	{ key: 'timeout', label: 'Timeout', type: 'duration', placeholder: '60s' }
 ];
 
+const COMMAND: Field = { key: 'command', label: 'Command', type: 'mono', scripts: true, placeholder: 'check_ping -H $host.address$ -w $warn$ -c $crit$' };
 const CHECK: Field[] = [
-	{ key: 'command', label: 'Command', type: 'mono', scripts: true, placeholder: 'check_ping -H $host.address$ -w $warn$ -c $crit$' },
-	{ key: 'builtin', label: 'Built-in', type: 'select', options: ['ping', 'tcp', 'http', 'dns', 'tls', 'proxmox'], placeholder: 'none', help: 'a check built into Watcher instead of a command; settings in Variables' },
+	{ ...COMMAND, exclusive: ['builtin'], help: 'or a built-in check' },
+	{
+		key: 'builtin',
+		label: 'Built-in',
+		type: 'select',
+		placeholder: 'none',
+		exclusive: ['command'],
+		help: 'a check built into Watcher instead of a command; its options appear below'
+	},
 	{ key: 'shell', label: 'Shell', type: 'bool', default: false, help: 'run with /bin/sh -c' },
 	{ key: 'run_on', label: 'Run On', type: 'select', options: ['local', 'host'], placeholder: 'local', help: 'host: over SSH, see the host’s SSH settings' },
 	{ key: 'copy', label: 'Copy', type: 'bool', default: false, help: 'upload the script from the check directories to the host first' },
@@ -104,9 +114,16 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 			fields: [
 				NAME,
 				TITLE,
-				{ key: 'check', label: 'Check', type: 'text', suggestOne: 'check', help: 'default: the check named like the service' },
-				{ ...CHECK[0]!, help: 'instead of a check' },
-				...CHECK.slice(1, 6),
+				{
+					key: 'check',
+					label: 'Check',
+					type: 'text',
+					suggestOne: 'check',
+					exclusive: ['command'],
+					help: 'a check or a built-in one; default: the check named like the service'
+				},
+				{ ...COMMAND, exclusive: ['check'], help: 'or a command of its own, instead of a check' },
+				...CHECK.slice(2, 6),
 				{ key: 'for_each', label: 'For Each', type: 'text', help: 'host var with a table per item, dotted for nested (site.tld): one service each (disk_root, …)' },
 				{ key: 'groups', label: 'Service Groups', type: 'list', suggest: 'servicegroup', help: 'comma-separated' },
 				ENABLED

@@ -209,6 +209,32 @@ pub async fn overview(State(hub): Shared, user: User) -> Result<Response, ApiErr
 
 /// The check directories and the executables in them, for command
 /// suggestions.
+/// The built-in checks and the vars each takes, for the forms.
+pub async fn builtins(State(hub): Shared, user: User) -> Result<Response, ApiError> {
+    admin(&hub, &user)?;
+    let list: Vec<serde_json::Value> = watcher_exec::builtin::info::INFO
+        .iter()
+        .map(|i| {
+            let vars: Vec<serde_json::Value> = i
+                .vars
+                .iter()
+                .map(|v| {
+                    json!({
+                        "name": v.name,
+                        "help": v.help,
+                        "default": v.default,
+                        "required": v.required,
+                        "type": v.kind.as_str(),
+                        "choices": v.kind.choices(),
+                    })
+                })
+                .collect();
+            json!({ "name": i.name, "title": i.title, "summary": i.summary, "vars": vars })
+        })
+        .collect();
+    Ok(Json(list).into_response())
+}
+
 pub async fn scripts(State(hub): Shared, user: User) -> Result<Response, ApiError> {
     admin(&hub, &user)?;
     let check_dirs = files(&hub)?.check_dirs.clone();

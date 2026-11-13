@@ -823,11 +823,11 @@ fn reports_problems_with_locations() {
         (
             "a.toml",
             r#"
-[check.ping]
-command = "check_ping"
+[check.load]
+command = "check_load"
 
 [hostgroup.g]
-services = ["ping"]
+services = ["load"]
 
 [[host]]
 name = "web01"
@@ -856,7 +856,7 @@ name = "h"
     ]);
     let msgs = messages(&diags);
     for expected in [
-        "a.toml:5: error: hostgroup \"g\": unknown service \"ping\" (there is a check \"ping\": add [service.ping])",
+        "a.toml:5: error: hostgroup \"g\": unknown service \"load\" (there is a check \"load\": add [service.load])",
         "a.toml:8: error: host \"web01\": unknown hostgroup \"nope\"",
         "a.toml:12: error: host \"web01\" is already defined at a.toml:8",
         "a.toml:15: error: service \"lonely\": no check \"lonely\"; set check, command or passive = true",
@@ -1197,6 +1197,47 @@ services = ["api"]
     );
     assert_eq!(s.vars["headers.X-Api-Key"], "k1");
     assert!(s.sources.contains_key("vars.headers.X-Site"));
+}
+
+#[test]
+fn builtin_checks_are_services_too() {
+    let (config, diags) = compile(&[(
+        "a.toml",
+        r#"
+[servicegroup.web]
+services = ["http", "tls"]
+
+[hostgroup.dns-servers]
+members = ["ns*"]
+services = ["dns"]
+
+[[host]]
+name = "www"
+address = "10.0.0.5"
+services = ["tcp"]
+servicegroups = ["web"]
+  [host.service.tcp]
+  vars.port = "22"
+
+[[host]]
+name = "ns1"
+  [host.service.dns]
+  vars.name = "example.com"
+"#,
+    )]);
+    assert_eq!(messages(&diags), Vec::<String>::new());
+    let ids: Vec<&str> = config.services.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["www/http", "www/tcp", "www/tls", "www/ping", "ns1/dns"]
+    );
+    // Not service objects of their own: nothing to list or warn about.
+    assert!(config.service_objects.is_empty());
+    let s = config.service("www/tcp").unwrap();
+    assert_eq!(
+        s.command.as_ref().unwrap().to_string(),
+        "tcp 10.0.0.5:22 (built-in)"
+    );
 }
 
 #[test]

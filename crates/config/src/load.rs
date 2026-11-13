@@ -677,6 +677,18 @@ impl<'a> Compiler<'a> {
                 origin: raw.origin.clone(),
             });
         }
+        // A built-in check can be listed in services = [...] as it is, as
+        // if there were an empty [service.<name>]. Not a service object of
+        // the config, so it isn't listed or reported as unused.
+        for name in builtin::NAMES {
+            if !self.objects.contains_key(name) {
+                let origin = Origin {
+                    file: "(built-in)".into(),
+                    line: 0,
+                };
+                self.objects.insert(name.into(), (Table::new(), origin));
+            }
+        }
     }
 
     fn compile_servicegroups(&mut self, config: &mut Config) {

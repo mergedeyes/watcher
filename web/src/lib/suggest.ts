@@ -4,9 +4,6 @@
 import type { ConfigObject, Kind } from './api.ts';
 import type { Field } from './schema.ts';
 
-/** Built-in checks (crates/exec/src/builtin/mod.rs). */
-const BUILTIN_CHECKS = ['ping', 'tcp', 'http', 'dns', 'tls', 'proxmox'];
-
 export interface Option {
 	value: string;
 	/** Shown muted next to the value, e.g. where it comes from. */
@@ -55,7 +52,9 @@ export class Suggest {
 		private objects: ConfigObject[],
 		/** Names of the services that exist (from the live view). */
 		private services: string[],
-		private scripts: { name: string; dir: string }[]
+		private scripts: { name: string; dir: string }[],
+		/** Names of the built-in checks. */
+		private builtins: string[] = []
 	) {}
 
 	private of(kind: Kind) {
@@ -63,16 +62,19 @@ export class Suggest {
 	}
 
 	names(kind: Kind): Option[] {
-		return this.of(kind).map((o) => {
+		const out = this.of(kind).map((o) => {
 			const title = o.fields.title;
 			return { value: o.name, hint: typeof title === 'string' ? title : undefined };
 		});
+		// Built-in checks can be listed as services as they are.
+		if (kind === 'service') for (const value of this.builtins) if (!out.some((o) => o.value === value)) out.push({ value, hint: 'built-in check' });
+		return out;
 	}
 
 	/** Checks, and the built-in ones no check of the same name replaces. */
 	checkNames(): Option[] {
 		const out = this.names('check');
-		for (const value of BUILTIN_CHECKS) if (!out.some((o) => o.value === value)) out.push({ value, hint: 'built-in' });
+		for (const value of this.builtins) if (!out.some((o) => o.value === value)) out.push({ value, hint: 'built-in' });
 		return out;
 	}
 

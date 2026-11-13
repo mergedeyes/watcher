@@ -16,9 +16,10 @@
 		required?: boolean;
 		label?: string;
 		inputmode?: 'numeric';
+		disabled?: boolean;
 	}
 
-	let { value = $bindable(''), options, multi = false, id, mono = false, placeholder, required, label, inputmode }: Props = $props();
+	let { value = $bindable(''), options, multi = false, id, mono = false, placeholder, required, label, inputmode, disabled = false }: Props = $props();
 
 	const MAX = 50;
 	const uid = `cb-${Math.random().toString(36).slice(2, 9)}`;
@@ -124,6 +125,7 @@
 		{placeholder}
 		{required}
 		{inputmode}
+		{disabled}
 		aria-label={label}
 		role="combobox"
 		autocomplete="off"
