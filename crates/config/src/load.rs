@@ -775,11 +775,28 @@ impl<'a> Compiler<'a> {
         if self.objects.contains_key(name) {
             return true;
         }
-        let msg = match self.checks.contains_key(name) {
-            true => format!(
+        let msg = if name.contains(['*', '?']) {
+            // Lists of services take names; patterns only work in members.
+            let glob = crate::select::Glob::new(name);
+            let matching: Vec<&str> = self
+                .objects
+                .keys()
+                .filter(|k| glob.is_match(k))
+                .map(String::as_str)
+                .collect();
+            let also = match matching.is_empty() {
+                true => String::new(),
+                false => format!(" (matching: {})", matching.join(", ")),
+            };
+            format!(
+                "{what}: unknown service {name:?}: services = [...] takes names, not patterns{also}"
+            )
+        } else if self.checks.contains_key(name) {
+            format!(
                 "{what}: unknown service {name:?} (there is a check {name:?}: add [service.{name}])"
-            ),
-            false => format!("{what}: unknown service {name:?}"),
+            )
+        } else {
+            format!("{what}: unknown service {name:?}")
         };
         self.sink.error(Some(origin), msg);
         false
@@ -1125,6 +1142,28 @@ impl<'a> Compiler<'a> {
             let default_ping = default
                 && !assigned.contains_key(DEFAULT_HOST_CHECK)
                 && !def.service.contains_key(DEFAULT_HOST_CHECK);
+            // A service named as host check is meant to run on the host: it
+            // gets it, like `ping` above, if nothing else assigns it.
+            if let Some(hc) = host_check.as_deref().filter(|hc| !hc.is_empty())
+                && self.objects.contains_key(hc)
+                && !assigned.contains_key(hc)
+                && !def.service.contains_key(hc)
+            {
+                let origin = layered
+                    .sources
+                    .get("host_check")
+                    .map_or(&raw.origin, |s| &s.origin);
+                assigned.insert(
+                    hc.to_string(),
+                    vec![Assigned {
+                        name: hc.to_string(),
+                        reason: Reason::Listed {
+                            by: "host_check".into(),
+                            origin: origin.clone(),
+                        },
+                    }],
+                );
+            }
             config.hosts.push(Host {
                 name: def.name.clone(),
                 address: def.address.clone().unwrap_or_else(|| def.name.clone()),
@@ -1191,10 +1230,22 @@ impl<'a> Compiler<'a> {
                     .sources
                     .get("host_check")
                     .map_or(&host.origin, |s| &s.origin);
-                self.sink.error(
-                    Some(origin),
-                    format!("{what}: host_check {hc:?} is not a service on it"),
-                );
+                // It names a service, which is easily mixed up with the
+                // check or the plugin (check_ping): say what it can be.
+                let services: Vec<&str> = config
+                    .services
+                    .iter()
+                    .filter(|s| s.host == host_idx)
+                    .map(|s| s.name.as_str())
+                    .collect();
+                let mut msg = format!("{what}: host_check {hc:?} is not a service on it");
+                if !services.is_empty() {
+                    msg += &format!("; it names one of its services: {}", services.join(", "));
+                }
+                if host.address != host.name {
+                    msg += "; without host_check, a host with an address uses ping";
+                }
+                self.sink.error(Some(origin), msg);
             }
             if let Some(graph) = &host.graph
                 && !config
