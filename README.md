@@ -83,6 +83,8 @@ set it, and every alert to the rule that sent it.
 - **Checks:** Nagios plugins, your own scripts (Nagios output,
   `key=value` or JSON), results pushed over the API, thresholds with
   units, built-in ping, TCP, HTTP, DNS and TLS certificate checks.
+- **Proxmox VE** through its API: cluster quorum, nodes, storages, VMs and
+  containers, backups and pending updates, with an encrypted API token.
 - **Remote checks over SSH** with encrypted secrets, pinned host keys and
   automatic script copies.
 - **Alerting:** SOFT and HARD states with retries, host UP/DOWN, flap

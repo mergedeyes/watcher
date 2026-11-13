@@ -22,7 +22,7 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPZ6... watcher-monitor
 ```
 
 Add this line to `~/.ssh/authorized_keys` of the user on the hosts. In the
-web UI: Configuration → SSH → New Key.
+web UI: Configuration → Secrets → New Key.
 
 **2. Set the login** on the hosts, usually once on a host group:
 
@@ -66,19 +66,21 @@ ssh = { port = 2222 }          # user and secret from linux
 ## Secrets
 
 Keys and passwords are called secrets. Each has a name, which `ssh.secret`
-refers to.
+refers to. API tokens for the [proxmox check](proxmox.md) are secrets too;
+they are stored the same way, but aren't used for SSH.
 
 | Command | What it does |
 |---|---|
 | `watcher secret new <name>` | Creates a new ed25519 key and prints the public key. |
 | `watcher secret import <name> <file>` | Imports an existing ed25519 or ECDSA key (OpenSSH, PEM or PuTTY format). Asks for the passphrase if the key is encrypted. |
 | `watcher secret password <name>` | Stores a password instead of a key. |
+| `watcher secret token <name> --id <id>` | Stores an API token: its ID and, asked for, its secret. See [Monitoring Proxmox VE](proxmox.md#3-store-the-token-in-watcher). |
 | `watcher secret show <name>` | Prints the public key again. |
-| `watcher secret list` | Lists names, kinds and fingerprints. |
+| `watcher secret list` | Lists names, kinds, fingerprints of keys and IDs of tokens. |
 | `watcher secret remove <name>` | Deletes a secret. |
 
 `--replace` overwrites an existing secret of the same name. Everything
-also works in the web UI under Configuration → SSH.
+also works in the web UI under Configuration → Secrets.
 
 RSA keys are not supported, neither as login keys nor as host keys. The
 Rust `rsa` library has an unfixed timing side channel (RUSTSEC-2023-0071).
@@ -96,7 +98,7 @@ first use). If the key changes later, for example because the host was
 reinstalled, its checks become UNKNOWN until you accept the new key:
 
 ```
-monitor@db01: host key changed (SHA256:EuEng...); accept: Configuration → SSH, or watcher hostkey accept db01
+monitor@db01: host key changed (SHA256:EuEng...); accept: Configuration → Secrets, or watcher hostkey accept db01
 ```
 
 | Command | What it does |

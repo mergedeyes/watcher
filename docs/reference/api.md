@@ -286,7 +286,7 @@ Admins only. The values of secrets never leave the server.
 
 | Method and path | Description |
 |---|---|
-| `GET ssh/secrets` | Name, kind, public key, fingerprint, and the hosts using each secret. |
+| `GET ssh/secrets` | Name, kind (`key`, `password` or `token`), public key, fingerprint, token ID, and the hosts using each secret (over SSH, or with a `proxmox` check). |
 | `POST ssh/secrets` | Create a secret, see below. `"replace": true` overwrites one of the same name. |
 | `DELETE ssh/secrets/{name}` | Delete a secret. |
 | `GET ssh/hostkeys` | Stored host keys, and keys that changed (`offered`). |
@@ -300,6 +300,7 @@ Bodies for `POST ssh/secrets`:
 | `{"name", "kind": "generate"}` | A new ed25519 key. |
 | `{"name", "kind": "key", "private_key", "passphrase"}` | An imported key. |
 | `{"name", "kind": "password", "password"}` | A password. |
+| `{"name", "kind": "token", "token_id", "token"}` | An API token, for example for the [proxmox check](../guides/proxmox.md). `token_id` is its ID (`watcher@pve!monitor`), `token` its secret. |
 
 ```sh
 curl -X POST -H "Authorization: Bearer $T" -H 'content-type: application/json' \
