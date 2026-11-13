@@ -281,12 +281,34 @@ async fn summary(AxState(hub): Shared) -> Response {
         .into_response()
 }
 
+/// Which services `GET /names` lists.
+#[derive(Deserialize)]
+struct NamesQuery {
+    /// Only those on this host.
+    host: Option<String>,
+    /// Only those on the hosts of this host group.
+    hostgroup: Option<String>,
+    /// Only those with graphs on: what a host's `graph` can show.
+    #[serde(default)]
+    graphs: bool,
+}
+
 /// `GET /names`: all host names and the distinct service names, for
 /// suggestions.
-async fn names(AxState(hub): Shared) -> Json<serde_json::Value> {
+async fn names(AxState(hub): Shared, Query(q): Query<NamesQuery>) -> Json<serde_json::Value> {
     let config = hub.config();
     let hosts: Vec<&str> = config.hosts.iter().map(|h| h.name.as_str()).collect();
-    let services: BTreeSet<&str> = config.services.iter().map(|s| s.name.as_str()).collect();
+    let services: BTreeSet<&str> = config
+        .services
+        .iter()
+        .filter(|s| {
+            let host = config.host(s);
+            q.host.as_ref().is_none_or(|h| host.name == *h)
+                && q.hostgroup.as_ref().is_none_or(|g| host.in_group(g))
+                && (!q.graphs || s.settings.graphs)
+        })
+        .map(|s| s.name.as_str())
+        .collect();
     Json(json!({ "hosts": hosts, "services": services }))
 }
 

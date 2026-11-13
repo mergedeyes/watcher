@@ -137,6 +137,9 @@ Refresh loads it once.
 **Graphs** show the last 15 minutes by default, with ranges down to 30
 seconds. Drag to zoom in, double-click to reset. The host page shows the
 host's `graph` service, or the host check, and you can pick another one.
+In the host and host group forms, the Graph field suggests only services
+the host (or a host of the group) has, with graphs on. A service you just
+added shows up there once you have saved it.
 `graphs = false` on a check or service turns its graphs off.
 
 ## Configuration

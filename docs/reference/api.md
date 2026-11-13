@@ -47,7 +47,7 @@ Requests with a session cookie that change something need a matching
 | `POST services/{host}/{service}/run` | Run the service's command once. The result is shown, not recorded. |
 | `GET groups` | Host groups, service groups and downtime groups, with the number of hosts and services in each state. |
 | `GET summary` | The number of hosts and services in each state, and how many problems are unhandled. |
-| `GET names` | All host names and the service names, for suggestions. |
+| `GET names` | All host names and the service names, for suggestions. `host=`, `hostgroup=`: only the services on that host or the hosts of that group. `graphs=true`: only services with graphs on. |
 | `GET stream` | Live updates as Server-Sent Events. |
 
 Filters for `GET services`:

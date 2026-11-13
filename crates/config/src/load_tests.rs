@@ -1910,3 +1910,43 @@ host_check = "tcp"
         ]
     );
 }
+
+#[test]
+fn graph_falls_back_to_the_host_check() {
+    // The host group's graph fits "a", which has `load`; "b" doesn't have
+    // it and "c" has its graphs off: both show their host check's graph.
+    let (config, diags) = compile(&[(
+        "a.toml",
+        r#"
+[service.load]
+command = "true"
+
+[hostgroup.g]
+members = ["*"]
+graph = "load"
+
+[[host]]
+name = "a"
+address = "10.0.0.1"
+services = ["load"]
+
+[[host]]
+name = "b"
+address = "10.0.0.2"
+
+[[host]]
+name = "c"
+address = "10.0.0.3"
+services = ["load"]
+service.load.graphs = false
+"#,
+    )]);
+    assert_eq!(messages(&diags), Vec::<String>::new());
+    let graph = |name: &str| {
+        let host = config.hosts.iter().find(|h| h.name == name).unwrap();
+        (host.graph_check(), host.sources.contains_key("graph"))
+    };
+    assert_eq!(graph("a"), (Some("load"), true));
+    assert_eq!(graph("b"), (Some("ping"), false));
+    assert_eq!(graph("c"), (Some("ping"), false));
+}

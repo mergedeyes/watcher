@@ -1268,16 +1268,19 @@ impl<'a> Compiler<'a> {
                 }
                 self.sink.error(Some(origin), msg);
             }
+            // `graph` only picks what the host page shows. A host without
+            // that service (or with its graphs off) shows its host check's
+            // graph instead, as without `graph`: common when a host group
+            // sets it for members that don't all have the service.
             if let Some(graph) = &host.graph
                 && !config
                     .services
                     .iter()
-                    .any(|s| s.host == host_idx && s.name == *graph)
+                    .any(|s| s.host == host_idx && s.name == *graph && s.settings.graphs)
             {
-                self.sink.warning(
-                    Some(&host.origin),
-                    format!("{what}: graph {graph:?} is not a service on it"),
-                );
+                let host = &mut config.hosts[host_idx];
+                host.graph = None;
+                host.sources.remove("graph");
             }
         }
     }

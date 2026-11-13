@@ -461,6 +461,10 @@ paths:
   /names:
     get:
       summary: All host names and the distinct service names, for suggestions
+      parameters:
+        - { name: host, in: query, schema: { type: string }, description: "Only services on this host." }
+        - { name: hostgroup, in: query, schema: { type: string }, description: "Only services on the hosts of this host group." }
+        - { name: graphs, in: query, schema: { type: boolean, default: false }, description: "Only services with graphs on: what a host's `graph` can show." }
       responses:
         "200":
           description: OK

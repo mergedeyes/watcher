@@ -24,7 +24,7 @@ services `http` and `https_cert`.
 | `services` | | Services every member gets. A [built-in check](check.md#built-in-checks) like `http` or `tls` can be listed as it is, without a `[service.<name>]`. |
 | `servicegroups` | | Service groups every member gets, with all their services. |
 | `host_check` | | The service that decides whether its hosts are UP or DOWN. Its hosts get this service if they don't have it already. `false`: no host check. See [Host state](host.md#host-state). |
-| `graph` | | The service whose graph is shown on the host pages. |
+| `graph` | | The service whose graph is shown on the host pages. A host without that service, or with its graphs off, shows its host check's graph. |
 | `ssh` | | Login for [checks over SSH](../guides/ssh.md): `{ user, secret, port }`. See [ssh](#ssh). |
 | `proxmox` | | The Proxmox VE API login for its hosts: `{ secret, fingerprint, port, verify, discover }`. See [proxmox](#proxmox). |
 | `vars` | | Default vars for its hosts, used by `$name$` macros and `for_each`. [Built-in checks](check.md#built-in-checks) don't read them, except through macros like `$host.vars.port$`. |

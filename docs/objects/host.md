@@ -29,7 +29,7 @@ entry in a list. Each host needs a unique `name`.
 | `servicegroups` | | Service groups the host gets; it gets all their services. See [servicegroup](servicegroup.md). |
 | `vars` | | Values for the `$name$` macros of the host's services, and the tables for `for_each`. Win over host group vars. [Built-in checks](check.md#built-in-checks) don't read them, except through macros like `$host.vars.port$`. |
 | `host_check` | from the host groups; otherwise `ping` if `address` is set | The service that decides whether the host is UP or DOWN. The host gets this service if it doesn't have it already. `false`: no host check, the host is always UP. See [Host state](#host-state). |
-| `graph` | the host check | The service whose graph is shown on the host page. |
+| `graph` | the host check | The service whose graph is shown on the host page. If the host doesn't have that service, or its graphs are off (`graphs = false`), the page shows the host check's graph. |
 | `ssh` | from the host groups | Login for [checks over SSH](../guides/ssh.md): `{ user, secret, port }`. See [ssh](#ssh). |
 | `proxmox` | from the host groups | For a Proxmox VE server: the API login, `{ secret, fingerprint, port, verify, discover }`. For a VM or container on one: `{ host, vmid }`. See [proxmox](#proxmox). |
 | `enabled` | `true` | `false`: the host is not monitored. |
@@ -103,10 +103,18 @@ host_check = false
 ### Another graph on the host page
 
 ```toml
+[service.load]
+command = "check_load -w 5,4,3 -c 10,8,6"
+
 [[host]]
 name = "app01"
+address = "10.0.0.7"
+services = ["load"]
 graph = "load"
 ```
+
+The host page shows the graph of `load` instead of `ping`. `graph` only
+chooses what is shown: the host needs the service, here from `services`.
 
 ### A host that is not monitored
 

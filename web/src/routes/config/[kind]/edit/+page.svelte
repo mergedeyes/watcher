@@ -73,6 +73,17 @@
 		void live.reloads;
 		api.names().then((n) => (serviceNames = n.services), () => (serviceNames = []));
 	});
+	/** What `graph` can name, as Watcher compiled the saved host or group: its services with graphs. */
+	let graphNames = $state<string[]>([]);
+	$effect(() => {
+		void live.reloads;
+		const k = kind?.kind;
+		if (name === null || (k !== 'host' && k !== 'hostgroup')) {
+			graphNames = [];
+			return;
+		}
+		api.names({ [k]: name, graphs: true }).then((n) => (graphNames = n.services), () => (graphNames = []));
+	});
 	$effect(() => {
 		if (kind && SCHEMAS[kind.kind].some((g) => g.fields.some((f) => f.scripts)))
 			api.configScripts().then((s) => (scripts = s), () => (scripts = null));
@@ -163,7 +174,7 @@
 	}
 
 	let suggest = $derived(
-		new Suggest(config.objects, serviceNames, scripts?.scripts ?? [], config.builtins.map((b) => b.name))
+		new Suggest(config.objects, serviceNames, scripts?.scripts ?? [], config.builtins.map((b) => b.name), graphNames)
 	);
 
 	/** The values of a select field; built-in checks come from the server. */

@@ -95,7 +95,7 @@ const SERVICEGROUPS: Field = {
 	help: 'their services, comma-separated'
 };
 const HOST_CHECK: Field = { key: 'host_check', label: 'Host Check', type: 'text', help: 'service that gives UP/DOWN; default with an address: ping' };
-const GRAPH: Field = { key: 'graph', label: 'Graph', type: 'text', help: 'host page graphs; default: Host Check' };
+const GRAPH: Field = { key: 'graph', label: 'Graph', type: 'text', help: 'host page graphs; default, or if the host lacks it: Host Check' };
 const SSH: Field[] = [
 	{ key: 'ssh.user', label: 'SSH User', type: 'text', placeholder: 'monitor' },
 	{ key: 'ssh.port', label: 'SSH Port', type: 'int', placeholder: '22' },

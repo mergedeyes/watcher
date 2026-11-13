@@ -54,7 +54,9 @@ export class Suggest {
 		private services: string[],
 		private scripts: { name: string; dir: string }[],
 		/** Names of the built-in checks. */
-		private builtins: string[] = []
+		private builtins: string[] = [],
+		/** What `graph` can name: services with graphs on the host, or on the group's hosts. */
+		private graphs: string[] = []
 	) {}
 
 	private of(kind: Kind) {
@@ -164,8 +166,9 @@ export class Suggest {
 			case 'node':
 				return this.nodes().map((value) => ({ value }));
 			case 'host_check':
-			case 'graph':
 				return this.serviceNames();
+			case 'graph':
+				return this.graphs.map((value) => ({ value }));
 			case 'states':
 				return STATES.map((value) => ({ value }));
 			case 'on':
