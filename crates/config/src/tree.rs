@@ -432,20 +432,24 @@ impl<'a> Builder<'a> {
         );
         root.children
             .extend(self.section("values", self.host_values(host)));
+        let node = |s: &Service| {
+            let mut n = self.node(
+                "service",
+                Some(&s.id),
+                format!("service {}", s.name),
+                Some(&s.origin),
+            );
+            n.detail = Some(Self::how(s));
+            n
+        };
+        // The host check runs for the host itself, apart from its services.
+        let check: Vec<Node> = config.host_check(host).map(node).into_iter().collect();
+        root.children.extend(self.section("host check", check));
         let services: Vec<Node> = config
             .services
             .iter()
-            .filter(|s| s.host == idx)
-            .map(|s| {
-                let mut n = self.node(
-                    "service",
-                    Some(&s.id),
-                    format!("service {}", s.name),
-                    Some(&s.origin),
-                );
-                n.detail = Some(Self::how(s));
-                n
-            })
+            .filter(|s| s.host == idx && !config.is_host_check(s))
+            .map(node)
             .collect();
         root.children.extend(self.section("services", services));
         let rules = match config.host_check(host) {

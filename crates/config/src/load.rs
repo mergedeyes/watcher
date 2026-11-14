@@ -121,9 +121,14 @@ impl Sink {
     }
 
     fn has_errors(&self) -> bool {
+        self.error_count() > 0
+    }
+
+    fn error_count(&self) -> usize {
         self.diagnostics
             .iter()
-            .any(|d| d.severity == Severity::Error)
+            .filter(|d| d.severity == Severity::Error)
+            .count()
     }
 
     /// Sorted by file and line; a group problem hit by several hosts is
@@ -682,17 +687,25 @@ impl<'a> Compiler<'a> {
                 origin: raw.origin.clone(),
             });
         }
-        // A built-in check can be listed in services = [...] as it is, as
-        // if there were an empty [service.<name>]. Not a service object of
+        // A check, built-in or from the config, can be listed in
+        // services = [...] as it is, as if there were an empty
+        // [service.<name>]: a service of its own is only needed for settings
+        // or for several services from one check. Not a service object of
         // the config, so it isn't listed or reported as unused.
-        for name in builtin::NAMES {
-            if !self.objects.contains_key(name) {
+        // Line 0: messages about it point at the host that lists it.
+        let checks: Vec<(String, Origin)> = self
+            .checks
+            .iter()
+            .map(|(name, (_, origin))| {
                 let origin = Origin {
-                    file: "(built-in)".into(),
+                    file: origin.file.clone(),
                     line: 0,
                 };
-                self.objects.insert(name.into(), (Table::new(), origin));
-            }
+                (name.clone(), origin)
+            })
+            .collect();
+        for (name, origin) in checks {
+            self.objects.entry(name).or_insert((Table::new(), origin));
         }
     }
 
@@ -790,10 +803,6 @@ impl<'a> Compiler<'a> {
             };
             format!(
                 "{what}: unknown service {name:?}: services = [...] takes names, not patterns{also}"
-            )
-        } else if self.checks.contains_key(name) {
-            format!(
-                "{what}: unknown service {name:?} (there is a check {name:?}: add [service.{name}])"
             )
         } else {
             format!("{what}: unknown service {name:?}")
@@ -1203,6 +1212,10 @@ impl<'a> Compiler<'a> {
                 continue;
             }
             let what = format!("host {:?}", host.name);
+            // Services the host should have but doesn't: with errors
+            // (reported already), or turned off with `enabled = false`.
+            let mut failed = Vec::new();
+            let mut disabled = Vec::new();
             for plan in self.plan(&host, input) {
                 if config
                     .services
@@ -1215,12 +1228,16 @@ impl<'a> Compiler<'a> {
                     );
                     continue;
                 }
-                if let Some(service) = self.service(config, host_idx, input, &plan) {
-                    config.services.push(service);
+                let errors = self.sink.error_count();
+                match self.service(config, host_idx, input, &plan) {
+                    Some(service) => config.services.push(service),
+                    None if self.sink.error_count() > errors => failed.push(plan.name),
+                    None => disabled.push(plan.name),
                 }
             }
 
             if let Some(hc) = &host.host_check
+                && !failed.contains(hc)
                 && !config
                     .services
                     .iter()
@@ -1230,33 +1247,32 @@ impl<'a> Compiler<'a> {
                     .sources
                     .get("host_check")
                     .map_or(&host.origin, |s| &s.origin);
-                // It names a service, which is easily mixed up with the
-                // check or the plugin (check_ping): say what it can be.
-                let services: Vec<&str> = config
-                    .services
-                    .iter()
-                    .filter(|s| s.host == host_idx)
-                    .map(|s| s.name.as_str())
-                    .collect();
-                let mut msg = format!("{what}: host_check {hc:?} is not a service on it");
-                if !services.is_empty() {
-                    msg += &format!("; it names one of its services: {}", services.join(", "));
-                }
-                if host.address != host.name {
-                    msg += "; without host_check, a host with an address uses ping";
+                let mut msg = format!("{what}: host_check {hc:?} ");
+                if disabled.contains(hc) {
+                    msg += "is turned off on it (enabled = false)";
+                } else {
+                    // Any service or check can be the host check; a plugin
+                    // (check_ping) is easily taken for one.
+                    msg += "is no service or check (it takes their names, not a plugin's)";
+                    if host.address != host.name {
+                        msg += "; without host_check, a host with an address uses ping";
+                    }
                 }
                 self.sink.error(Some(origin), msg);
             }
+            // `graph` only picks what the host page shows. A host without
+            // that service (or with its graphs off) shows its host check's
+            // graph instead, as without `graph`: common when a host group
+            // sets it for members that don't all have the service.
             if let Some(graph) = &host.graph
                 && !config
                     .services
                     .iter()
-                    .any(|s| s.host == host_idx && s.name == *graph)
+                    .any(|s| s.host == host_idx && s.name == *graph && s.settings.graphs)
             {
-                self.sink.warning(
-                    Some(&host.origin),
-                    format!("{what}: graph {graph:?} is not a service on it"),
-                );
+                let host = &mut config.hosts[host_idx];
+                host.graph = None;
+                host.sources.remove("graph");
             }
         }
     }

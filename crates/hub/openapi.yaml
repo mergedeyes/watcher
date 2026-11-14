@@ -73,7 +73,7 @@ paths:
 
   /hosts/{host}:
     get:
-      summary: One host with its services
+      summary: One host with its services, and its host check apart from them
       parameters: [{ $ref: "#/components/parameters/host" }]
       responses:
         "200":
@@ -84,13 +84,15 @@ paths:
                 type: object
                 properties:
                   host: { $ref: "#/components/schemas/HostView" }
-                  services: { type: array, items: { $ref: "#/components/schemas/ServiceView" } }
+                  services: { type: array, items: { $ref: "#/components/schemas/ServiceView" }, description: The host's services, without its host check }
+                  check: { oneOf: [{ $ref: "#/components/schemas/ServiceView" }, { type: "null" }], description: "The host check: its state is the host's" }
                   origin: { type: string, description: "file:line" }
         "404": { $ref: "#/components/responses/Error" }
 
   /services:
     get:
       summary: Services, filtered, sorted and paged
+      description: Host checks are not listed; their state is their host's (`/hosts`). They are reachable as `/services/{host}/{service}`.
       parameters:
         - { name: host, in: query, schema: { type: string } }
         - { name: hostgroup, in: query, description: Services of hosts in this host group, schema: { type: string } }
@@ -451,6 +453,7 @@ paths:
   /summary:
     get:
       summary: Host and service totals
+      description: Service totals leave out host checks, which count as their hosts.
       responses:
         "200":
           description: OK
@@ -461,6 +464,10 @@ paths:
   /names:
     get:
       summary: All host names and the distinct service names, for suggestions
+      parameters:
+        - { name: host, in: query, schema: { type: string }, description: "Only services on this host." }
+        - { name: hostgroup, in: query, schema: { type: string }, description: "Only services on the hosts of this host group." }
+        - { name: graphs, in: query, schema: { type: boolean, default: false }, description: "Only services with graphs on: what a host's `graph` can show." }
       responses:
         "200":
           description: OK

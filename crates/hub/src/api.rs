@@ -185,8 +185,8 @@ async fn health(AxState(hub): Shared) -> Json<serde_json::Value> {
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .config
-        .services
-        .len();
+        .listed_services()
+        .count();
     Json(json!({
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
@@ -218,7 +218,7 @@ async fn host(AxState(hub): Shared, Path(name): Path<String>) -> ApiResult<serde
         .config
         .host_named(&name)
         .ok_or_else(|| ApiError::NotFound(format!("no host {name:?}")))?;
-    let (view, services) = list::host_view(&live, index, SystemTime::now());
+    let (view, services, check) = list::host_view(&live, index, SystemTime::now());
     let flags: Vec<watcher_store::Flag> = live
         .ops
         .flags
@@ -230,6 +230,7 @@ async fn host(AxState(hub): Shared, Path(name): Path<String>) -> ApiResult<serde
         "host": view,
         "flags": flags,
         "services": services,
+        "check": check,
         "origin": host.origin.to_string(),
     })))
 }
@@ -281,12 +282,33 @@ async fn summary(AxState(hub): Shared) -> Response {
         .into_response()
 }
 
+/// Which services `GET /names` lists.
+#[derive(Deserialize)]
+struct NamesQuery {
+    /// Only those on this host.
+    host: Option<String>,
+    /// Only those on the hosts of this host group.
+    hostgroup: Option<String>,
+    /// Only those with graphs on: what a host's `graph` can show.
+    #[serde(default)]
+    graphs: bool,
+}
+
 /// `GET /names`: all host names and the distinct service names, for
 /// suggestions.
-async fn names(AxState(hub): Shared) -> Json<serde_json::Value> {
+async fn names(AxState(hub): Shared, Query(q): Query<NamesQuery>) -> Json<serde_json::Value> {
     let config = hub.config();
     let hosts: Vec<&str> = config.hosts.iter().map(|h| h.name.as_str()).collect();
-    let services: BTreeSet<&str> = config.services.iter().map(|s| s.name.as_str()).collect();
+    let services: BTreeSet<&str> = config
+        .listed_services()
+        .filter(|s| {
+            let host = config.host(s);
+            q.host.as_ref().is_none_or(|h| host.name == *h)
+                && q.hostgroup.as_ref().is_none_or(|g| host.in_group(g))
+                && (!q.graphs || s.settings.graphs)
+        })
+        .map(|s| s.name.as_str())
+        .collect();
     Json(json!({ "hosts": hosts, "services": services }))
 }
 

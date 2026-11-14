@@ -21,7 +21,11 @@
 	let name = $derived(page.params.host ?? '');
 	let host = $state<HostView | null>(null);
 	let services = $state<ServiceView[]>([]);
-	const find = (service: string) => services.find((s) => s.service === service);
+	/** The host check: the host's own, not one of its services. */
+	let check = $state<ServiceView | null>(null);
+	const find = (service: string) => services.find((s) => s.service === service) ?? (check?.service === service ? check : undefined);
+	/** What the graph picker offers: the services with graphs, and the host check. */
+	let graphable = $derived([...services, ...(check ? [check] : [])].filter((s) => s.graphs).map((s) => s.service).sort());
 
 	/** The service whose graphs show: picked (`?graph=`), or the host's `graph`. */
 	let picked = $derived(page.url.searchParams.get('graph') ?? host?.graph ?? null);
@@ -73,6 +77,7 @@
 				if (current !== name) return;
 				host = r.host;
 				services = r.services;
+				check = r.check;
 				origin = r.origin;
 				flags = r.flags;
 				missing = false;
@@ -89,6 +94,7 @@
 		if (current !== loaded) {
 			host = null;
 			services = [];
+			check = null;
 		}
 		load(current);
 	});
@@ -107,6 +113,7 @@
 	$effect(() =>
 		live.watch({ hosts: [name] }, (v) => {
 			patchRow(services, v);
+			if (check && v.service === check.service) check = v;
 			if (host) patchHost(host, v);
 		})
 	);
@@ -201,7 +208,7 @@
 		{#snippet picker()}
 			<select class="pick" aria-label="Service" value={graph ?? ''} onchange={(e) => pick(e.currentTarget.value)}>
 				{#if !graph}<option value="">–</option>{/if}
-				{#each services.filter((s) => s.graphs).map((s) => s.service).sort() as s (s)}<option value={s}>{s}</option>{/each}
+				{#each graphable as s (s)}<option value={s}>{s}{s === host?.check ? ' (host check)' : ''}</option>{/each}
 			</select>
 		{/snippet}
 		{#if graph}

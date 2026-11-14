@@ -10,21 +10,21 @@ A service group is a set of services. It has two uses:
 ```toml
 [servicegroup.linux-basics]
 title = "Linux Basics"
-services = ["ping", "load", "disk_root"]
+services = ["ssh", "load", "disk_root"]
 
 [hostgroup.linux]
 members = ["*"]
 servicegroups = ["linux-basics"]
 ```
 
-Every host gets `ping`, `load` and `disk_root`.
+Every host gets `ssh`, `load` and `disk_root`.
 
 ## Fields
 
 | Field | Default | Description |
 |---|---|---|
 | `title` | | Name shown in the web UI. |
-| `services` | | Names of the services in the group. A [built-in check](check.md#built-in-checks) like `http` or `tls` can be listed as it is, without a `[service.<name>]`. |
+| `services` | | Names of the services in the group. A [check](check.md) can be listed as it is, without a `[service.<name>]`: a [built-in](check.md#built-in-checks) one like `http` or `tls`, or one of yours. |
 
 ## Members
 
@@ -57,7 +57,7 @@ name = "db01"
 ```toml
 [servicegroup.server]
 title = "Server Basics"
-services = ["ping", "ssh", "load"]
+services = ["ssh", "load"]
 
 [hostgroup.all]
 members = ["*"]

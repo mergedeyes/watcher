@@ -827,7 +827,7 @@ fn reports_problems_with_locations() {
 command = "check_load"
 
 [hostgroup.g]
-services = ["load"]
+services = ["lod"]
 
 [[host]]
 name = "web01"
@@ -856,7 +856,7 @@ name = "h"
     ]);
     let msgs = messages(&diags);
     for expected in [
-        "a.toml:5: error: hostgroup \"g\": unknown service \"load\" (there is a check \"load\": add [service.load])",
+        "a.toml:5: error: hostgroup \"g\": unknown service \"lod\"",
         "a.toml:8: error: host \"web01\": unknown hostgroup \"nope\"",
         "a.toml:12: error: host \"web01\" is already defined at a.toml:8",
         "a.toml:15: error: service \"lonely\": no check \"lonely\"; set check, command or passive = true",
@@ -1870,9 +1870,118 @@ host_check = "check_pingg"
     assert_eq!(
         messages(&diags),
         [
-            "a.toml:2: error: host \"PROXMOX\": host_check \"check_pingg\" is not a service on it; it names one of its services: tls; without host_check, a host with an address uses ping",
+            "a.toml:2: error: host \"PROXMOX\": host_check \"check_pingg\" is no service or check (it takes their names, not a plugin's); without host_check, a host with an address uses ping",
         ]
     );
+}
+
+#[test]
+fn hints_for_host_check() {
+    // A host check that is turned off, and one with errors of its own:
+    // each says what is wrong, reported once.
+    let (_, diags) = compile(&[(
+        "a.toml",
+        r#"
+[[host]]
+name = "b"
+host_check = "ping"
+service.ping.enabled = false
+
+[[host]]
+name = "c"
+host_check = "tcp"
+"#,
+    )]);
+    assert_eq!(
+        messages(&diags),
+        [
+            "a.toml:2: error: host \"b\": host_check \"ping\" is turned off on it (enabled = false)",
+            "a.toml:7: error: host \"c\": service \"tcp\": vars.port is not set: the port",
+        ]
+    );
+}
+
+#[test]
+fn graph_falls_back_to_the_host_check() {
+    // The host group's graph fits "a", which has `load`; "b" doesn't have
+    // it and "c" has its graphs off: both show their host check's graph.
+    let (config, diags) = compile(&[(
+        "a.toml",
+        r#"
+[service.load]
+command = "true"
+
+[hostgroup.g]
+members = ["*"]
+graph = "load"
+
+[[host]]
+name = "a"
+address = "10.0.0.1"
+services = ["load"]
+
+[[host]]
+name = "b"
+address = "10.0.0.2"
+
+[[host]]
+name = "c"
+address = "10.0.0.3"
+services = ["load"]
+service.load.graphs = false
+"#,
+    )]);
+    assert_eq!(messages(&diags), Vec::<String>::new());
+    let graph = |name: &str| {
+        let host = config.hosts.iter().find(|h| h.name == name).unwrap();
+        (host.graph_check(), host.sources.contains_key("graph"))
+    };
+    assert_eq!(graph("a"), (Some("load"), true));
+    assert_eq!(graph("b"), (Some("ping"), false));
+    assert_eq!(graph("c"), (Some("ping"), false));
+}
+
+#[test]
+fn checks_can_be_listed_as_services() {
+    // No [service.x] for any of them: a check is a service as it is.
+    let (config, diags) = compile(&[(
+        "a.toml",
+        r#"
+[check.load]
+command = "check_load -w $warn$"
+vars.warn = "5"
+
+[check.swap]
+command = "check_swap"
+
+[check.alive]
+command = "check_alive $host.address$"
+
+[servicegroup.linux]
+services = ["swap"]
+
+[hostgroup.g]
+members = ["web01"]
+servicegroups = ["linux"]
+
+[[host]]
+name = "web01"
+address = "10.0.0.1"
+services = ["load"]
+host_check = "alive"
+  [host.service.load]
+  vars.warn = "8"
+"#,
+    )]);
+    assert_eq!(messages(&diags), Vec::<String>::new());
+    let load = config.service("web01/load").unwrap();
+    assert_eq!(load.check.as_deref(), Some("load"));
+    assert_eq!(load.command_text.as_deref(), Some("check_load -w $warn$"));
+    assert_eq!(load.vars["warn"], "8");
+    assert!(config.service("web01/swap").is_some());
+    assert!(config.service("web01/alive").is_some());
+    // They aren't service objects of the config.
+    assert!(config.service_objects.is_empty());
 }
 
 #[test]

@@ -97,8 +97,9 @@ in single quotes, or the shell reads the `!`.
 ## 4. Add the Proxmox VE server
 
 Add a host for the server, with the login and the checks you want. In the
-web UI: Configuration → Hosts → Add Host, the **Proxmox VE** section. As a
-file, for example `conf.d/proxmox.toml`:
+web UI: Configuration → Hosts → Add Host → **Proxmox VE**, which opens the
+host form with its Proxmox VE section. As a file, for example
+`conf.d/proxmox.toml`:
 
 ```toml
 [[host]]

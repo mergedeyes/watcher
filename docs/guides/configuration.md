@@ -55,7 +55,9 @@ Changes to `watcher.toml` itself need a restart.
 
 A **check** describes a command. A **service** uses a check and is put on
 hosts. A service on a host has the ID `host/service`, for example
-`web01/http`.
+`web01/http`. A check can also be put on hosts as it is, without a
+service: you only need a `[service.<name>]` for settings of its own, or
+for several services from one check.
 
 ```
 check ─▶ service ─▶ host
@@ -168,10 +170,10 @@ watcher config check --services     # also list every service with its command
 ```
 
 ```
-OK: 3 files, 1 host, 2 checks, 2 services, 2 on hosts
+OK: 3 files, 1 host, 2 checks, 2 services, 1 on hosts, 1 host check
 
   web01/http  every 1m     check_http -H 10.0.0.5 -u /
-  web01/ping  every 1m     check_ping -H 10.0.0.5 -w '100,20%' -c '500,60%'
+  web01/ping  every 1m     check_ping -H 10.0.0.5 -w '100,20%' -c '500,60%'  (host check)
 ```
 
 Errors are shown with file and line, and the command exits with code 1:

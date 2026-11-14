@@ -40,14 +40,14 @@ Requests with a session cookie that change something need a matching
 |---|---|
 | `GET health` | Status and version. |
 | `GET hosts` | Hosts with their state; filters below. |
-| `GET hosts/{host}` | One host with its services. |
+| `GET hosts/{host}` | One host with its services, and its host check apart as `check`. Lists and totals of services (`services`, `summary`, `groups`, `names`) leave host checks out; they count as their hosts. |
 | `GET services` | Services; filters below. |
 | `GET services/{host}/{service}` | One service with its last result. |
 | `POST services/{host}/{service}/result` | Submit a result for a passive service. |
 | `POST services/{host}/{service}/run` | Run the service's command once. The result is shown, not recorded. |
 | `GET groups` | Host groups, service groups and downtime groups, with the number of hosts and services in each state. |
 | `GET summary` | The number of hosts and services in each state, and how many problems are unhandled. |
-| `GET names` | All host names and the service names, for suggestions. |
+| `GET names` | All host names and the service names, for suggestions. `host=`, `hostgroup=`: only the services on that host or the hosts of that group. `graphs=true`: only services with graphs on. |
 | `GET stream` | Live updates as Server-Sent Events. |
 
 Filters for `GET services`:

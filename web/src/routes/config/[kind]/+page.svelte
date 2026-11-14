@@ -4,6 +4,7 @@
 	import type { ConfigObject } from '#lib/api.ts';
 	import { config, editHref, fileHref, objectId } from '#lib/config.svelte.ts';
 	import ConfigHead from '#lib/ConfigHead.svelte';
+	import EditMenu from '#lib/EditMenu.svelte';
 	import { live } from '#lib/live.svelte.ts';
 	import { RELATIONS, remote } from '#lib/membership.ts';
 	import { KINDS } from '#lib/schema.ts';
@@ -93,7 +94,17 @@
 			<h1>{kind.label} <span class="muted">{count(rows.length + builtins.length)}</span></h1>
 			<div class="actions">
 				<input type="search" placeholder="Search" bind:value={query} aria-label="Search" />
-				{#if config.writable}
+				{#if config.writable && kind.kind === 'host'}
+					<!-- Kinds of hosts with settings of their own get a form with those settings open. -->
+					<EditMenu
+						label="Add Host"
+						primary
+						targets={[
+							{ label: 'Host', href: editHref(kind.path) },
+							{ label: 'Proxmox VE', href: `${editHref(kind.path)}?type=proxmox`, hint: 'a Proxmox VE server, or a VM or container on one' }
+						]}
+					/>
+				{:else if config.writable}
 					<a class="btn primary" href={editHref(kind.path)}>Add {kind.one}</a>
 				{/if}
 			</div>

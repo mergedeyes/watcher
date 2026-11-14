@@ -277,9 +277,18 @@ fn summary(out: &mut impl Write, config: &Config, warnings: usize) -> io::Result
         plural(config.files.len(), "file"),
         plural(config.hosts.len(), "host"),
         plural(config.checks.len(), "check"),
-        plural(config.service_objects.len(), "service"),
-        format!("{} on hosts", config.services.len()),
     ];
+    // Checks listed as services need no [service.x]: "0 services" would
+    // read as if nothing ran.
+    if !config.service_objects.is_empty() {
+        parts.push(plural(config.service_objects.len(), "service"));
+    }
+    // Host checks run for their hosts, not as one of their services.
+    let host_checks = config.services.len() - config.listed_services().count();
+    parts.push(format!("{} on hosts", config.services.len() - host_checks));
+    if host_checks > 0 {
+        parts.push(plural(host_checks, "host check"));
+    }
     if !config.contacts.is_empty() {
         parts.push(plural(config.contacts.len(), "contact"));
     }
@@ -311,7 +320,15 @@ fn print_services(out: &mut impl Write, config: &Config) -> io::Result<()> {
                 (timing, "(passive)".to_string())
             }
         };
-        writeln!(out, "  {:<width$}  {timing:<11}  {command}", service.id)?;
+        let role = match config.is_host_check(service) {
+            true => "  (host check)",
+            false => "",
+        };
+        writeln!(
+            out,
+            "  {:<width$}  {timing:<11}  {command}{role}",
+            service.id
+        )?;
     }
     Ok(())
 }

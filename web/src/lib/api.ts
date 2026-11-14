@@ -686,11 +686,12 @@ export const api = {
 	services: (q: ServiceQuery = {}) => get<ServiceList>(`/services?${params(q)}`),
 	hosts: (q: HostQuery = {}) => get<HostList>(`/hosts?${params(q)}`),
 	summary: () => get<Summary>('/summary'),
-	/** All host names and the distinct service names. */
-	names: () => get<{ hosts: string[]; services: string[] }>('/names'),
+	/** All host names and the distinct service names; the services only on `host` or `hostgroup`, with `graphs` on. */
+	names: (q: { host?: string; hostgroup?: string; graphs?: boolean } = {}) =>
+		get<{ hosts: string[]; services: string[] }>(`/names?${params(q)}`),
 	watch: (stream: string, watch: Watch) => send<unknown>('PUT', `/stream/${seg(stream)}`, watch),
 	host: (name: string) =>
-		get<{ host: HostView; services: ServiceView[]; origin: string; flags: Flag[] }>(`/hosts/${seg(name)}`),
+		get<{ host: HostView; services: ServiceView[]; check: ServiceView | null; origin: string; flags: Flag[] }>(`/hosts/${seg(name)}`),
 	service: (host: string, service: string) =>
 		get<ServiceDetail>(`/services/${seg(host)}/${seg(service)}`),
 	series: (host: string, service: string) =>

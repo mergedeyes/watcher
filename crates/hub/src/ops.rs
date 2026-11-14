@@ -1085,7 +1085,7 @@ pub(crate) async fn process(State(hub): Shared) -> Result<Json<serde_json::Value
         "notifications": ops.notifications,
         "checks": ops.checks,
         "hosts": config.hosts.len(),
-        "services": config.services.len(),
+        "services": config.listed_services().count(),
         "scheduler": {
             "jobs": schedule.len(),
             "running": running,

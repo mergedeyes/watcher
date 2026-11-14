@@ -45,6 +45,11 @@ export interface Field {
 export interface Group {
 	title: string;
 	fields: Field[];
+	/**
+	 * Settings only some objects have (Proxmox VE): the section shows when
+	 * the object has them, or once added with its button or `?type=`.
+	 */
+	extra?: string;
 }
 
 const NAME: Field = { key: 'name', label: 'Name', type: 'text', required: true };
@@ -94,8 +99,8 @@ const SERVICEGROUPS: Field = {
 	suggest: 'servicegroup',
 	help: 'their services, comma-separated'
 };
-const HOST_CHECK: Field = { key: 'host_check', label: 'Host Check', type: 'text', help: 'service that gives UP/DOWN; default with an address: ping' };
-const GRAPH: Field = { key: 'graph', label: 'Graph', type: 'text', help: 'host page graphs; default: Host Check' };
+const HOST_CHECK: Field = { key: 'host_check', label: 'Host Check', type: 'text', help: 'service or check that gives UP/DOWN; default with an address: ping' };
+const GRAPH: Field = { key: 'graph', label: 'Graph', type: 'text', help: 'host page graphs; default, or if the host lacks it: Host Check' };
 const SSH: Field[] = [
 	{ key: 'ssh.user', label: 'SSH User', type: 'text', placeholder: 'monitor' },
 	{ key: 'ssh.port', label: 'SSH Port', type: 'int', placeholder: '22' },
@@ -148,24 +153,30 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 				{ key: 'address', label: 'Address', type: 'text', placeholder: 'defaults to name' },
 				{ key: 'groups', label: 'Host Groups', type: 'list', suggest: 'hostgroup', help: 'comma-separated' },
 				{ key: 'node', label: 'Node', type: 'text', placeholder: 'local' },
-				{ ...HOST_CHECK, help: 'service that gives UP/DOWN; default: from host groups' },
+				{ ...HOST_CHECK, help: 'service or check that gives UP/DOWN; default: from host groups' },
 				GRAPH
 			]
 		},
-		{ title: 'Services', fields: [SERVICES, SERVICEGROUPS] },
+		{
+			// One place for everything about the host's services: what it
+			// gets, and settings of its own for any of them.
+			title: 'Services on This Host',
+			fields: [
+				{ ...SERVICES, help: 'services or checks, comma-separated' },
+				SERVICEGROUPS,
+				{ key: 'service', label: 'Settings', type: 'services', help: 'every service the host gets; open one to change it on this host only' }
+			]
+		},
 		{ title: 'SSH', fields: SSH.map((f) => ({ ...f, help: f.help ?? 'for run_on = "host"; default: from host groups' })) },
 		{
 			title: 'Proxmox VE',
+			extra: 'proxmox',
 			fields: [
 				...PROXMOX_LOGIN.map((f) => ({ ...f, exclusive: ['proxmox.host'] })),
 				{ key: 'proxmox.discover', label: 'Discover', type: 'bool', default: false, exclusive: ['proxmox.host'], help: 'offer its VMs and containers as hosts (Configuration → Discovery)' },
 				{ key: 'proxmox.host', label: 'On Host', type: 'text', suggestOne: 'host', exclusive: ['proxmox.secret'], help: 'for a VM or container: the Proxmox VE host it runs on' },
 				{ key: 'proxmox.vmid', label: 'VM ID', type: 'int', exclusive: ['proxmox.secret'], placeholder: '100', help: 'with On Host' }
 			]
-		},
-		{
-			title: 'Host Services',
-			fields: [{ key: 'service', label: 'Overrides', type: 'services', help: 'settings of assigned services on this host, or one-off services' }]
 		},
 		{ title: 'Other', fields: [VARS, ENABLED] }
 	],
@@ -179,7 +190,8 @@ export const SCHEMAS: Record<Kind, Group[]> = {
 			]
 		},
 		{ title: 'Services', fields: [{ ...SERVICES, help: 'for every member, comma-separated' }, SERVICEGROUPS] },
-		{ title: 'Hosts Get', fields: [HOST_CHECK, GRAPH, ...SSH, ...PROXMOX_LOGIN, { ...VARS, help: 'host var defaults' }] }
+		{ title: 'Hosts Get', fields: [HOST_CHECK, GRAPH, ...SSH, { ...VARS, help: 'host var defaults' }] },
+		{ title: 'Proxmox VE', extra: 'proxmox', fields: PROXMOX_LOGIN.map((f) => ({ ...f, help: f.help ?? 'the API login for its hosts' })) }
 	],
 	servicegroup: [
 		{
@@ -354,8 +366,19 @@ export const SELECTOR_FIELDS: Record<'host' | 'service', [string, string, string
 	]
 };
 
-/** A host service row: name, check, groups, enabled (`yes`/`no`/``), original name. */
-export type ServiceRow = [string, string, string, string, string];
+/** Settings of one service on a host (`[host.service.<name>]`). */
+export interface ServiceRow {
+	name: string;
+	/** `yes`, `no`, or `` for the service's own. */
+	enabled: string;
+	interval: string;
+	vars: [string, string][];
+	thresholds: [string, string, string][];
+	/** Its key in the file; `` for a row the form added. */
+	orig: string;
+	/** Written even without settings: a service only this entry puts on the host. */
+	own: boolean;
+}
 
 /** A schedule window row: days (comma-separated), from, to. */
 export type WindowRow = [string, string, string];
@@ -466,6 +489,42 @@ export function selectorFromForm(form: Record<string, string>, raw: unknown, sel
 	return out;
 }
 
+/** Rows for the scalar vars of a table; table vars (for_each data) aren't shown. */
+function varsToRows(v: unknown): [string, string][] {
+	return Object.entries(isTable(v) ? v : {})
+		.filter(([, x]) => !isTable(x))
+		.map(([k, x]) => [k, str(x)] as [string, string]);
+}
+
+/** The vars to write: the rows, and the table vars of `before`. */
+function varsFromRows(rows: [string, string][], before: unknown): Record<string, unknown> | undefined {
+	const tables = Object.entries(isTable(before) ? before : {}).filter(([, x]) => isTable(x));
+	const all = [...tables, ...rows.filter(([k]) => k.trim()).map(([k, x]) => [k.trim(), x] as [string, unknown])];
+	return all.length === 0 ? undefined : Object.fromEntries(all);
+}
+
+function thresholdsToRows(v: unknown): [string, string, string][] {
+	return Object.entries((v as Record<string, Record<string, unknown>>) ?? {}).map(
+		([metric, t]) => [metric, str(t?.warn), str(t?.crit)] as [string, string, string]
+	);
+}
+
+function thresholdsFromRows(rows: [string, string, string][]): Record<string, unknown> | undefined {
+	const set = rows.filter(([m]) => m.trim());
+	if (set.length === 0) return undefined;
+	return Object.fromEntries(
+		set.map(([m, warn, crit]) => {
+			const t: Record<string, string> = {};
+			if (warn.trim()) t.warn = warn.trim();
+			if (crit.trim()) t.crit = crit.trim();
+			return [m.trim(), t];
+		})
+	);
+}
+
+/** Keys of a host service entry the form shows. */
+export const SERVICE_ROW_KEYS = ['enabled', 'interval', 'vars', 'thresholds'];
+
 /** Form values for an object's fields (or for a new object). */
 export function toForm(kind: Kind, raw: Record<string, unknown>): FormValues {
 	const values: FormValues = {};
@@ -479,14 +538,10 @@ export function toForm(kind: Kind, raw: Record<string, unknown>): FormValues {
 				values[f.key] = v === undefined ? (f.default ?? false) : v === true;
 				break;
 			case 'vars':
-				values[f.key] = Object.entries(isTable(v) ? v : {})
-					.filter(([, x]) => !isTable(x))
-					.map(([k, x]) => [k, str(x)] as [string, string]);
+				values[f.key] = varsToRows(v);
 				break;
 			case 'thresholds':
-				values[f.key] = Object.entries((v as Record<string, Record<string, unknown>>) ?? {}).map(
-					([metric, t]) => [metric, str(t?.warn), str(t?.crit)] as [string, string, string]
-				);
+				values[f.key] = thresholdsToRows(v);
 				break;
 			case 'selector':
 				values[f.key] = selectorToForm(v, f.selects ?? 'host');
@@ -498,10 +553,18 @@ export function toForm(kind: Kind, raw: Record<string, unknown>): FormValues {
 				});
 				break;
 			case 'services':
-				values[f.key] = Object.entries(isTable(v) ? v : {}).map(([name, e]) => {
+				values[f.key] = Object.entries(isTable(v) ? v : {}).map(([name, e]): ServiceRow => {
 					const entry = isTable(e) ? e : {};
-					const enabled = entry.enabled === false ? 'no' : entry.enabled === true ? 'yes' : '';
-					return [name, str(entry.check), list(entry.groups).join(', '), enabled, name] as ServiceRow;
+					return {
+						name,
+						enabled: entry.enabled === false ? 'no' : entry.enabled === true ? 'yes' : '',
+						interval: str(entry.interval),
+						vars: varsToRows(entry.vars),
+						thresholds: thresholdsToRows(entry.thresholds),
+						orig: name,
+						// Until the form knows what the host gets: keep it.
+						own: true
+					};
 				});
 				break;
 			default:
@@ -515,21 +578,27 @@ function same(a: unknown, b: unknown) {
 	return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/** The service entries to write; keys of an entry the form doesn't show are kept. */
+/**
+ * The service entries to write; keys of an entry the form doesn't show are
+ * kept. A row without any settings is left out, unless it is `own`.
+ */
 function servicesFromForm(rows: ServiceRow[], raw: unknown): unknown {
 	const before = isTable(raw) ? raw : {};
 	const out: Record<string, unknown> = {};
-	for (const [name, check, groups, enabled, orig] of rows) {
-		if (!name.trim()) continue;
-		const entry: Record<string, unknown> = isTable(before[orig]) ? copy(before[orig]) : {};
+	for (const row of rows) {
+		const name = row.name.trim();
+		if (!name) continue;
+		const old = isTable(before[row.orig]) ? before[row.orig] as Record<string, unknown> : {};
+		const entry: Record<string, unknown> = copy(old);
 		const set = (key: string, value: unknown) => {
 			if (value === undefined || value === '') delete entry[key];
-			else entry[key] = value;
+			else entry[key] = same(value, old[key]) ? old[key] : value;
 		};
-		set('check', check.trim());
-		set('groups', items(groups).length ? items(groups) : undefined);
-		set('enabled', enabled === 'no' ? false : enabled === 'yes' ? true : undefined);
-		out[name.trim()] = entry;
+		set('enabled', row.enabled === 'no' ? false : row.enabled === 'yes' ? true : undefined);
+		set('interval', row.interval.trim());
+		set('vars', varsFromRows(row.vars, old.vars));
+		set('thresholds', thresholdsFromRows(row.thresholds));
+		if (Object.keys(entry).length > 0 || row.own) out[name] = entry;
 	}
 	return Object.keys(out).length ? out : undefined;
 }
@@ -562,31 +631,13 @@ export function fromForm(kind: Kind, raw: Record<string, unknown>, values: FormV
 				next = text === '' ? undefined : Number.isFinite(Number(text)) ? Number(text) : text;
 				break;
 			}
-			case 'vars': {
-				const rows = (v as [string, string][]).filter(([k]) => k.trim());
-				// Table vars (for_each data) aren't in the form: keep them.
-				const tables = Object.entries(isTable(before) ? (before as Record<string, unknown>) : {}).filter(([, x]) =>
-					isTable(x)
-				);
-				const all = [...tables, ...rows.map(([k, x]) => [k.trim(), x] as [string, unknown])];
-				next = all.length === 0 ? undefined : Object.fromEntries(all);
+			case 'vars':
+				// Table vars (for_each data) aren't in the form: kept.
+				next = varsFromRows(v as [string, string][], before);
 				break;
-			}
-			case 'thresholds': {
-				const rows = (v as [string, string, string][]).filter(([m]) => m.trim());
-				next =
-					rows.length === 0
-						? undefined
-						: Object.fromEntries(
-								rows.map(([m, warn, crit]) => {
-									const t: Record<string, string> = {};
-									if (warn.trim()) t.warn = warn.trim();
-									if (crit.trim()) t.crit = crit.trim();
-									return [m.trim(), t];
-								})
-							);
+			case 'thresholds':
+				next = thresholdsFromRows(v as [string, string, string][]);
 				break;
-			}
 			case 'selector':
 				next = selectorFromForm(v as Record<string, string>, before, f.selects ?? 'host');
 				break;

@@ -134,9 +134,16 @@ the rows you see right away. When a state changes, the list is loaded
 again, so services move into or out of it. Paused keeps the page still;
 Refresh loads it once.
 
+The host page shows the host check with the host's state, under Host
+State Information. It isn't in the host's list of services, and service
+totals don't count it.
+
 **Graphs** show the last 15 minutes by default, with ranges down to 30
 seconds. Drag to zoom in, double-click to reset. The host page shows the
 host's `graph` service, or the host check, and you can pick another one.
+In the host and host group forms, the Graph field suggests only services
+the host (or a host of the group) has, with graphs on. A service you just
+added shows up there once you have saved it.
 `graphs = false` on a check or service turns its graphs off.
 
 ## Configuration
@@ -162,8 +169,21 @@ How the forms work:
   are. Clearing a field removes the key from the file.
 - Text fields suggest values (objects, scripts, vars, metrics, durations),
   but you can type anything.
-- The host form covers host groups, services, service groups, changes to
-  assigned services, and services only this host has.
+- The host form has one section for its services, **Services on This
+  Host**. You add services and service groups there. Below them, a table
+  lists every service the host gets and where it comes from: the host
+  itself, a service group, a host group, or the host check. Open a row to
+  change the service on this host only: Enabled, Check Interval,
+  Variables and Thresholds. Other settings written by hand for that
+  service, like `check`, are kept and named in the row. A service that is
+  on the host only through such a hand-written entry shows as "this host
+  only" and can be removed with ×.
+- Settings that only some hosts have, like Proxmox VE, show only on the
+  hosts that have them. **Add Host** opens a menu: **Host**, or
+  **Proxmox VE** for a Proxmox VE server or a VM or container on one,
+  which opens the form with its Proxmox VE section. On another host or a
+  host group, **Add Proxmox VE settings** below the form adds the
+  section, and **Remove** in the section takes the settings out again.
 - A service runs either a check or a command of its own: while one is
   set, the other field is greyed out. A check runs either a command or a
   built-in check, in the same way.

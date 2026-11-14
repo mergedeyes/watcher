@@ -14,7 +14,7 @@ script that prints a result work as checks.
 | [host](objects/host.md) | A machine or device to monitor. |
 | [host group](objects/hostgroup.md) | Hosts that get the same services and settings. |
 | [service group](objects/servicegroup.md) | Services that are assigned or viewed together. |
-| host check | The service that decides whether a host is UP or DOWN. |
+| host check | The service or check that decides whether a host is UP or DOWN. It runs for the host itself and shows on the host's page, not among its services. |
 | [contact](objects/contact.md) | Someone who receives notifications: by email, webhook, Slack, Teams, Telegram, ntfy, Gotify, PagerDuty, Jira or a script. |
 | [contact group](objects/contactgroup.md) | A set of contacts. |
 | [notify rule](objects/notify.md) | Which contacts get which notifications. |

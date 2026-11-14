@@ -8,13 +8,14 @@
 	import ConfigHead from '#lib/ConfigHead.svelte';
 	import Combobox from '#lib/Combobox.svelte';
 	import ConfigTree from '#lib/ConfigTree.svelte';
+	import HostServices from '#lib/HostServices.svelte';
 	import { FileLease } from '#lib/lease.svelte.ts';
 	import LockNotice from '#lib/LockNotice.svelte';
 	import { live } from '#lib/live.svelte.ts';
 	import { Suggest } from '#lib/suggest.ts';
 	import MatchPreview from '#lib/MatchPreview.svelte';
 	import { RELATIONS, remote, without } from '#lib/membership.ts';
-	import { KINDS, SCHEMAS, SELECTOR_FIELDS, expandNames, fromForm, otherKeys, selectorFromForm, toForm, type Field, type FormValues, type ServiceRow, type WindowRow } from '#lib/schema.ts';
+	import { KINDS, SCHEMAS, SELECTOR_FIELDS, expandNames, fromForm, otherKeys, selectorFromForm, toForm, type Field, type FormValues, type Group, type ServiceRow, type WindowRow } from '#lib/schema.ts';
 
 	const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 	/** Settings of commands, which built-in checks don't have. */
@@ -73,6 +74,17 @@
 		void live.reloads;
 		api.names().then((n) => (serviceNames = n.services), () => (serviceNames = []));
 	});
+	/** What `graph` can name, as Watcher compiled the saved host or group: its services with graphs. */
+	let graphNames = $state<string[]>([]);
+	$effect(() => {
+		void live.reloads;
+		const k = kind?.kind;
+		if (name === null || (k !== 'host' && k !== 'hostgroup')) {
+			graphNames = [];
+			return;
+		}
+		api.names({ [k]: name, graphs: true }).then((n) => (graphNames = n.services), () => (graphNames = []));
+	});
 	$effect(() => {
 		if (kind && SCHEMAS[kind.kind].some((g) => g.fields.some((f) => f.scripts)))
 			api.configScripts().then((s) => (scripts = s), () => (scripts = null));
@@ -86,8 +98,29 @@
 		untrack(() => {
 			values = null;
 			dropped = [];
+			const type = page.url.searchParams.get('type');
+			added = type ? [type] : [];
+			removed = [];
 		});
 	});
+
+	/** Extra sections (Proxmox VE) added with their button or `?type=`, and those taken out. */
+	let added = $state<string[]>([]);
+	let removed = $state<string[]>([]);
+
+	/** Whether a section shows: always, or for an extra one, when set in the file or added. */
+	function shows(g: Group): boolean {
+		if (!g.extra) return true;
+		if (removed.includes(g.extra)) return false;
+		return added.includes(g.extra) || g.fields.some((f) => raw[f.key.split('.')[0]!] !== undefined);
+	}
+
+	/** Takes an extra section out: its fields are cleared, so saving removes them. */
+	function removeExtra(g: Group) {
+		for (const f of g.fields) values![f.key] = f.type === 'bool' ? (f.default ?? false) : '';
+		removed = [...removed, g.extra!];
+		added = added.filter((x) => x !== g.extra);
+	}
 
 	// Fill the form once the object is there; later reloads don't reset edits.
 	$effect(() => {
@@ -101,11 +134,12 @@
 			// "New Service" from a built-in check in the check list.
 			const preset = page.url.searchParams.get('check');
 			if (k === 'service' && name === null && cloneName === null && preset) filled.check = preset;
-			// From a service page: on a host, a row to override the service.
+			// From a service page: the row of that service, opened.
 			const rows = filled.service as ServiceRow[] | undefined;
-			if (focus && k === 'host' && rows && !rows.some((r) => r[0] === focus)) rows.push([focus, '', '', '', '']);
+			if (focus && k === 'host' && rows && !rows.some((r) => r.name === focus)) rows.push(serviceRow(focus));
 			values = filled;
-			requestAnimationFrame(() => document.querySelector('.row.svc.focused')?.scrollIntoView({ block: 'center' }));
+			rowsSorted = false;
+			requestAnimationFrame(() => document.querySelector('.item.focused')?.scrollIntoView({ block: 'center' }));
 		});
 	});
 
@@ -163,7 +197,7 @@
 	}
 
 	let suggest = $derived(
-		new Suggest(config.objects, serviceNames, scripts?.scripts ?? [], config.builtins.map((b) => b.name))
+		new Suggest(config.objects, serviceNames, scripts?.scripts ?? [], config.builtins.map((b) => b.name), graphNames)
 	);
 
 	/** The values of a select field; built-in checks come from the server. */
@@ -224,7 +258,7 @@
 		return shown ?? '';
 	}
 
-	/** Services the host gets (as written), by name: where from. Host services with these names override them. */
+	/** Services the host gets (as written), by name: where from. Host services with these names change them on this host. */
 	let assignedServices = $derived.by(() => {
 		const out = new Map<string, string>();
 		if (kind?.kind !== 'host' || !values) return out;
@@ -244,8 +278,68 @@
 			add(listOf(g.fields.services), `hostgroup ${g.name}`);
 			for (const sg of listOf(g.fields.servicegroups)) add(groupServices(sg), `servicegroup ${sg} on hostgroup ${g.name}`);
 		}
+		// The host check: its own, a host group's, or ping for a host with an address.
+		const fromGroups = config
+			.of('hostgroup')
+			.filter((g) => listed.includes(g.name) || listOf(g.fields.members).some((m) => glob(m).test(host)))
+			.map((g) => g.fields.host_check)
+			.find((hc) => hc !== undefined);
+		const own = String(values.host_check ?? '').trim();
+		const hc = own !== '' ? own : fromGroups !== undefined ? String(fromGroups) : String(values.address ?? '').trim() ? 'ping' : '';
+		if (hc !== '' && hc !== 'false') add([hc], 'host check');
 		return out;
 	});
+
+	/** An empty row for service `name`. */
+	function serviceRow(name: string): ServiceRow {
+		return { name, enabled: '', interval: '', vars: [], thresholds: [], orig: '', own: false };
+	}
+
+	/** The `for_each` service a row belongs to (`disk` for `disk_root`), if the host gets it. */
+	function forEachBase(name: string): string | undefined {
+		return [...assignedServices.keys()].find((s) => name.startsWith(`${s}_`) && config.find('service', s)?.fields.for_each !== undefined);
+	}
+
+	/** Set once the rows from the file are sorted into the host's services. */
+	let rowsSorted = false;
+
+	// The rows follow what the host gets: one per service. A service it no
+	// longer gets loses its row and settings; an entry that alone puts a
+	// service on the host (`own`) stays until removed.
+	$effect(() => {
+		if (kind?.kind !== 'host' || !values) return;
+		const assigned = assignedServices;
+		untrack(() => {
+			const current = (values!.service as ServiceRow[] | undefined) ?? [];
+			if (!rowsSorted) {
+				for (const r of current) if (r.orig !== '' && (assigned.has(r.name) || forEachBase(r.name))) r.own = false;
+				rowsSorted = true;
+			}
+			const next = current.filter((r) => r.own || assigned.has(r.name) || forEachBase(r.name) !== undefined);
+			for (const name of assigned.keys()) if (!next.some((r) => r.name === name)) next.push(serviceRow(name));
+			const order = [...assigned.keys()];
+			const rank = (r: ServiceRow) => {
+				const i = order.indexOf(forEachBase(r.name) ?? r.name);
+				return i < 0 ? order.length : i;
+			};
+			next.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+			if (next.length !== current.length || next.some((r, i) => r !== current[i])) values!.service = next;
+		});
+	});
+
+	/** Where a row comes from, for the table. */
+	function rowFrom(row: ServiceRow): string {
+		const base = forEachBase(row.name);
+		if (base) return `for_each item of ${base}`;
+		return assignedServices.get(row.name) ?? 'this host only';
+	}
+
+	/** The interval a service has without one of its own on this host. */
+	function serviceInterval(name: string): string {
+		const svc = config.find('service', forEachBase(name) ?? name)?.fields;
+		const check = config.find('check', String(svc?.check ?? forEachBase(name) ?? name))?.fields;
+		return String(svc?.interval ?? check?.interval ?? '1m');
+	}
 
 	function glob(pattern: string): RegExp {
 		const re = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
@@ -394,8 +488,14 @@
 								</div>
 							</section>
 						{/if}
+						{#if shows(group)}
 						<section class="panel">
-							<div class="panel-title">{group.title}</div>
+							<div class="panel-title">
+								{group.title}
+								{#if group.extra}
+									<button type="button" class="btn small remove" onclick={() => removeExtra(group)}>Remove</button>
+								{/if}
+							</div>
 							<div class="fields">
 								{#each group.fields.map(shown) as f (f.key)}
 									{@const id = `f-${f.key}`}
@@ -471,30 +571,14 @@
 													onclick={() => (values![f.key] = [...rows<WindowRow>(f.key), ['', '', '']])}>Add window</button>
 											</div>
 										{:else if f.type === 'services'}
-											<div class="rows">
-												{#if rows<ServiceRow>(f.key).length > 0}
-													<div class="row svc head"><span>Service</span><span>Check</span><span>Service Groups</span><span>Enabled</span><span></span></div>
-												{/if}
-												{#each rows<ServiceRow>(f.key) as row, i (i)}
-													<div class="row svc" class:focused={focus !== null && row[0] === focus}>
-														<Combobox mono placeholder="name" bind:value={row[0]} label="Service" options={suggest.serviceNames()} />
-														<Combobox mono placeholder={row[0] || 'check'} bind:value={row[1]} label="Check" options={suggest.checkNames()} />
-														<Combobox multi placeholder="groups" bind:value={row[2]} label="Service groups" options={suggest.names('servicegroup')} />
-														<select bind:value={row[3]} aria-label="Enabled">
-															<option value="">—</option>
-															<option value="yes">yes</option>
-															<option value="no">no</option>
-														</select>
-														<button type="button" class="btn" aria-label="Remove"
-															onclick={() => (values![f.key] = rows<ServiceRow>(f.key).filter((_, j) => j !== i))}>×</button>
-														{#if kind.kind === 'host' && assignedServices.has(row[0])}
-															<span class="override">overrides service {row[0]} ({assignedServices.get(row[0])})</span>
-														{/if}
-													</div>
-												{/each}
-												<button type="button" class="btn small"
-													onclick={() => (values![f.key] = [...rows<ServiceRow>(f.key), ['', '', '', '', '']])}>Add service</button>
-											</div>
+											<HostServices
+												bind:rows={values[f.key] as ServiceRow[]}
+												from={rowFrom}
+												interval={serviceInterval}
+												written={(raw.service ?? {}) as Record<string, unknown>}
+												{suggest}
+												{focus}
+											/>
 										{:else}
 											<Combobox
 												{id}
@@ -536,7 +620,19 @@
 								{/each}
 							</div>
 						</section>
+						{/if}
 					{/each}
+					{#if SCHEMAS[kind.kind].some((g) => !shows(g))}
+						<div class="extras">
+							{#each SCHEMAS[kind.kind].filter((g) => !shows(g)) as g (g.title)}
+								<button type="button" class="btn small"
+									onclick={() => {
+										added = [...added, g.extra!];
+										removed = removed.filter((x) => x !== g.extra);
+									}}>Add {g.title} settings</button>
+							{/each}
+						</div>
+					{/if}
 				</fieldset>
 
 				{#if others.length > 0}
@@ -654,20 +750,6 @@
 		color: var(--muted);
 	}
 
-	.row.svc {
-		grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.2fr) 70px auto;
-	}
-
-	.row.svc > * {
-		min-width: 0;
-	}
-
-	.row.svc.focused {
-		outline: 2px solid var(--link);
-		outline-offset: 3px;
-		border-radius: 2px;
-	}
-
 	.also {
 		display: flex;
 		flex-wrap: wrap;
@@ -707,18 +789,6 @@
 		color: var(--muted);
 	}
 
-	.row.svc.head {
-		font-size: 11px;
-		font-weight: 600;
-		color: var(--muted);
-	}
-
-	.override {
-		grid-column: 1 / -1;
-		font-size: 11px;
-		color: var(--muted);
-	}
-
 	.rows {
 		display: grid;
 		gap: 4px;
@@ -736,6 +806,17 @@
 
 	.row.three {
 		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+	}
+
+	.extras {
+		display: flex;
+		gap: 8px;
+		margin-top: 10px;
+	}
+
+	.panel-title .remove {
+		float: right;
+		margin-top: -3px;
 	}
 
 	.btn.small {

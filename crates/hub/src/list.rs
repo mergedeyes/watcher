@@ -206,6 +206,8 @@ pub(crate) fn services(live: &Live, q: &ServiceQuery) -> Result<ServiceList, Api
         },
         None => Box::new(config.services.iter()),
     };
+    // Host checks show as their host, not as services.
+    let candidates = candidates.filter(|s| !config.is_host_check(s));
     let mut counts = Counts::default();
     let mut rows: Vec<(&Service, Option<&LiveService>)> = Vec::new();
     for s in candidates {
@@ -403,24 +405,28 @@ pub(crate) fn host_flags(live: &Live, host: &Host, now: SystemTime) -> HostFlags
     }
 }
 
-/// The view of the host at `index`, with the views of its services.
+/// The view of the host at `index`, with the views of its services and,
+/// apart from them, of its host check.
 pub(crate) fn host_view(
     live: &Live,
     index: usize,
     now: SystemTime,
-) -> (HostView, Vec<ServiceView>) {
+) -> (HostView, Vec<ServiceView>, Option<ServiceView>) {
     let config: &Config = &live.config;
     let host = &config.hosts[index];
+    let view = |s: &Service| {
+        let status = live.ops.status(config, s, now);
+        ServiceView::new(config, s, live.services.get(&s.id), &status)
+    };
+    let check = config.host_check(host).map(view);
     let services: Vec<ServiceView> = config
         .services_of(index)
-        .map(|s| {
-            let status = live.ops.status(config, s, now);
-            ServiceView::new(config, s, live.services.get(&s.id), &status)
-        })
+        .filter(|s| !config.is_host_check(s))
+        .map(view)
         .collect();
     let refs: Vec<&ServiceView> = services.iter().collect();
-    let view = HostView::new(host, &refs, &host_flags(live, host, now));
-    (view, services)
+    let host_view = HostView::new(host, check.as_ref(), &refs, &host_flags(live, host, now));
+    (host_view, services, check)
 }
 
 /// A DOWN host is unhandled unless it, or its host check, is acknowledged
@@ -552,14 +558,14 @@ pub(crate) fn summary(live: &Live, generation: u64) -> Summary {
         }
     }
     out.hosts.total = config.hosts.len();
-    for s in &config.services {
+    for s in config.listed_services() {
         let state = live.services.get(&s.id).map(|l| l.state.state);
         out.services.counts.add(state);
+        out.services.total += 1;
         if is_problem(state) && unhandled(live, s, now) {
             out.services.unhandled += 1;
         }
     }
-    out.services.total = config.services.len();
     out
 }
 
@@ -601,7 +607,7 @@ pub(crate) fn group_counts(
             }
         }
     }
-    for s in &config.services {
+    for s in config.listed_services() {
         let state = live.services.get(&s.id).map(|l| l.state.state);
         for g in &config.host(s).groups {
             if let Some(c) = hostgroups.get_mut(&g.name) {

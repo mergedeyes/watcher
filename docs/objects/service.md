@@ -5,17 +5,20 @@ hosts as you like. On a host, a service has the ID `host/service`, for
 example `web01/disk_root`.
 
 ```toml
-[service.http]
-
 [service.disk_root]
 check = "disk"
 vars.path = "/"
 interval = "5m"
 ```
 
-`[service.http]` uses the check `http`, because a service without `check`
-uses the check with the same name. `disk_root` uses the check `disk` and
-sets its own `path` and `interval`.
+`disk_root` uses the check `disk` and sets its own `path` and `interval`.
+A service without `check` uses the check with the same name.
+
+You don't need a service for every check. A check can be listed in
+`services = [...]` as it is, and is then a service with the check's
+settings. Write a `[service.<name>]` when the service needs settings of
+its own, or to make several services from one check, like `disk_root` and
+`disk_var` from `disk`.
 
 A service runs only on hosts that list it, directly or through a group.
 See [How a host gets its services](../guides/configuration.md#how-a-host-gets-its-services).
@@ -121,7 +124,7 @@ A service runs once a host or host group lists it:
 ```toml
 [hostgroup.linux]
 members = ["*"]
-services = ["ping", "disk_root"]
+services = ["load", "disk_root"]
 ```
 
 ## One service per item: for_each

@@ -21,10 +21,10 @@ services `http` and `https_cert`.
 |---|---|---|
 | `title` | | Name shown in the web UI. |
 | `members` | | Host names. `*` matches any text, `?` one character. |
-| `services` | | Services every member gets. A [built-in check](check.md#built-in-checks) like `http` or `tls` can be listed as it is, without a `[service.<name>]`. |
+| `services` | | Services every member gets. A [check](check.md) can be listed as it is, without a `[service.<name>]`: a [built-in](check.md#built-in-checks) one like `http` or `tls`, or one of yours. |
 | `servicegroups` | | Service groups every member gets, with all their services. |
-| `host_check` | | The service that decides whether its hosts are UP or DOWN. Its hosts get this service if they don't have it already. `false`: no host check. See [Host state](host.md#host-state). |
-| `graph` | | The service whose graph is shown on the host pages. |
+| `host_check` | | The service or check that decides whether its hosts are UP or DOWN. It runs for each host itself and isn't one of its services. `false`: no host check. See [Host state](host.md#host-state). |
+| `graph` | | The service whose graph is shown on the host pages. A host without that service, or with its graphs off, shows its host check's graph. |
 | `ssh` | | Login for [checks over SSH](../guides/ssh.md): `{ user, secret, port }`. See [ssh](#ssh). |
 | `proxmox` | | The Proxmox VE API login for its hosts: `{ secret, fingerprint, port, verify, discover }`. See [proxmox](#proxmox). |
 | `vars` | | Default vars for its hosts, used by `$name$` macros and `for_each`. [Built-in checks](check.md#built-in-checks) don't read them, except through macros like `$host.vars.port$`. |
@@ -59,7 +59,7 @@ including where each membership is written.
 ```toml
 [hostgroup.all]
 members = ["*"]
-services = ["ping"]
+services = ["load"]
 ```
 
 ### A group that only groups
@@ -86,7 +86,6 @@ servicegroups = ["linux-basics"]
 ```toml
 [hostgroup.switches]
 members = ["sw-*"]
-services = ["snmp_uptime"]
 host_check = "snmp_uptime"
 ```
 
