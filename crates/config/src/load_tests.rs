@@ -1874,3 +1874,28 @@ host_check = "check_pingg"
         ]
     );
 }
+
+#[test]
+fn selector_takes_builtin_checks() {
+    let (config, diags) = compile(&[(
+        "a.toml",
+        r#"
+[contact.ops]
+email = "ops@example.com"
+
+[[notify]]
+contacts = ["ops"]
+services = { checks = ["http"] }
+
+[[host]]
+name = "h"
+address = "10.0.0.1"
+services = ["http"]
+"#,
+    )]);
+    assert_eq!(messages(&diags), Vec::<String>::new());
+    assert_eq!(
+        config.service("h/http").and_then(|s| s.check.as_deref()),
+        Some("http")
+    );
+}

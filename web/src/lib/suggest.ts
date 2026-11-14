@@ -197,7 +197,7 @@ export class Suggest {
 			case 'hosts.groups':
 				return this.names('hostgroup');
 			case 'checks':
-				return this.names('check');
+				return this.checkNames();
 			case 'hosts.name':
 				return hosts();
 			default:
