@@ -10,6 +10,9 @@
 	import { Debounced, Paging, ServerList, checkId, patchHost } from '#lib/list.svelte.ts';
 	import { live } from '#lib/live.svelte.ts';
 	import Pager from '#lib/Pager.svelte';
+	import SelectBox from '#lib/SelectBox.svelte';
+	import { Selection } from '#lib/selection.svelte.ts';
+	import SelectionBar from '#lib/SelectionBar.svelte';
 	import { Sorter } from '#lib/sort.svelte.ts';
 	import Status from '#lib/Status.svelte';
 	import Totals from '#lib/Totals.svelte';
@@ -38,6 +41,9 @@
 			}
 		}
 	);
+
+	const selection = new Selection();
+	$effect(() => selection.show((list.data?.hosts ?? []).map((host) => ({ host }))));
 
 	let counts = $derived<HostCounts>(list.data?.counts ?? { up: 0, down: 0, pending: 0 });
 	let all = $derived(counts.up + counts.down + counts.pending);
@@ -90,13 +96,14 @@
 		<p class="notice">Loading…</p>
 	{:else}
 		<section class="panel">
-			<div class="panel-title">Host Status Details <span class="muted">{count(list.data.total)}</span></div>
+			<SelectionBar {selection}>Host Status Details <span class="muted">{count(list.data.total)}</span></SelectionBar>
 			{#if list.data.total === 0}
 				<div class="empty">{all === 0 && !group && !search.settled ? 'No hosts configured.' : 'No matches.'}</div>
 			{:else}
 				<table class="grid">
 					<thead>
 						<tr>
+							<th class="pick"><SelectBox {selection} /></th>
 							<th><button type="button" onclick={() => sorter.toggle('host')}>Host{sorter.mark('host')}</button></th>
 							<th><button type="button" onclick={() => sorter.toggle('status')}>Status{sorter.mark('status')}</button></th>
 							<th class="hide-narrow"><button type="button" onclick={() => sorter.toggle('address')}>Address{sorter.mark('address')}</button></th>
@@ -108,7 +115,8 @@
 					</thead>
 					<tbody>
 						{#each list.data.hosts as h (h.name)}
-							<tr data-host={h.state} oncontextmenu={(e) => actions.open(e, { host: h })}>
+							<tr data-host={h.state} class:selected={selection.has({ host: h })} oncontextmenu={(e) => actions.open(e, { host: h }, selection)}>
+								<td class="pick"><SelectBox {selection} target={{ host: h }} /></td>
 								<td class="nowrap">
 									<a href={hostHref(h.name)}>{h.name}</a>
 									{#if !h.enabled}<span class="tag">disabled</span>{/if}

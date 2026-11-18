@@ -5,6 +5,8 @@
 	import HostProblems from './HostProblems.svelte';
 	import { Paging, ServerList, checkId, patchHost } from './list.svelte.ts';
 	import Pager from './Pager.svelte';
+	import { Selection } from './selection.svelte.ts';
+	import SelectionBar from './SelectionBar.svelte';
 
 	let { title, hideEmpty = false }: { title: string; hideEmpty?: boolean } = $props();
 
@@ -19,11 +21,12 @@
 			}
 		}
 	);
+	const selection = new Selection();
 </script>
 
 {#if !(hideEmpty && (list.data?.total ?? 0) === 0)}
 	<section class="panel">
-		<div class="panel-title">{title} {#if list.data}<span class="muted">{count(list.data.total)}</span>{/if}</div>
+		<SelectionBar {selection}>{title} {#if list.data}<span class="muted">{count(list.data.total)}</span>{/if}</SelectionBar>
 		{#if list.error && !list.data}
 			<div class="empty error">{list.error}</div>
 		{:else if !list.data}
@@ -31,7 +34,7 @@
 		{:else if list.data.total === 0}
 			<div class="empty">No hosts DOWN.</div>
 		{:else}
-			<HostProblems hosts={list.data.hosts} />
+			<HostProblems hosts={list.data.hosts} {selection} />
 			<Pager {paging} total={list.data.total} />
 		{/if}
 	</section>

@@ -1,18 +1,23 @@
-<!-- Hosts that are DOWN, as in the Nagios host problems table. -->
+<!-- Hosts that are DOWN, as in the Nagios host problems table; with `selection`, a checkbox column selects rows for commands. -->
 <script lang="ts">
 	import { actions } from './actions.svelte.ts';
 	import { hostHref, type HostView } from './api.ts';
 	import Flags from './Flags.svelte';
+	import SelectBox from './SelectBox.svelte';
+	import type { Selection } from './selection.svelte.ts';
 	import { datetime, since } from './format.ts';
 	import { live } from './live.svelte.ts';
 	import Status from './Status.svelte';
 
-	let { hosts }: { hosts: HostView[] } = $props();
+	let { hosts, selection }: { hosts: HostView[]; selection?: Selection } = $props();
+
+	$effect(() => selection?.show(hosts.map((host) => ({ host }))));
 </script>
 
 <table class="grid">
 	<thead>
 		<tr>
+			{#if selection}<th class="pick"><SelectBox {selection} /></th>{/if}
 			<th>Host</th>
 			<th>Status</th>
 			<th class="hide-narrow">Last Check</th>
@@ -23,7 +28,8 @@
 	</thead>
 	<tbody>
 		{#each hosts as h (h.name)}
-			<tr data-host={h.state} oncontextmenu={(e) => actions.open(e, { host: h })}>
+			<tr data-host={h.state} class:selected={selection?.has({ host: h })} oncontextmenu={(e) => actions.open(e, { host: h }, selection)}>
+				{#if selection}<td class="pick"><SelectBox {selection} target={{ host: h }} /></td>{/if}
 				<td class="nowrap"><a href={hostHref(h.name)}>{h.name}</a></td>
 				<td class="nowrap">
 					<Status state={h.state} />

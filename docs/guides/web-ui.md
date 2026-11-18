@@ -127,7 +127,11 @@ acknowledged and not in a downtime.
 on its page: Re-Check Now, Acknowledge Problem, Schedule Downtime, Mute
 Notifications, Disable Active Checks, Submit Result (passive services
 only), and the matching undo commands. Hosts and services show badges
-for them: ACK, DOWNTIME, MUTED, CHECKS OFF. See [Operations](operations.md).
+for them: ACK, DOWNTIME, MUTED, CHECKS OFF. To run a command on several
+rows at once, tick their checkboxes (Shift-click selects a range); the
+list's title bar then shows the commands. See [Operations](operations.md)
+and its section on
+[commands on several hosts or services](operations.md#commands-on-several-hosts-or-services).
 
 **Live / Paused** in the top bar: pages update live. New results change
 the rows you see right away. When a state changes, the list is loaded
