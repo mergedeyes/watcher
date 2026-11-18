@@ -187,7 +187,7 @@ pub async fn secret(command: SecretCommand, db: DbArgs) -> Result<ExitCode> {
                     s.name,
                     s.kind,
                     fingerprint.unwrap_or_default(),
-                    humantime::format_rfc3339_seconds(s.updated)
+                    watcher_core::time::rfc3339_seconds(s.updated)
                 );
             }
         }
@@ -214,14 +214,14 @@ pub async fn host_key(command: HostKeyCommand, db: DbArgs) -> Result<ExitCode> {
                     "{:<32} {}  pinned {}",
                     host_port(&k.address, k.port),
                     ssh::fingerprint(&k.key).unwrap_or_default(),
-                    humantime::format_rfc3339_seconds(k.pinned)
+                    watcher_core::time::rfc3339_seconds(k.pinned)
                 );
                 if let (Some(offered), Some(at)) = (&k.offered, k.offered_at) {
                     println!(
                         "{:<32} {}  CHANGED {}",
                         "",
                         ssh::fingerprint(offered).unwrap_or_default(),
-                        humantime::format_rfc3339_seconds(at)
+                        watcher_core::time::rfc3339_seconds(at)
                     );
                 }
             }

@@ -725,7 +725,7 @@ async fn backup(api: &Api<'_>, node: Option<&str>, hours: u32) -> Result<Report,
                 continue;
             }
             let at = number(&task, "starttime").map_or_else(String::new, |t| {
-                humantime::format_rfc3339_seconds(UNIX_EPOCH + Duration::from_secs(t as u64))
+                watcher_core::time::rfc3339_seconds(UNIX_EPOCH + Duration::from_secs(t as u64))
                     .to_string()
             });
             let what = match text_of(&task, "id") {

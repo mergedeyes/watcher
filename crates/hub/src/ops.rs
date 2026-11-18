@@ -783,7 +783,7 @@ pub(crate) async fn action(
                 (Some(e), None) => parse_moment(e, now)?,
                 (None, Some(d)) => {
                     starts
-                        + humantime::parse_duration(d).map_err(|e| {
+                        + watcher_core::time::parse_duration(d).map_err(|e| {
                             ApiError::BadRequest(format!("invalid duration {d:?}: {e}"))
                         })?
                 }
@@ -849,7 +849,7 @@ fn host_state(state: CheckState) -> String {
 /// RFC 3339, unix seconds or `now` (not a duration back: downtimes look
 /// ahead).
 fn parse_moment(s: &str, now: SystemTime) -> Result<SystemTime, ApiError> {
-    if humantime::parse_duration(s.trim()).is_ok() {
+    if watcher_core::time::parse_duration(s.trim()).is_ok() {
         return Err(ApiError::BadRequest(format!(
             "invalid time {s:?}: use RFC 3339 or unix seconds; for a length use duration"
         )));
@@ -949,7 +949,7 @@ pub(crate) struct DowntimeView {
 }
 
 fn rfc3339<S: serde::Serializer>(t: &SystemTime, s: S) -> Result<S::Ok, S::Error> {
-    s.collect_str(&humantime::format_rfc3339_seconds(*t))
+    s.collect_str(&watcher_core::time::rfc3339_seconds(*t))
 }
 
 /// `GET /downtimes`: one-off downtimes that haven't ended, and the current
@@ -1078,9 +1078,9 @@ pub(crate) async fn process(State(hub): Shared) -> Result<Json<serde_json::Value
         "version": env!("CARGO_PKG_VERSION"),
         "pid": std::process::id(),
         "instance": hub.instance.get(),
-        "started": humantime::format_rfc3339_seconds(hub.started).to_string(),
+        "started": watcher_core::time::rfc3339_seconds(hub.started).to_string(),
         "uptime_s": hub.started.elapsed().unwrap_or_default().as_secs(),
-        "config_loaded": humantime::format_rfc3339_seconds(live.loaded).to_string(),
+        "config_loaded": watcher_core::time::rfc3339_seconds(live.loaded).to_string(),
         "database": hub.store.as_ref().map(|s| s.backend().to_string()),
         "notifications": ops.notifications,
         "checks": ops.checks,
@@ -1171,12 +1171,12 @@ pub(crate) async fn scheduler(
             let last = live
                 .services
                 .get(&j.id)
-                .map(|l| humantime::format_rfc3339_seconds(l.state.last_check).to_string());
+                .map(|l| watcher_core::time::rfc3339_seconds(l.state.last_check).to_string());
             Some(json!({
                 "host": live.config.host(service).name,
                 "service": service.name,
                 "title": service.title,
-                "next_check": j.next.map(|t| humantime::format_rfc3339_seconds(t).to_string()),
+                "next_check": j.next.map(|t| watcher_core::time::rfc3339_seconds(t).to_string()),
                 "last_check": last,
                 "running": j.running,
                 "passive": j.passive,
@@ -1311,7 +1311,7 @@ pub(crate) async fn run_check(
         return Err(ApiError::BadRequest("command is empty".into()));
     }
     let timeout = match &body.timeout {
-        Some(t) => humantime::parse_duration(t)
+        Some(t) => watcher_core::time::parse_duration(t)
             .map_err(|e| ApiError::BadRequest(format!("invalid timeout {t:?}: {e}")))?,
         None => Duration::from_secs(60),
     };

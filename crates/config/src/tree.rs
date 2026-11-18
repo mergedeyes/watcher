@@ -1107,7 +1107,7 @@ fn states_text(states: &[String]) -> String {
 }
 
 fn duration(d: Duration) -> String {
-    humantime::format_duration(d).to_string()
+    watcher_core::time::format_duration(d).to_string()
 }
 
 /// The tree as indented text, for the terminal.

@@ -8,6 +8,7 @@ pub mod parse;
 mod service;
 mod state;
 mod threshold;
+pub mod time;
 mod unit;
 
 pub use eval::{CheckResult, MetricResult, RawOutput, Termination, ThresholdSpec, evaluate};

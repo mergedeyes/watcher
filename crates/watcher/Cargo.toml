@@ -16,7 +16,6 @@ axum-server.workspace = true
 base64.workspace = true
 clap.workspace = true
 getrandom.workspace = true
-humantime.workspace = true
 instant-acme.workspace = true
 jiff.workspace = true
 notify.workspace = true

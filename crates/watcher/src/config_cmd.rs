@@ -310,12 +310,15 @@ fn print_services(out: &mut impl Write, config: &Config) -> io::Result<()> {
         let settings = &service.settings;
         let (timing, command) = match &service.command {
             Some(command) => (
-                format!("every {}", humantime::format_duration(settings.interval)),
+                format!(
+                    "every {}",
+                    watcher_core::time::format_duration(settings.interval)
+                ),
                 command.to_string(),
             ),
             None => {
                 let timing = settings.freshness.map_or("passive".to_string(), |f| {
-                    format!("fresh {}", humantime::format_duration(f))
+                    format!("fresh {}", watcher_core::time::format_duration(f))
                 });
                 (timing, "(passive)".to_string())
             }
