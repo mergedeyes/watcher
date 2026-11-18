@@ -10,7 +10,7 @@ use watcher_core::{HostState, MetricResult, State, StateType};
 
 /// RFC 3339 with milliseconds, e.g. `2026-10-22T10:00:00.123Z`.
 pub fn time(t: SystemTime) -> String {
-    humantime::format_rfc3339_millis(t).to_string()
+    watcher_core::time::rfc3339_millis(t).to_string()
 }
 
 /// A service in lists and stream updates.

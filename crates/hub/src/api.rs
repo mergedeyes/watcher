@@ -588,10 +588,10 @@ pub(crate) fn parse_time(s: &str, now: SystemTime) -> Result<SystemTime, ApiErro
     {
         return Ok(SystemTime::UNIX_EPOCH + Duration::from_secs_f64(secs));
     }
-    if let Ok(t) = humantime::parse_rfc3339_weak(s) {
+    if let Ok(t) = watcher_core::time::parse_rfc3339_weak(s) {
         return Ok(t);
     }
-    if let Ok(d) = humantime::parse_duration(s.trim_start_matches('-')) {
+    if let Ok(d) = watcher_core::time::parse_duration(s.trim_start_matches('-')) {
         return now
             .checked_sub(d)
             .ok_or_else(|| ApiError::BadRequest(format!("time out of range: {s:?}")));

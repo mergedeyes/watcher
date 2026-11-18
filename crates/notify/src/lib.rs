@@ -148,7 +148,7 @@ impl Notification {
 }
 
 fn rfc3339<S: serde::Serializer>(t: &SystemTime, s: S) -> Result<S::Ok, S::Error> {
-    s.collect_str(&humantime::format_rfc3339_seconds(*t))
+    s.collect_str(&watcher_core::time::rfc3339_seconds(*t))
 }
 
 fn rfc3339_opt<S: serde::Serializer>(t: &Option<SystemTime>, s: S) -> Result<S::Ok, S::Error> {

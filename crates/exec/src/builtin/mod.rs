@@ -209,7 +209,9 @@ impl Vars<'_> {
                 Err(err())
             };
         }
-        humantime::parse_duration(text).map(Some).map_err(|_| err())
+        watcher_core::time::parse_duration(text)
+            .map(Some)
+            .map_err(|_| err())
     }
 
     fn number(&self, key: &str, default: i64) -> Result<i64, String> {

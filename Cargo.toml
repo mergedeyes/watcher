@@ -32,7 +32,6 @@ clap = { version = "4", features = ["derive", "env"] }
 data-encoding = "2"
 getrandom = "0.4"
 http-body-util = "0.1"
-humantime = "2"
 # TCP and TLS of the node link, under tonic.
 hyper-util = { version = "0.1", features = ["tokio"] }
 # DNS lookups for the built-in dns check (UDP/TCP, no DNSSEC).
