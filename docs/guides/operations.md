@@ -7,7 +7,9 @@ files. The exception is recurring downtimes, which are
 [downtime groups](../objects/downtimegroup.md) in the config.
 
 In the web UI, right-click a host or service, or use the Commands panel on
-its page. Downtimes are listed under System → Downtimes. Over the API, use
+its page. To run a command on several hosts or services at once, select
+them in a list (see [below](#commands-on-several-hosts-or-services)).
+Downtimes are listed under System → Downtimes. Over the API, use
 [`POST actions/{action}`](../reference/api.md#commands).
 
 | Command | What it does | Ends when |
@@ -31,6 +33,31 @@ Notifications that are held back are written to the log with the reason:
 no notification for web01/http: in downtime (hostgroup linux)
 no notification for db01/replication: acknowledged
 ```
+
+## Commands on several hosts or services
+
+The lists on Hosts, Services, Problems, the Tactical Overview and a host's
+page have a checkbox at the start of each row.
+
+1. Tick the rows you want. To select a range, tick the first row, then
+   hold Shift and click the last one. Shift-clicking a ticked row unticks
+   the range instead. The box in the header selects every row on the page.
+2. The title bar of the list turns into a command bar. It shows how many
+   rows are selected and the commands that fit at least one of them.
+3. Click a command. Commands that need a comment or a time (marked with
+   `…`) open a dialog first. Right-clicking a selected row opens the same
+   commands as a menu.
+
+A command only goes to the rows it fits. For example, if you select three
+services and one of them is OK, *Acknowledge (2)…* acknowledges the other
+two. Hover over the button to see which ones. After the command runs, the
+selection is cleared.
+
+Only rows on the current page can be selected. Rows that leave the page
+are taken out of the selection, for example after you go to another page
+or change the filter, or when a problem recovers and drops off the
+Problems list. That way a command never reaches a row you can't see.
+Submit Result works on one passive service at a time.
 
 ## Acknowledging a problem
 

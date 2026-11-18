@@ -14,6 +14,8 @@
 	import { count, datetime, since } from '#lib/format.ts';
 	import { patchHost, patchRow } from '#lib/list.svelte.ts';
 	import { live } from '#lib/live.svelte.ts';
+	import { Selection } from '#lib/selection.svelte.ts';
+	import SelectionBar from '#lib/SelectionBar.svelte';
 	import ServiceTable from '#lib/ServiceTable.svelte';
 	import Status from '#lib/Status.svelte';
 	import VarTree from '#lib/VarTree.svelte';
@@ -21,6 +23,8 @@
 	let name = $derived(page.params.host ?? '');
 	let host = $state<HostView | null>(null);
 	let services = $state<ServiceView[]>([]);
+	/** Services ticked for commands; going to another host shows other rows, which drops them. */
+	const selection = new Selection();
 	/** The host check: the host's own, not one of its services. */
 	let check = $state<ServiceView | null>(null);
 	const find = (service: string) => services.find((s) => s.service === service) ?? (check?.service === service ? check : undefined);
@@ -201,8 +205,8 @@
 		<Commands target={{ host }} {flags} />
 
 		<section class="panel">
-			<div class="panel-title">Services <span class="muted">{count(services.length)}</span></div>
-			<ServiceTable rows={services} showHost={false} sort="service" />
+			<SelectionBar {selection}>Services <span class="muted">{count(services.length)}</span></SelectionBar>
+			<ServiceTable rows={services} showHost={false} sort="service" {selection} />
 		</section>
 
 		{#snippet picker()}

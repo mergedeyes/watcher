@@ -2,6 +2,7 @@
 	Service status details, as in Nagios: one row per service, the host name
 	only on the first row of each host when sorted by host. Sorts the rows
 	itself, or with `sorter` shows them as given (sorted on the server).
+	With `selection`, a checkbox column selects rows for commands.
 -->
 <script module lang="ts">
 	export type ServiceSortKey = 'host' | 'service' | 'status' | 'last_check' | 'duration' | 'attempt';
@@ -12,6 +13,8 @@
 	import { actions } from './actions.svelte.ts';
 	import { hostHref, serviceHref, type ServiceView } from './api.ts';
 	import Flags from './Flags.svelte';
+	import SelectBox from './SelectBox.svelte';
+	import type { Selection } from './selection.svelte.ts';
 	import { datetime, severity, since } from './format.ts';
 	import { live } from './live.svelte.ts';
 	import { Sorter } from './sort.svelte.ts';
@@ -27,9 +30,10 @@
 		/** Sorted elsewhere: the rows are in this order already. */
 		sorter?: Sorter<Key>;
 		empty?: string;
+		selection?: Selection;
 	}
 
-	let { rows, showHost = true, sort = 'host', sorter: outer, empty = 'No services.' }: Props = $props();
+	let { rows, showHost = true, sort = 'host', sorter: outer, empty = 'No services.', selection }: Props = $props();
 
 	// The initial sort only; the user changes it afterwards.
 	const own = untrack(() => new Sorter<Key>(sort, sort === 'status'));
@@ -58,6 +62,8 @@
 		['attempt', 'Attempt', 'hide-narrow']
 	];
 	let columns = $derived(COLUMNS.filter(([key]) => showHost || key !== 'host'));
+
+	$effect(() => selection?.show(sorted.map((service) => ({ service }))));
 </script>
 
 {#if rows.length === 0}
@@ -66,6 +72,7 @@
 	<table class="grid">
 		<thead>
 			<tr>
+				{#if selection}<th class="pick"><SelectBox {selection} /></th>{/if}
 				{#each columns as [key, label, cls] (key)}
 					<th class={cls}>
 						<button type="button" onclick={() => sorter.toggle(key)}>{label}{sorter.mark(key)}</button>
@@ -76,7 +83,8 @@
 		</thead>
 		<tbody>
 			{#each sorted as s, i (`${s.host}/${s.service}`)}
-				<tr data-state={s.state} oncontextmenu={(e) => actions.open(e, { service: s })}>
+				<tr data-state={s.state} class:selected={selection?.has({ service: s })} oncontextmenu={(e) => actions.open(e, { service: s }, selection)}>
+					{#if selection}<td class="pick"><SelectBox {selection} target={{ service: s }} /></td>{/if}
 					{#if showHost}
 						<td class="nowrap">
 							{#if sorter.key !== 'host' || i === 0 || sorted[i - 1]?.host !== s.host}

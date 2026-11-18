@@ -39,7 +39,7 @@
 		e.preventDefault();
 		const { clientX: x, clientY: y } = e;
 		api.service(j.host, j.service).then(
-			(s) => (actions.menu = { x, y, target: { service: s } }),
+			(s) => (actions.menu = { x, y, targets: [{ service: s }] }),
 			(err) => actions.say(err instanceof Error ? err.message : String(err), true)
 		);
 	}

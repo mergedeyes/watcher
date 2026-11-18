@@ -5,7 +5,7 @@
 -->
 <script lang="ts">
 	import { api, type State } from './api.ts';
-	import { actions, body, entries, label } from './actions.svelte.ts';
+	import { actions, body, entries, id, label } from './actions.svelte.ts';
 
 	let dialog: HTMLDialogElement;
 	let menu = $state<HTMLElement>();
@@ -61,9 +61,10 @@
 		if (!d) return;
 		busy = true;
 		let ok: boolean;
-		if (d.entry.action === 'submit' && d.target.service) {
+		const t = d.entry.targets[0];
+		if (d.entry.action === 'submit' && t?.service) {
 			try {
-				await api.submit(d.target.service.host, d.target.service.service, resultState, output);
+				await api.submit(t.service.host, t.service.service, resultState, output);
 				actions.say('Result submitted');
 				ok = true;
 			} catch (err) {
@@ -71,10 +72,10 @@
 				ok = false;
 			}
 		} else if (d.entry.action === 'downtime') {
-			const b = { ...body(d.target), comment, start: new Date(start).toISOString() };
-			ok = await actions.run('downtime', end ? { ...b, end: new Date(end).toISOString() } : { ...b, duration });
+			const b = { ...body(d.entry.targets), comment, start: new Date(start).toISOString() };
+			ok = await actions.run('downtime', end ? { ...b, end: new Date(end).toISOString() } : { ...b, duration }, d.selection);
 		} else if (d.entry.action !== 'submit') {
-			ok = await actions.run(d.entry.action, { ...body(d.target), comment });
+			ok = await actions.run(d.entry.action, { ...body(d.entry.targets), comment }, d.selection);
 		} else ok = false;
 		busy = false;
 		if (ok) dialog.close();
@@ -84,11 +85,11 @@
 <svelte:window {onclick} {onkeydown} oncontextmenu={onclick} />
 
 {#if actions.menu}
-	{@const target = actions.menu.target}
+	{@const m = actions.menu}
 	<div class="menu" role="menu" style={position} bind:this={menu}>
-		<div class="title mono">{label(target)}</div>
-		{#each entries(target) as entry (entry.label)}
-			<button type="button" role="menuitem" onclick={() => actions.choose(entry, target)}>
+		<div class="title mono">{label(m.targets)}</div>
+		{#each entries(m.targets) as entry (entry.label)}
+			<button type="button" role="menuitem" onclick={() => actions.choose(entry, m.selection)}>
 				{entry.label}{entry.dialog ? '…' : ''}
 			</button>
 		{/each}
@@ -99,7 +100,10 @@
 	{#if actions.dialog}
 		{@const d = actions.dialog}
 		<form onsubmit={submit}>
-			<div class="head">{d.entry.label} <span class="muted mono">{label(d.target)}</span></div>
+			<div class="head">
+				{d.entry.label}
+				<span class="muted mono" title={d.entry.targets.length > 1 ? d.entry.targets.map(id).join('\n') : undefined}>{label(d.entry.targets)}</span>
+			</div>
 			<div class="body">
 				{#if d.entry.action === 'submit'}
 					<label for="a-state">State</label>

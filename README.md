@@ -93,7 +93,8 @@ set it, and every alert to the rule that sent it.
   Gotify, PagerDuty, Jira and scripts; reminders, escalations,
   dependencies and time periods (business hours, on-call at night).
 - **Operations:** acknowledgements, one-off and recurring downtimes,
-  muting, re-checks from a right-click menu.
+  muting and re-checks, from a right-click menu or on many selected hosts
+  and services at once.
 - **Web UI:** tactical overview, problems, host and service groups, alert
   history, graphs, configuration forms and a file editor that checks as
   you type.

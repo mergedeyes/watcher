@@ -13,8 +13,8 @@
 	<div class="panel-title">{target.service ? 'Service' : 'Host'} Commands</div>
 	<div class="body">
 		<ul>
-			{#each entries(target) as entry (entry.label)}
-				<li><button type="button" class="link" onclick={() => actions.choose(entry, target)}>{entry.label}</button></li>
+			{#each entries([target]) as entry (entry.label)}
+				<li><button type="button" class="link" onclick={() => actions.choose(entry)}>{entry.label}</button></li>
 			{/each}
 		</ul>
 		{#if flags.length || downtimes.length}

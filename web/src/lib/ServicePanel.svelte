@@ -10,6 +10,8 @@
 	import { Paging, ServerList, patchRow, sid } from './list.svelte.ts';
 	import Pager from './Pager.svelte';
 	import ServiceTable, { type ServiceSortKey } from './ServiceTable.svelte';
+	import { Selection } from './selection.svelte.ts';
+	import SelectionBar from './SelectionBar.svelte';
 	import { Sorter } from './sort.svelte.ts';
 
 	interface Props {
@@ -43,6 +45,8 @@
 		}
 	);
 
+	const selection = new Selection();
+
 	$effect(() => {
 		if (list.data) onlist?.(list.data);
 	});
@@ -52,17 +56,17 @@
 </script>
 
 <section class="panel">
-	<div class="panel-title">
+	<SelectionBar {selection}>
 		{title}
 		{#if list.data}<span class="muted">{count(list.data.total)}</span>{/if}
 		{#if actions}<span class="right">{@render actions()}</span>{/if}
-	</div>
+	</SelectionBar>
 	{#if list.error && !list.data}
 		<div class="empty error">{list.error}</div>
 	{:else if !list.data}
 		<div class="empty">Loading…</div>
 	{:else}
-		<ServiceTable rows={list.data.services} {showHost} {sorter} empty={all === 0 && none ? none : empty} />
+		<ServiceTable rows={list.data.services} {showHost} {sorter} empty={all === 0 && none ? none : empty} {selection} />
 		<Pager {paging} total={list.data.total} />
 	{/if}
 </section>

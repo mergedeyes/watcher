@@ -412,3 +412,21 @@ a.btn:hover {
 table.grid tbody tr[data-host='down'] td {
 	background: var(--tint-crit);
 }
+
+/* Checkbox column of tables whose rows can be selected for commands */
+table.grid th.pick,
+table.grid td.pick {
+	width: 1px;
+	padding-right: 0;
+	user-select: none;
+}
+table.grid td.pick input,
+table.grid th.pick input {
+	margin: 0;
+	vertical-align: middle;
+	cursor: pointer;
+}
+table.grid tbody tr.selected td,
+table.grid tbody tr.selected:nth-child(n) td {
+	background: color-mix(in srgb, var(--link) 14%, var(--panel));
+}
