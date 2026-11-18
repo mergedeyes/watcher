@@ -19,7 +19,7 @@ pub struct Args {
     format: Format,
 
     /// Kill the check after this long (e.g. 10s, 1m).
-    #[arg(long, default_value = "60s", value_parser = humantime::parse_duration)]
+    #[arg(long, default_value = "60s", value_parser = watcher_core::time::parse_duration)]
     timeout: Duration,
 
     /// Run the command through /bin/sh -c instead of executing it directly.

@@ -194,7 +194,7 @@ impl Acme {
                     info!(
                         "ACME: new certificate for {}, valid until {}",
                         info.names.join(", "),
-                        humantime::format_rfc3339_seconds(info.not_after)
+                        watcher_core::time::rfc3339_seconds(info.not_after)
                     );
                     self.served = Some(info);
                     retry = RETRY_FIRST;
@@ -203,7 +203,7 @@ impl Acme {
                     warn!(
                         "ACME: no certificate from {}: {err:#}; next try in {}",
                         self.settings.directory,
-                        humantime::format_duration(retry)
+                        watcher_core::time::format_duration(retry)
                     );
                     tokio::time::sleep(retry).await;
                     retry = (retry * 2).min(RETRY_MAX);

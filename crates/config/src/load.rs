@@ -3250,7 +3250,7 @@ fn duration<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Duration>, D::Erro
     let Some(text) = Option::<String>::deserialize(d)? else {
         return Ok(None);
     };
-    humantime::parse_duration(&text)
+    watcher_core::time::parse_duration(&text)
         .map(Some)
         .map_err(|e| D::Error::custom(format!("invalid duration {text:?}: {e}")))
 }

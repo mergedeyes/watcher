@@ -12,7 +12,6 @@ publish.workspace = true
 [dependencies]
 getrandom.workspace = true
 hickory-resolver.workspace = true
-humantime.workspace = true
 nix.workspace = true
 reqwest.workspace = true
 ring.workspace = true

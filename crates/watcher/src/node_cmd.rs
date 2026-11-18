@@ -80,7 +80,7 @@ pub async fn run(command: NodeCommand, db: DbArgs) -> Result<ExitCode> {
     let plan = link_plan(&bootstrap)?;
     let ca = Ca::open_or_create(&bootstrap.data_dir).map_err(|e| anyhow!(e))?;
     let (token, expires) = new_join_token(&store, &ca, name, rejoin).await?;
-    let until = humantime::format_rfc3339_seconds(expires);
+    let until = watcher_core::time::rfc3339_seconds(expires);
     eprintln!("Run this on the node's machine (the token works once, until {until}):");
     eprintln!();
     println!("{}", join_command(&plan.url, &token));
@@ -92,7 +92,7 @@ async fn list(store: &watcher_store::Store) -> Result<()> {
     let now = SystemTime::now();
     let mut any = false;
     for n in nodes {
-        let time = |t: SystemTime| humantime::format_rfc3339_seconds(t).to_string();
+        let time = |t: SystemTime| watcher_core::time::rfc3339_seconds(t).to_string();
         let what = match (n.joined, n.token_expires.filter(|t| *t > now)) {
             (Some(joined), _) => {
                 let seen = n.last_seen.map_or("never connected".into(), |t| {

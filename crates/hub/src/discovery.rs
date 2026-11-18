@@ -350,7 +350,7 @@ pub(crate) async fn list(
             file: d.file(),
             last_run: state
                 .last
-                .map(|t| humantime::format_rfc3339_millis(t).to_string()),
+                .map(|t| watcher_core::time::rfc3339_millis(t).to_string()),
             error: state.error,
             running: state.running || state.requested,
             guests,

@@ -146,12 +146,12 @@ pub(crate) fn facts(n: &Notification) -> Vec<(&'static str, String)> {
     if let Some(since) = n.since.filter(|_| n.repeat) {
         out.push((
             "Since",
-            humantime::format_rfc3339_seconds(since).to_string(),
+            watcher_core::time::rfc3339_seconds(since).to_string(),
         ));
     }
     out.push((
         "Time",
-        humantime::format_rfc3339_seconds(n.time).to_string(),
+        watcher_core::time::rfc3339_seconds(n.time).to_string(),
     ));
     if let Some(url) = &n.url {
         out.push(("Details", url.clone()));
@@ -180,7 +180,7 @@ pub(crate) fn body(n: &Notification) -> String {
 fn open_for(since: SystemTime, now: SystemTime) -> String {
     let secs = now.duration_since(since).unwrap_or_default().as_secs();
     let minutes = Duration::from_secs((secs / 60).max(1) * 60);
-    format!("for {}", humantime::format_duration(minutes))
+    format!("for {}", watcher_core::time::format_duration(minutes))
 }
 
 #[cfg(test)]

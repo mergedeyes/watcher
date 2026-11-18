@@ -156,7 +156,7 @@ pub async fn user(command: UserCommand, db: DbArgs) -> Result<ExitCode> {
                     flags.push("totp");
                 }
                 let last = u.last_login.map_or("never logged in".to_string(), |t| {
-                    format!("last login {}", humantime::format_rfc3339_seconds(t))
+                    format!("last login {}", watcher_core::time::rfc3339_seconds(t))
                 });
                 println!("{:<24} {:<16} {last}", u.username, flags.join(","));
             }
@@ -207,12 +207,12 @@ pub async fn token(command: TokenCommand, db: DbArgs) -> Result<ExitCode> {
             let user = find(&user).await?;
             for t in store.tokens(user.id).await? {
                 let used = t.last_used.map_or("never used".to_string(), |u| {
-                    format!("last used {}", humantime::format_rfc3339_seconds(u))
+                    format!("last used {}", watcher_core::time::rfc3339_seconds(u))
                 });
                 println!(
                     "{:<32} created {}  {used}",
                     t.name,
-                    humantime::format_rfc3339_seconds(t.created)
+                    watcher_core::time::rfc3339_seconds(t.created)
                 );
             }
         }
