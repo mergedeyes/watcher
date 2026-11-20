@@ -40,7 +40,29 @@ jobs:
         run: cargo build --release --locked
 
       - name: Deploy to watcher-test
+        id: deploy
         run: |
           bin="$CARGO_TARGET_DIR/release/watcher"
           ssh -T -i ~/.ssh/watcher-test-deploy -o BatchMode=yes root@192.168.178.83 \
-            "$(sha256sum < "$bin" | cut -d' ' -f1)" < "$bin"
+            "$(sha256sum < "$bin" | cut -d' ' -f1)" < "$bin" | tee /tmp/deploy.out
+          echo "result=$(tail -1 /tmp/deploy.out)" >> "$GITHUB_OUTPUT"
+
+      # Push to the homelab-ops ntfy topic (~runner/.config/ntfy-topic on CT 111).
+      # Not on cancel: a cancelled run was superseded by a newer push.
+      - name: Notify
+        if: ${{ !cancelled() }}
+        env:
+          STATUS: ${{ job.status }}
+          RESULT: ${{ steps.deploy.outputs.result }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "$STATUS" = success ]; then
+            title="watcher-test: ${RESULT:-deployed}"; prio=low; tags=white_check_mark
+          else
+            title="watcher-test deploy FAILED"; prio=high; tags=x
+          fi
+          msg="${GITHUB_SHA::7} ${COMMIT_MSG%%$'\n'*}"
+          curl -fsS -o /dev/null -H "Title: $title" -H "Priority: $prio" -H "Tags: $tags" \
+            -H "Click: $RUN_URL" --data-binary "$msg" "https://ntfy.sh/$(cat ~/.config/ntfy-topic)" \
+            || echo "::warning::ntfy push failed"
