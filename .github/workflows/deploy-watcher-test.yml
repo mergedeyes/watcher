@@ -1,0 +1,42 @@
+# .github/workflows/deploy-watcher-test.yml in mergedeyes/watcher
+# Every push to main (= every merged PR) builds Watcher on the homelab runner (CT 111)
+# and installs it on the test instance (CT 110). A newer push cancels a running deploy.
+name: Deploy to watcher-test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-watcher-test
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, watcher-test]
+    timeout-minutes: 30
+    env:
+      # Outside the workspace, so builds stay warm between runs.
+      CARGO_TARGET_DIR: /var/cache/ci/watcher-target
+      # The PVE host is a Haswell Xeon (AVX2/FMA/BMI2).
+      RUSTFLAGS: -C target-cpu=x86-64-v3
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build web UI
+        run: |
+          npm --prefix web ci --no-audit --no-fund
+          npm --prefix web run build
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Deploy to watcher-test
+        run: |
+          bin="$CARGO_TARGET_DIR/release/watcher"
+          ssh -T -i ~/.ssh/watcher-test-deploy -o BatchMode=yes root@192.168.178.83 \
+            "$(sha256sum < "$bin" | cut -d' ' -f1)" < "$bin"
