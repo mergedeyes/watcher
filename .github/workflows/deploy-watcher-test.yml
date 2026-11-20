@@ -24,6 +24,10 @@ jobs:
       CARGO_TARGET_DIR: /var/cache/ci/watcher-target
       # The PVE host is a Haswell Xeon (AVX2/FMA/BMI2).
       RUSTFLAGS: -C target-cpu=x86-64-v3
+      # Compile on more cores for test builds
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_INCREMENTAL: "true"
     steps:
       - uses: actions/checkout@v7
 
